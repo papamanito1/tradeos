@@ -14,14 +14,17 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
 
     # Admin seed credentials
-    admin_username: str = "admin"
-    admin_password: str = "changeme123!"
+    admin_username: str = "Kashan"
+    admin_password: str = "Manan"
 
     # Database
-    database_url: str = "postgresql+asyncpg://tradeos:tradeos_secret@localhost:5432/tradeos"
+    database_url: str = "sqlite+aiosqlite:///./tradeos.db"
 
     # Redis
     redis_url: str = "redis://:redis_secret@localhost:6379/0"
+
+    # CORS (comma-separated list of allowed origins, or * for all)
+    cors_origins: str = ""
 
     # Trading
     trading_mode: Literal["paper", "live"] = "paper"
