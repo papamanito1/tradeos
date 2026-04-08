@@ -86,16 +86,8 @@ async def startup():
     except Exception as e:
         logger.warning(f"Risk settings load failed: {e}")
 
-    # Start Live Market Stream Agent (Binance public WebSocket — no API key needed)
-    try:
-        from app.agents.live_market_stream import create_live_stream_agent
-        live_stream = create_live_stream_agent()
-        await live_stream.start()
-        logger.info("Live market stream agent started (Binance public WS)")
-    except Exception as e:
-        logger.warning(f"Live stream agent failed to start: {e}")
-
-    # Start Redis pub/sub listener (broadcasts WS events to all frontend clients)
+    # Start Redis pub/sub listener FIRST so the in-memory queue is registered
+    # before the market stream starts publishing events (avoids race condition).
     channels = [
         "market:ticker", "market:kline", "market:orderbook",
         "signal:new", "execution:order_placed",
@@ -104,7 +96,18 @@ async def startup():
     ]
     task = asyncio.create_task(redis_listener(channels))
     _background_tasks.append(task)
+    # Yield once so the listener task runs its setup code before we start streaming
+    await asyncio.sleep(0)
     logger.info("Redis listener started")
+
+    # Start Live Market Stream Agent (Binance public WebSocket — no API key needed)
+    try:
+        from app.agents.live_market_stream import create_live_stream_agent
+        live_stream = create_live_stream_agent()
+        await live_stream.start()
+        logger.info("Live market stream agent started (Binance public WS)")
+    except Exception as e:
+        logger.warning(f"Live stream agent failed to start: {e}")
 
     logger.info("TradeOS ready")
 

@@ -190,6 +190,9 @@ class LiveMarketStreamAgent:
             await self._handle_ticker(data)
         elif event_type == "kline":
             await self._handle_kline(data)
+        elif "@depth" in stream:
+            # Binance @depth20 snapshots have NO "e" field — detect by stream name
+            await self._handle_depth(stream, data)
         elif event_type in ("depthUpdate", "depth"):
             await self._handle_depth(stream, data)
 
@@ -257,11 +260,9 @@ class LiveMarketStreamAgent:
         })
 
     async def _handle_depth(self, stream: str, data: dict) -> None:
-        # Extract symbol from stream name "btcusdt@depth20@100ms"
-        raw_symbol = stream.split("@")[0].upper() + "USDT"
-        if "@" in stream:
-            raw_symbol = stream.split("@")[0]
-        symbol = _binance_to_ccxt(raw_symbol.upper().replace("USDT", "") + "USDT")
+        # stream = "btcusdt@depth20@100ms" → extract "btcusdt"
+        raw_symbol = stream.split("@")[0]  # e.g. "btcusdt"
+        symbol = _binance_to_ccxt(raw_symbol.upper())  # "BTCUSDT" → "BTC/USDT"
 
         # Depth snapshots from @depth20 stream
         bids = data.get("bids", [])
