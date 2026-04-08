@@ -26,17 +26,21 @@ async def seed():
     async with AsyncSessionLocal() as session:
         # ── Admin user ─────────────────────────────────────────────────────────
         result = await session.execute(select(User).where(User.username == settings.admin_username))
-        if not result.scalar_one_or_none():
+        existing = result.scalar_one_or_none()
+        if not existing:
+            hashed = hash_password(settings.admin_password)
             admin = User(
                 username=settings.admin_username,
-                hashed_password=hash_password(settings.admin_password),
+                hashed_password=hashed,
                 is_active=True,
                 is_admin=True,
             )
             session.add(admin)
-            print(f"Created admin user: {settings.admin_username}")
+            print(f"Created admin user: {settings.admin_username} (hash prefix: {hashed[:10]})")
         else:
-            print("Admin user already exists.")
+            # Always update password hash on startup so credential changes take effect
+            existing.hashed_password = hash_password(settings.admin_password)
+            print(f"Updated admin user password: {settings.admin_username}")
 
         # ── Risk settings ──────────────────────────────────────────────────────
         result = await session.execute(select(RiskSettings).limit(1))
