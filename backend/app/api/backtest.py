@@ -61,70 +61,191 @@ class BacktestRequest(BaseModel):
     parameters: dict[str, Any] = {}
 
 
-# ── OHLCV fetcher (real Binance data, paginated) ──────────────────────────────
+# ── OHLCV fetcher — multi-provider with automatic fallback ────────────────────
+#
+# Provider priority:
+#   1. data-api.binance.vision  (Binance's public data CDN, avoids trading API geo-blocks)
+#   2. api.binance.com          (standard Binance API)
+#   3. Bybit v5                 (global, no geo-restrictions on cloud providers)
+#   4. OKX                      (global fallback)
+#
+# All providers return real market data. No API key required.
+
+import logging as _log
+_logger = _log.getLogger(__name__)
+
+# Bybit interval mapping
+_BYBIT_TF: dict[str, str] = {
+    "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+    "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720",
+    "1d": "D", "1w": "W",
+}
+# OKX interval mapping
+_OKX_TF: dict[str, str] = {
+    "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1H", "2h": "2H", "4h": "4H", "6h": "6H", "12h": "12H",
+    "1d": "1D", "1w": "1W",
+}
+
+
+async def _fetch_binance(client, symbol: str, timeframe: str, limit: int,
+                         base: str = "https://data-api.binance.vision/api/v3/klines") -> list:
+    """Fetch OHLCV from a Binance-compatible endpoint (returns raw rows)."""
+    bsym = symbol.replace("/", "")
+    tf_ms = TF_SECONDS.get(timeframe, 3600) * 1000
+    all_raw: list = []
+
+    params = {"symbol": bsym, "interval": timeframe, "limit": min(limit, 1000)}
+    resp = await client.get(base, params=params)
+    resp.raise_for_status()
+    raw1 = resp.json()
+    all_raw = list(raw1)
+
+    while len(all_raw) < limit and len(raw1) == 1000:
+        oldest_ts = all_raw[0][0]
+        since = oldest_ts - tf_ms * min(limit - len(all_raw), 1000)
+        params2 = {
+            "symbol": bsym, "interval": timeframe,
+            "limit": min(limit - len(all_raw), 1000),
+            "startTime": since, "endTime": oldest_ts - 1,
+        }
+        resp2 = await client.get(base, params=params2)
+        resp2.raise_for_status()
+        raw2 = resp2.json()
+        if not raw2:
+            break
+        existing = {r[0] for r in all_raw}
+        all_raw = [r for r in raw2 if r[0] not in existing] + all_raw
+        raw1 = raw2
+
+    all_raw.sort(key=lambda r: r[0])
+    return all_raw[-limit:]
+
+
+async def _fetch_bybit(client, symbol: str, timeframe: str, limit: int) -> list:
+    """Fetch OHLCV from Bybit v5 — normalise to Binance row format."""
+    bsym = symbol.replace("/", "")
+    iv = _BYBIT_TF.get(timeframe, "60")
+    tf_ms = TF_SECONDS.get(timeframe, 3600) * 1000
+    all_rows: list = []
+
+    end_ms = None
+    while len(all_rows) < limit:
+        params: dict = {"category": "spot", "symbol": bsym, "interval": iv,
+                        "limit": min(limit - len(all_rows), 1000)}
+        if end_ms:
+            params["end"] = end_ms
+        resp = await client.get("https://api.bybit.com/v5/market/kline", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        rows = data.get("result", {}).get("list", [])
+        if not rows:
+            break
+        # Bybit returns newest first — reverse to oldest first
+        rows = list(reversed(rows))
+        existing = {r[0] for r in all_rows}
+        new = [r for r in rows if r[0] not in existing]
+        all_rows = new + all_rows
+        if len(rows) < 1000:
+            break
+        end_ms = int(rows[0][0]) - 1  # go further back
+
+    all_rows.sort(key=lambda r: int(r[0]))
+    all_rows = all_rows[-limit:]
+    # Bybit row: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
+    # Normalise to Binance format: [openTime, open, high, low, close, volume, ...]
+    return [
+        [int(r[0]), r[1], r[2], r[3], r[4], r[5]]
+        for r in all_rows
+    ]
+
+
+async def _fetch_okx(client, symbol: str, timeframe: str, limit: int) -> list:
+    """Fetch OHLCV from OKX — normalise to Binance row format."""
+    bsym = symbol.replace("/", "-")   # "BTC/USDT" → "BTC-USDT"
+    iv = _OKX_TF.get(timeframe, "1H")
+    tf_ms = TF_SECONDS.get(timeframe, 3600) * 1000
+    all_rows: list = []
+
+    after_ms = None
+    while len(all_rows) < limit:
+        params: dict = {"instId": bsym, "bar": iv, "limit": min(limit - len(all_rows), 300)}
+        if after_ms:
+            params["after"] = after_ms
+        resp = await client.get("https://www.okx.com/api/v5/market/history-candles", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        rows = data.get("data", [])
+        if not rows:
+            break
+        rows = list(reversed(rows))  # OKX returns newest first
+        existing = {r[0] for r in all_rows}
+        new = [r for r in rows if r[0] not in existing]
+        all_rows = new + all_rows
+        if len(rows) < 100:
+            break
+        after_ms = rows[0][0]
+
+    all_rows.sort(key=lambda r: int(r[0]))
+    all_rows = all_rows[-limit:]
+    # OKX: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+    return [
+        [int(r[0]), r[1], r[2], r[3], r[4], r[5]]
+        for r in all_rows
+    ]
+
+
+def _raw_to_candles(raw: list) -> list[Candle]:
+    return [
+        Candle(
+            timestamp=datetime.fromtimestamp(int(c[0]) / 1000, tz=timezone.utc),
+            open=float(c[1]),
+            high=float(c[2]),
+            low=float(c[3]),
+            close=float(c[4]),
+            volume=float(c[5]),
+        )
+        for c in raw
+    ]
+
+
 async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> list[Candle]:
     """
-    Fetch real historical OHLCV from Binance public REST API.
-    Uses httpx directly to avoid CCXT's exchange-info preflight request.
-    Paginates backwards to fulfil requests > 1000 bars.
-    No API key required.
+    Fetch real historical OHLCV with automatic provider fallback.
+    Tries: Binance data CDN → Binance main API → Bybit → OKX
+    No API key required for any provider.
     """
-    try:
-        import httpx
-        # Binance uses "BTCUSDT" format, not "BTC/USDT"
-        binance_symbol = symbol.replace("/", "")
-        tf_ms = TF_SECONDS.get(timeframe, 3600) * 1000
-        base_url = "https://api.binance.com/api/v3/klines"
+    import httpx
 
-        all_raw: list = []
+    providers = [
+        ("Binance-CDN",  lambda c: _fetch_binance(c, symbol, timeframe, limit,
+                                                   "https://data-api.binance.vision/api/v3/klines")),
+        ("Binance",      lambda c: _fetch_binance(c, symbol, timeframe, limit,
+                                                   "https://api.binance.com/api/v3/klines")),
+        ("Bybit",        lambda c: _fetch_bybit(c, symbol, timeframe, limit)),
+        ("OKX",          lambda c: _fetch_okx(c, symbol, timeframe, limit)),
+    ]
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            # Fetch most recent bars first
-            params = {"symbol": binance_symbol, "interval": timeframe, "limit": min(limit, 1000)}
-            resp = await client.get(base_url, params=params)
-            resp.raise_for_status()
-            raw1 = resp.json()
-            all_raw = list(raw1)
+    last_err = None
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        for name, fetch_fn in providers:
+            try:
+                _logger.info(f"Fetching OHLCV via {name}: {symbol} {timeframe} x{limit}")
+                raw = await fetch_fn(client)
+                if not raw:
+                    raise ValueError("Empty response")
+                candles = _raw_to_candles(raw)
+                _logger.info(f"{name}: got {len(candles)} candles for {symbol}")
+                return candles
+            except Exception as e:
+                _logger.warning(f"{name} failed: {type(e).__name__}: {e}")
+                last_err = e
+                continue
 
-            # Paginate backwards for more bars
-            while len(all_raw) < limit and len(raw1) == 1000:
-                oldest_ts = all_raw[0][0]
-                since = oldest_ts - tf_ms * min(limit - len(all_raw), 1000)
-                params2 = {
-                    "symbol": binance_symbol, "interval": timeframe,
-                    "limit": min(limit - len(all_raw), 1000),
-                    "startTime": since, "endTime": oldest_ts - 1,
-                }
-                resp2 = await client.get(base_url, params=params2)
-                resp2.raise_for_status()
-                raw2 = resp2.json()
-                if not raw2:
-                    break
-                existing_ts = {r[0] for r in all_raw}
-                prepend = [r for r in raw2 if r[0] not in existing_ts]
-                all_raw = prepend + all_raw
-                raw1 = raw2
-
-        # Sort by timestamp asc, trim to requested limit
-        all_raw.sort(key=lambda r: r[0])
-        all_raw = all_raw[-limit:]
-
-        return [
-            Candle(
-                timestamp=datetime.fromtimestamp(c[0] / 1000, tz=timezone.utc),
-                open=float(c[1]),
-                high=float(c[2]),
-                low=float(c[3]),
-                close=float(c[4]),
-                volume=float(c[5]),
-            )
-            for c in all_raw
-        ]
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to fetch market data from Binance: {type(e).__name__}: {e}",
-        )
+    raise HTTPException(
+        status_code=503,
+        detail=f"All market data providers failed. Last error: {type(last_err).__name__}: {last_err}",
+    )
 
 
 # ── Position tracker ──────────────────────────────────────────────────────────
