@@ -218,11 +218,14 @@ async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> list[Candle]:
     import httpx
 
     providers = [
+        # Bybit first — no cloud-provider geo-blocks, global availability
+        ("Bybit",        lambda c: _fetch_bybit(c, symbol, timeframe, limit)),
+        # Binance CDN (data delivery network, different from trading API)
         ("Binance-CDN",  lambda c: _fetch_binance(c, symbol, timeframe, limit,
                                                    "https://data-api.binance.vision/api/v3/klines")),
+        # Binance main (may be geo-blocked from some cloud providers)
         ("Binance",      lambda c: _fetch_binance(c, symbol, timeframe, limit,
                                                    "https://api.binance.com/api/v3/klines")),
-        ("Bybit",        lambda c: _fetch_bybit(c, symbol, timeframe, limit)),
         ("OKX",          lambda c: _fetch_okx(c, symbol, timeframe, limit)),
     ]
 
