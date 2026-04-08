@@ -1,0 +1,217 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Base ─────────────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    background: #08090f;
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    background: #08090f;
+    color: #e8e8f0;
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::-webkit-scrollbar         { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track   { background: transparent; }
+  ::-webkit-scrollbar-thumb   { background: rgba(255,255,255,0.1); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+  ::selection { background: rgba(10,132,255,0.35); color: #fff; }
+}
+
+/* ─── Components ────────────────────────────────────────────────────────────── */
+@layer components {
+
+  /* ── Premium dark card ── */
+  .card {
+    background: linear-gradient(145deg, #0f1119 0%, #0c0e16 100%);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 20px rgba(0,0,0,0.4);
+    color: #e8e8f0;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .card:hover {
+    border-color: rgba(255,255,255,0.1);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 8px 32px rgba(0,0,0,0.5);
+  }
+
+  /* ── Glass card ── */
+  .card-glass {
+    background: rgba(12,14,22,0.85);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.04) inset;
+    color: #e8e8f0;
+  }
+
+  /* ── Typography ── */
+  .label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #4a4a60;
+  }
+
+  .value-lg {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: #f0f0f8;
+  }
+
+  .value-md {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    color: #f0f0f8;
+  }
+
+  /* ── Inputs ── */
+  .input {
+    width: 100%;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 14px;
+    font-family: "Inter", system-ui, sans-serif;
+    color: #e8e8f0;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    outline: none;
+  }
+  .input::placeholder { color: #3a3a52; }
+  .input:focus {
+    border-color: #0a84ff;
+    box-shadow: 0 0 0 3px rgba(10,132,255,0.2);
+    background: rgba(255,255,255,0.06);
+  }
+  select.input {
+    appearance: none;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%234a4a60' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+  select.input option { background: #131722; color: #e8e8f0; }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 18px;
+    border-radius: 980px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: "Inter", system-ui, sans-serif;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    user-select: none;
+    border: none;
+    outline: none;
+    transition: all 0.18s cubic-bezier(0.25,0.46,0.45,0.94);
+    white-space: nowrap;
+  }
+  .btn:active { transform: scale(0.97); }
+
+  .btn-primary {
+    background: #0a84ff;
+    color: #fff;
+    box-shadow: 0 1px 4px rgba(10,132,255,0.5), 0 1px 0 rgba(255,255,255,0.15) inset;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: #409cff;
+    box-shadow: 0 3px 12px rgba(10,132,255,0.55);
+  }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-ghost {
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.75);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .btn-ghost:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    border-color: rgba(255,255,255,0.12);
+  }
+
+  .btn-danger {
+    background: rgba(255,69,58,0.1);
+    color: #ff453a;
+    border: 1px solid rgba(255,69,58,0.18);
+  }
+  .btn-danger:hover { background: rgba(255,69,58,0.18); border-color: rgba(255,69,58,0.3); }
+
+  .btn-success {
+    background: rgba(48,209,88,0.1);
+    color: #30d158;
+    border: 1px solid rgba(48,209,88,0.18);
+  }
+  .btn-success:hover { background: rgba(48,209,88,0.18); }
+
+  /* ── Tables ── */
+  .table-row-hover { transition: background 0.12s ease; }
+  .table-row-hover:hover { background: rgba(255,255,255,0.025); }
+
+  /* ── Separator ── */
+  .sep { height: 1px; background: rgba(255,255,255,0.06); }
+
+  /* ── Status dot ── */
+  .dot-live {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #30d158;
+    box-shadow: 0 0 0 2px rgba(48,209,88,0.25);
+    animation: pulse 2s ease infinite;
+  }
+
+  /* ── Badge ── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 980px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+}
+
+/* ─── Utilities ─────────────────────────────────────────────────────────────── */
+@layer utilities {
+  .font-numeric {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .text-balance { text-wrap: balance; }
+  .glass {
+    background: rgba(12,14,22,0.85);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+  }
+}
