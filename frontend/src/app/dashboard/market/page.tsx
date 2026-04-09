@@ -209,13 +209,25 @@ function CandleChart({
   const downTriangle = (cx: number, cy: number, size = 6) =>
     `M ${cx} ${cy + size} L ${cx + size} ${cy - size / 2} L ${cx - size} ${cy - size / 2} Z`;
 
+  // Price levels to label (calculated from visible candles)
+  const priceLevels = [
+    { price: maxP, label: formatUSD(maxP), pct: PADDING / CHART_H },
+    { price: (maxP + minP) / 2, label: formatUSD((maxP + minP) / 2), pct: 0.5 },
+    { price: minP, label: formatUSD(minP), pct: (CHART_H - PADDING) / CHART_H },
+  ];
+
   return (
     <div className="relative overflow-hidden">
-      <div className="absolute right-0 top-0 bottom-0 flex flex-col justify-between text-xs text-neutral-600 font-mono pr-1 py-3">
-        <span>{formatUSD(maxP)}</span>
-        <span>{formatUSD((maxP + minP) / 2)}</span>
-        <span>{formatUSD(minP)}</span>
-      </div>
+      {/* Y-axis price labels — positioned to match SVG coordinate space */}
+      {priceLevels.map(({ label, pct }) => (
+        <div
+          key={label}
+          className="absolute right-1 text-[10px] text-neutral-600 font-mono -translate-y-1/2"
+          style={{ top: `${pct * 100}%` }}
+        >
+          {label}
+        </div>
+      ))}
       <svg
         viewBox={`0 0 ${CHART_W} ${CHART_H}`}
         className="w-full"
@@ -473,7 +485,12 @@ export default function MarketPage() {
     setCandles(prev => {
       if (!prev.length) return [candle];
       const last = prev[prev.length - 1];
-      if (last.timestamp === candle.timestamp) return [...prev.slice(0, -1), candle];
+      // Compare by epoch ms — timestamp strings can differ in format
+      // (Bybit: "2024-01-15T12:00:00+00:00" vs Binance WS: "2024-01-15T12:00:00.000Z")
+      const lastMs = new Date(last.timestamp).getTime();
+      const curMs  = new Date(candle.timestamp).getTime();
+      if (lastMs === curMs) return [...prev.slice(0, -1), candle];
+      if (curMs < lastMs) return prev; // ignore out-of-order older candles
       return [...prev.slice(-499), candle];
     });
   }, [selectedSymbol]);
@@ -513,8 +530,11 @@ export default function MarketPage() {
   }, []);
 
   useEffect(() => {
-    loadCandles(selectedSymbol, timeframe);
+    // Clear stale candles immediately so the chart doesn't briefly show
+    // the previous symbol's data while new ones are loading
+    setCandles([]);
     setOrderBook(null);
+    loadCandles(selectedSymbol, timeframe);
   }, [selectedSymbol, timeframe]);
 
   const selectedTicker = tickers[selectedSymbol];
