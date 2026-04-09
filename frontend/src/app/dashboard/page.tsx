@@ -1223,6 +1223,495 @@ function AllAgentsPanel({
   );
 }
 
+// ─── Command Bar ──────────────────────────────────────────────────────────────
+function CommandBar({
+  ticker, agent, strategyResult, orbResult, streamConnected,
+}: {
+  ticker: BinanceTicker | null;
+  agent: ReturnType<typeof useMasterAgent>;
+  strategyResult: StrategyResult;
+  orbResult: ORBResult;
+  streamConnected: boolean;
+}) {
+  const { direction, conviction, grade, regime } = agent;
+  const gm = GRADE_META[grade];
+  const isUp = (ticker?.change_pct ?? 0) >= 0;
+
+  const strategies: { label: string; bias: string; met: number; total: number }[] = [
+    { label: "MV 15m", bias: strategyResult.bias, met: strategyResult.met_count,  total: strategyResult.total ?? 7 },
+    { label: "ORB",    bias: orbResult.bias,       met: orbResult.met_count,       total: orbResult.total ?? 6 },
+    { label: "HFT",    bias: "neutral",            met: 0,                         total: 5 },
+    { label: "OBI",    bias: "neutral",            met: 0,                         total: 3 },
+  ];
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-4 py-3 rounded-2xl"
+      style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+
+      {/* BTC Price */}
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <div>
+          <div className="text-[22px] font-mono font-black text-white leading-none">
+            {ticker ? formatUSD(ticker.last) : "—"}
+          </div>
+          <div className={`text-[10px] font-bold mt-0.5 ${isUp ? "text-green-400" : "text-red-400"}`}>
+            {isUp ? "+" : ""}{ticker?.change_pct.toFixed(2) ?? "0.00"}% 24h
+          </div>
+        </div>
+        <div className="h-8 w-px bg-neutral-800 hidden sm:block" />
+      </div>
+
+      {/* Strategy bias pills */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {strategies.map(s => {
+          const isLongB = s.bias === "long", isShortB = s.bias === "short";
+          const rgb = isLongB ? "34,197,94" : isShortB ? "239,68,68" : "55,65,81";
+          const col = isLongB ? "#22c55e"   : isShortB ? "#ef4444"   : "#4b5563";
+          const pct = s.total > 0 ? (s.met / s.total) * 100 : 0;
+          return (
+            <div key={s.label} className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl min-w-[52px]"
+              style={{ background: `rgba(${rgb},0.06)`, border: `1px solid rgba(${rgb},0.18)` }}>
+              <span className="text-[7px] text-neutral-600 font-bold tracking-wider">{s.label}</span>
+              <span className="text-[11px] font-bold leading-none" style={{ color: col }}>
+                {isLongB ? "▲" : isShortB ? "▼" : "—"}
+              </span>
+              <div className="w-8 h-0.5 bg-neutral-800 rounded-full overflow-hidden mt-0.5">
+                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: col }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="h-8 w-px bg-neutral-800 hidden sm:block" />
+
+      {/* Master Agent status */}
+      <div className="flex items-center gap-4">
+        <div>
+          <div className="text-[7px] text-neutral-700 tracking-widest mb-1 font-bold">MASTER AGENT</div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full"
+              style={{ background: `rgba(${gm.rgb},0.12)`, color: gm.color, border: `1px solid rgba(${gm.rgb},0.25)` }}>
+              {grade}
+            </span>
+            <span className="text-[12px] font-bold font-mono" style={{ color: gm.color }}>{conviction}/100</span>
+            <span className={`text-[11px] font-bold ${direction === "LONG" ? "text-green-400" : direction === "SHORT" ? "text-red-400" : "text-neutral-600"}`}>
+              {direction === "LONG" ? "▲ LONG" : direction === "SHORT" ? "▼ SHORT" : "FLAT"}
+            </span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[7px] text-neutral-700 tracking-widest mb-1 font-bold">REGIME</div>
+          <span className={`text-[10px] font-bold ${regime === "TRENDING" ? "text-blue-400" : regime === "VOLATILE" ? "text-red-400" : "text-yellow-400"}`}>
+            {regime}
+          </span>
+        </div>
+      </div>
+
+      {/* Right: stream status */}
+      <div className="ml-auto flex items-center gap-2">
+        {streamConnected
+          ? <span className="flex items-center gap-1.5 text-[8px] text-green-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />Binance LIVE</span>
+          : <span className="flex items-center gap-1.5 text-[8px] text-neutral-600"><WifiOff size={9} />Connecting</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Signal Command Center ─────────────────────────────────────────────────────
+function SignalCommandCenter({
+  agent, strategyResult, orbResult,
+}: {
+  agent: ReturnType<typeof useMasterAgent>;
+  strategyResult: StrategyResult;
+  orbResult: ORBResult;
+}) {
+  const { direction, conviction, grade, signal, votes, consensus_count, regime,
+          paper_position, paper_stats, last_price } = agent;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { openPaperTrade, closePaperTrade, resetPaper } = agent as any;
+  const gm = GRADE_META[grade];
+  const isLong  = direction === "LONG";
+  const isShort = direction === "SHORT";
+  const pnlColor2 = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-500";
+  const dirRgb = isLong ? "34,197,94" : isShort ? "239,68,68" : gm.rgb;
+  const dirCol = isLong ? "#22c55e"   : isShort ? "#ef4444"   : "#4b5563";
+
+  return (
+    <div className="rounded-2xl overflow-hidden"
+      style={{ background: "linear-gradient(135deg,#06060f 0%,#080812 100%)", border: `1px solid rgba(${dirRgb},0.2)`, boxShadow: `0 0 40px rgba(${dirRgb},0.05)` }}>
+
+      {/* Header bar */}
+      <div className="flex items-center gap-3 px-5 py-3" style={{ borderBottom: `1px solid rgba(${dirRgb},0.1)`, background: `rgba(${dirRgb},0.03)` }}>
+        <div className="relative w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: `rgba(${gm.rgb},0.12)`, border: `1px solid rgba(${gm.rgb},0.25)` }}>
+          <Brain size={16} style={{ color: gm.color }} />
+          {grade !== "X" && (
+            <>
+              <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full animate-ping" style={{ background: gm.color, opacity: 0.4 }} />
+              <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full" style={{ background: gm.color }} />
+            </>
+          )}
+        </div>
+        <div>
+          <div className="flex items-center gap-2.5">
+            <span className="text-[13px] font-bold text-white tracking-wider">MASTER AGENT · SIGNAL COMMAND</span>
+            <span className="text-[9px] px-2 py-0.5 rounded-full font-bold" style={{ background: `rgba(${gm.rgb},0.15)`, border: `1px solid rgba(${gm.rgb},0.3)`, color: gm.color }}>
+              {gm.label}
+            </span>
+          </div>
+          <div className="text-[8px] text-neutral-600 mt-0.5">{gm.desc} · Momentum × ORB-30 × HFT Flow</div>
+        </div>
+        <div className="ml-auto text-[8px] text-neutral-700">{regime} · consensus {consensus_count}/3</div>
+      </div>
+
+      {/* Body: 3 columns */}
+      <div className="grid grid-cols-12 gap-0">
+
+        {/* LEFT: Direction + conviction */}
+        <div className="col-span-12 lg:col-span-3 flex flex-col items-center justify-center gap-4 p-5 text-center"
+          style={{ borderRight: `1px solid rgba(${dirRgb},0.08)` }}>
+          <div className="w-20 h-20 rounded-3xl flex items-center justify-center"
+            style={{ background: `rgba(${dirRgb},0.1)`, border: `2px solid rgba(${dirRgb},0.25)` }}>
+            {isLong
+              ? <ArrowUpRight size={38} style={{ color: dirCol }} />
+              : isShort
+                ? <ArrowDownRight size={38} style={{ color: dirCol }} />
+                : <Activity size={30} className="text-neutral-600" />}
+          </div>
+          <div>
+            <div className="text-[30px] font-black leading-none" style={{ color: dirCol }}>
+              {isLong ? "LONG" : isShort ? "SHORT" : "FLAT"}
+            </div>
+            <div className="text-[10px] text-neutral-600 mt-1">BTC/USDT · {regime}</div>
+          </div>
+          {/* Conviction bar */}
+          <div className="w-full">
+            <div className="flex justify-between text-[7px] mb-1">
+              <span className="text-neutral-700 font-bold tracking-widest">CONVICTION</span>
+              <span className="font-bold font-mono" style={{ color: gm.color }}>{conviction}/100</span>
+            </div>
+            <div className="h-2 bg-black/40 rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${conviction}%`, background: `linear-gradient(90deg,rgba(${gm.rgb},0.4),${gm.color})` }} />
+            </div>
+          </div>
+        </div>
+
+        {/* CENTER: Signal or waiting */}
+        <div className="col-span-12 lg:col-span-5 p-5 flex flex-col justify-center gap-4"
+          style={{ borderRight: `1px solid rgba(${dirRgb},0.08)` }}>
+
+          {signal ? (
+            <>
+              <div className="text-[10px] text-neutral-500 font-bold tracking-widest uppercase">Active Signal</div>
+              <div className="grid grid-cols-2 gap-3">
+                {([
+                  ["Entry",       `$${signal.entry.toFixed(0)}`,  "text-white",     "rgba(255,255,255,0.04)","rgba(255,255,255,0.06)"],
+                  ["Stop Loss",   `$${signal.sl.toFixed(0)}`,     "text-red-400",   "rgba(239,68,68,0.06)","rgba(239,68,68,0.15)"],
+                  ["Take Profit", `$${signal.tp.toFixed(0)}`,     "text-green-400", "rgba(34,197,94,0.06)","rgba(34,197,94,0.15)"],
+                  ["R:R",         signal.rr,                       "text-yellow-400","rgba(245,158,11,0.06)","rgba(245,158,11,0.15)"],
+                ] as [string, string, string, string, string][]).map(([l, v, cls, bg, border]) => (
+                  <div key={l} className="rounded-xl p-3.5 text-center" style={{ background: bg, border: `1px solid ${border}` }}>
+                    <div className="text-[8px] text-neutral-600 mb-1 font-semibold">{l}</div>
+                    <div className={`text-[16px] font-mono font-bold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Price position bar */}
+              {signal.sl && signal.tp && last_price && (() => {
+                const rng = signal.tp - signal.sl;
+                const pct = Math.min(Math.max(((last_price - signal.sl) / rng) * 100, 0), 100);
+                return (
+                  <div>
+                    <div className="flex justify-between text-[8px] text-neutral-600 mb-1">
+                      <span className="text-red-400/70">SL ${signal.sl.toFixed(0)}</span>
+                      <span className="text-neutral-500">Current ${last_price.toFixed(0)}</span>
+                      <span className="text-green-400/70">TP ${signal.tp.toFixed(0)}</span>
+                    </div>
+                    <div className="h-2 bg-neutral-800 rounded-full relative overflow-hidden">
+                      <div className="absolute inset-0 flex">
+                        <div className="h-full bg-red-900/40" style={{ width: "33%" }} />
+                        <div className="h-full bg-neutral-900" style={{ width: "34%" }} />
+                        <div className="h-full bg-green-900/40" style={{ width: "33%" }} />
+                      </div>
+                      <div className="absolute top-0 h-full w-1 bg-white rounded-full shadow-lg" style={{ left: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })()}
+              <div className="text-[9px] text-neutral-600 italic">
+                {signal.size_pct}% position size · auto SL/TP
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-4 py-4">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center"
+                style={{ background: `rgba(${gm.rgb},0.08)`, border: `1px solid rgba(${gm.rgb},0.15)` }}>
+                <Brain size={26} style={{ color: gm.color }} />
+              </div>
+              <div className="text-center">
+                <div className="text-[14px] font-bold text-neutral-400">Scanning Markets</div>
+                <div className="text-[10px] text-neutral-600 mt-1">
+                  {conviction < 55 ? `${55 - conviction} more conviction pts needed` : "Awaiting entry confluence"}
+                </div>
+              </div>
+              <div className="w-full rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <div className="text-[9px] text-neutral-600">
+                  {direction !== "FLAT"
+                    ? `${direction} bias · ${consensus_count}/3 strategies aligned · conviction ${conviction}`
+                    : "Strategies diverging · no edge detected"}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: Strategy votes + paper trading */}
+        <div className="col-span-12 lg:col-span-4 p-5 flex flex-col gap-4">
+
+          {/* Strategy votes */}
+          <div>
+            <div className="text-[8px] text-neutral-700 uppercase tracking-widest mb-2 font-bold">
+              Strategy Alignment ({consensus_count}/3)
+            </div>
+            <div className="space-y-1.5">
+              {votes.map(v => {
+                const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
+                const vc = v.bias === "long" ? "#22c55e" : v.bias === "short" ? "#ef4444" : "#374151";
+                return (
+                  <div key={v.name} className="flex items-center gap-2 rounded-xl px-3 py-2"
+                    style={{ background: aligned ? `rgba(${dirRgb},0.06)` : "rgba(255,255,255,0.025)", border: `1px solid rgba(${dirRgb},${aligned ? "0.15" : "0.04"})` }}>
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: vc }} />
+                    <span className="text-[9px] text-neutral-500 flex-1 truncate">{v.name}</span>
+                    <span className="text-[9px] font-bold" style={{ color: vc }}>{v.bias === "long" ? "▲" : v.bias === "short" ? "▼" : "—"}</span>
+                    <div className="h-1 w-10 bg-neutral-900 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${v.met_pct * 100}%`, background: vc }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Paper trade */}
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5">
+                <FileText size={10} className="text-violet-400" />
+                <span className="text-[10px] font-bold text-white">Paper Trade</span>
+              </div>
+              <button onClick={resetPaper} className="text-[8px] text-neutral-700 hover:text-red-400 flex items-center gap-0.5 transition-colors">
+                <RotateCcw size={8} />Reset
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 mb-2">
+              {([
+                ["P&L", `${paper_stats.total_pnl >= 0 ? "+" : ""}$${paper_stats.total_pnl.toFixed(2)}`, paper_stats.total_pnl >= 0 ? "text-green-400" : "text-red-400"],
+                ["Win%", paper_stats.total_trades > 0 ? `${paper_stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
+              ] as [string, string, string][]).map(([l, v, cls]) => (
+                <div key={l} className="rounded-xl p-2.5 text-center" style={{ background: "rgba(139,92,246,0.04)", border: "1px solid rgba(139,92,246,0.1)" }}>
+                  <div className="text-[7px] text-neutral-700 mb-0.5">{l}</div>
+                  <div className={`text-[13px] font-bold font-mono ${cls}`}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            {paper_position?.open ? (
+              <div className="rounded-xl p-3" style={{ background: paper_position.direction === "LONG" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${paper_position.direction === "LONG" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}` }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${paper_position.direction === "LONG" ? "bg-green-400" : "bg-red-400"}`} />
+                    <span className={`text-[10px] font-bold ${paper_position.direction === "LONG" ? "text-green-400" : "text-red-400"}`}>OPEN {paper_position.direction}</span>
+                  </div>
+                  <button onClick={closePaperTrade} className="text-[8px] text-neutral-600 hover:text-red-400 flex items-center gap-0.5 border border-neutral-800 rounded px-1.5 py-0.5 transition-colors">
+                    <XIcon size={7} />Close
+                  </button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-neutral-600">Entry ${paper_position.entry?.toFixed(0)}</span>
+                  <span className={`text-[15px] font-bold font-mono ${pnlColor2(paper_position.pnl_usd ?? 0)}`}>
+                    {(paper_position.pnl_usd ?? 0) >= 0 ? "+" : ""}${(paper_position.pnl_usd ?? 0).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            ) : signal ? (
+              <button onClick={() => openPaperTrade(signal)}
+                className="w-full py-2.5 rounded-xl text-[10px] font-bold transition-all hover:scale-[1.02] active:scale-95"
+                style={{ background: isLong ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", border: `1px solid ${isLong ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`, color: isLong ? "#22c55e" : "#ef4444" }}>
+                Paper {isLong ? "▲ Long" : "▼ Short"} · $500
+              </button>
+            ) : (
+              <div className="rounded-xl px-3 py-2.5 flex items-center gap-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <Target size={10} className="text-neutral-700" />
+                <span className="text-[9px] text-neutral-700">Waiting for grade B+ signal</span>
+              </div>
+            )}
+            <div className="text-[8px] text-neutral-800 text-center mt-2">$500 per trade · auto TP/SL</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Market Pulse Strip ────────────────────────────────────────────────────────
+function MarketPulseStrip({
+  ticker, orderBook, chartCandles,
+}: {
+  ticker: BinanceTicker | null;
+  orderBook: BinanceOrderBook | null;
+  chartCandles: BinanceCandle[];
+}) {
+  const atr = useMemo(() => {
+    if (chartCandles.length < 15) return null;
+    const slice = chartCandles.slice(-15);
+    const trs = slice.slice(1).map((c, i) =>
+      Math.max(c.high - c.low, Math.abs(c.high - slice[i].close), Math.abs(c.low - slice[i].close))
+    );
+    return trs.reduce((s, v) => s + v, 0) / trs.length;
+  }, [chartCandles]);
+
+  const obi = useMemo(() => {
+    if (!orderBook) return 0;
+    const bv = orderBook.bids.slice(0, 10).reduce((s, b) => s + b.amount, 0);
+    const av = orderBook.asks.slice(0, 10).reduce((s, a) => s + a.amount, 0);
+    const total = bv + av;
+    return total > 0 ? (bv - av) / total : 0;
+  }, [orderBook]);
+
+  const { session, elapsedH } = useMemo(() => {
+    const h = new Date().getUTCHours();
+    if (h >= 0  && h < 8)  return { session: "Asia",     elapsedH: h };
+    if (h >= 8  && h < 16) return { session: "Europe",   elapsedH: h - 8 };
+    return { session: "New York", elapsedH: h - 16 };
+  }, []);
+
+  const rangePos = useMemo(() => {
+    if (!ticker) return 50;
+    const range = ticker.high_24h - ticker.low_24h;
+    return range > 0 ? ((ticker.last - ticker.low_24h) / range) * 100 : 50;
+  }, [ticker]);
+
+  const cardBase = { background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" };
+
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+      {/* 24h Range */}
+      <div className="rounded-2xl px-4 py-3" style={cardBase}>
+        <div className="text-[8px] text-neutral-600 uppercase tracking-widest mb-2 font-semibold">24h Range</div>
+        <div className="flex justify-between text-[8px] font-mono mb-1.5">
+          <span className="text-red-400">{ticker ? formatUSD(ticker.low_24h) : "—"}</span>
+          <span className="text-green-400">{ticker ? formatUSD(ticker.high_24h) : "—"}</span>
+        </div>
+        <div className="h-2 bg-neutral-800 rounded-full relative overflow-hidden">
+          <div className="absolute inset-0 rounded-full" style={{ background: "linear-gradient(90deg,rgba(239,68,68,0.3),rgba(34,197,94,0.3))" }} />
+          {ticker && <div className="absolute top-0 h-full w-1.5 rounded-full bg-white" style={{ left: `${Math.min(Math.max(rangePos, 2), 98)}%` }} />}
+        </div>
+        <div className="text-[9px] font-mono font-bold text-white text-center mt-1.5">{rangePos.toFixed(0)}% of range</div>
+      </div>
+
+      {/* ATR Volatility */}
+      <div className="rounded-2xl px-4 py-3" style={cardBase}>
+        <div className="text-[8px] text-neutral-600 uppercase tracking-widest mb-2 font-semibold">Volatility (ATR 15)</div>
+        {atr ? (
+          <>
+            <div className="text-[20px] font-mono font-black text-yellow-400 leading-none">{formatUSD(atr)}</div>
+            <div className="text-[8px] text-neutral-600 mt-1">{ticker ? `${(atr / ticker.last * 100).toFixed(2)}% of price` : "15m ATR"}</div>
+            <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden mt-2">
+              <div className="h-full rounded-full bg-yellow-400 transition-all" style={{ width: `${Math.min((atr / (ticker?.last ?? 1)) / 0.004 * 100, 100)}%` }} />
+            </div>
+          </>
+        ) : <div className="text-neutral-700 text-[10px] mt-2">Loading…</div>}
+      </div>
+
+      {/* OBI */}
+      <div className="rounded-2xl px-4 py-3" style={cardBase}>
+        <div className="text-[8px] text-neutral-600 uppercase tracking-widest mb-2 font-semibold">Order Flow (OBI)</div>
+        <div className={`text-[20px] font-mono font-black leading-none ${obi > 0.1 ? "text-green-400" : obi < -0.1 ? "text-red-400" : "text-neutral-500"}`}>
+          {obi >= 0 ? "+" : ""}{obi.toFixed(3)}
+        </div>
+        <div className="text-[8px] text-neutral-600 mt-1">
+          {obi > 0.2 ? "Strong bid pressure" : obi < -0.2 ? "Strong ask pressure" : "Balanced flow"}
+        </div>
+        <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden mt-2 relative">
+          <div className="absolute inset-0" style={{ background: "linear-gradient(90deg,rgba(239,68,68,0.25) 0%,transparent 50%,rgba(34,197,94,0.25) 100%)" }} />
+          <div className="absolute top-0 h-full w-1.5 rounded-full bg-white" style={{ left: `${Math.min(Math.max((obi + 1) / 2 * 100, 2), 98)}%` }} />
+        </div>
+      </div>
+
+      {/* Volume */}
+      <div className="rounded-2xl px-4 py-3" style={cardBase}>
+        <div className="text-[8px] text-neutral-600 uppercase tracking-widest mb-2 font-semibold">24h Volume</div>
+        {ticker ? (
+          <>
+            <div className="text-[20px] font-mono font-black text-blue-400 leading-none">
+              {(ticker.quote_volume / 1e9).toFixed(1)}<span className="text-[11px] text-neutral-600 ml-1">B USDT</span>
+            </div>
+            <div className="text-[8px] text-neutral-600 mt-1">{(ticker.volume / 1000).toFixed(1)}K BTC traded</div>
+          </>
+        ) : <div className="text-neutral-700 text-[10px] mt-2">Loading…</div>}
+      </div>
+
+      {/* Session */}
+      <div className="rounded-2xl px-4 py-3" style={cardBase}>
+        <div className="text-[8px] text-neutral-600 uppercase tracking-widest mb-2 font-semibold">Trading Session</div>
+        <div className="text-[14px] font-bold text-white">{session}</div>
+        <div className="text-[8px] text-neutral-600 mt-0.5">{elapsedH}h elapsed · {8 - elapsedH}h remaining</div>
+        <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden mt-2">
+          <div className="h-full rounded-full bg-blue-400 transition-all" style={{ width: `${(elapsedH / 8) * 100}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Floating Chat ─────────────────────────────────────────────────────────────
+function FloatingChat({
+  agent, strategyResult, orbResult,
+}: {
+  agent: ReturnType<typeof useMasterAgent>;
+  strategyResult: StrategyResult;
+  orbResult: ORBResult;
+}) {
+  const [open, setOpen] = useState(false);
+  const { grade } = agent;
+  const gm = GRADE_META[grade];
+
+  return (
+    <>
+      {/* Floating button */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="fixed bottom-6 left-6 z-50 w-12 h-12 rounded-2xl flex items-center justify-center shadow-2xl transition-all hover:scale-110 active:scale-95"
+        style={{ background: `rgba(${gm.rgb},0.15)`, border: `1px solid rgba(${gm.rgb},0.3)` }}
+        title="Ask Master Agent">
+        {open
+          ? <XIcon size={16} style={{ color: gm.color }} />
+          : <MessageSquare size={16} style={{ color: gm.color }} />}
+      </button>
+
+      {/* Slide-up panel */}
+      {open && (
+        <div className="fixed bottom-20 left-6 z-50 w-80 rounded-2xl shadow-2xl overflow-hidden transition-all"
+          style={{ background: "#08080f", border: `1px solid rgba(${gm.rgb},0.2)`, boxShadow: `0 0 40px rgba(${gm.rgb},0.1)` }}>
+          <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid rgba(${gm.rgb},0.1)`, background: `rgba(${gm.rgb},0.04)` }}>
+            <div className="flex items-center gap-2">
+              <Brain size={13} style={{ color: gm.color }} />
+              <span className="text-[11px] font-bold text-white">Master Agent · Chat</span>
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse ml-0.5" style={{ background: gm.color }} />
+            </div>
+            <button onClick={() => setOpen(false)} className="text-neutral-600 hover:text-white transition-colors">
+              <XIcon size={13} />
+            </button>
+          </div>
+          <ChatInterface agent={agent} gm={gm} strategyResult={strategyResult} orbResult={orbResult} />
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function OverviewPage() {
   const [data, setData]                 = useState<Overview | null>(null);
@@ -1445,7 +1934,9 @@ export default function OverviewPage() {
     <>
       <ToastContainer toasts={toasts} onDismiss={id => setToasts(p => p.filter(t => t.id !== id))} />
 
-      <div className="space-y-4">
+      <div className="space-y-3">
+
+        {/* ── Emergency stop banner ── */}
         {d?.kill_switch_active && (
           <div className="flex items-center gap-3 px-5 py-3.5 rounded-2xl"
             style={{ background: "rgba(255,69,58,0.08)", border: "1px solid rgba(255,69,58,0.2)", boxShadow: "0 0 20px rgba(255,69,58,0.05)" }}>
@@ -1459,27 +1950,38 @@ export default function OverviewPage() {
           </div>
         )}
 
-        {/* ── Master Agent Hero ── */}
-        <MasterAgentPanel agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
+        {/* ── 1. Command Bar ── */}
+        <CommandBar
+          ticker={btcTicker}
+          agent={masterAgent}
+          strategyResult={strategyResult}
+          orbResult={orbResult}
+          streamConnected={streamConnected}
+        />
 
-        {/* ── Live Agent Signal ── */}
-        <LiveAgentSignal result={strategyResult} />
+        {/* ── 2. Signal Command Center ── */}
+        <SignalCommandCenter agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
 
-        {/* ── Main row: Chart · Analysis · Market ── */}
+        {/* ── 3. Market Pulse Strip ── */}
+        <MarketPulseStrip ticker={btcTicker} orderBook={btcOrderBook} chartCandles={chartCandles} />
+
+        {/* ── 4. Main analysis grid: Chart · Conditions · Order Book ── */}
         <div className="grid grid-cols-12 gap-3">
 
-          {/* Chart — 7 cols */}
-          <div className="col-span-12 lg:col-span-7 rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+          {/* BTC Chart — 6 cols */}
+          <div className="col-span-12 lg:col-span-6 rounded-2xl overflow-hidden"
+            style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div className="flex items-center gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-bold text-white">BTC/USDT</span>
-                    <span className="text-[9px] px-2 py-0.5 rounded font-mono text-neutral-500" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>15m</span>
-                    <span className="text-[9px] text-neutral-600">Momentum Velocity</span>
-                  </div>
-                </div>
-                {streamConnected && <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live stream</span>}
+                <span className="text-[13px] font-bold text-white">BTC/USDT</span>
+                <span className="text-[9px] px-2 py-0.5 rounded font-mono text-neutral-500"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>15m</span>
+                <span className="text-[9px] text-neutral-600">Momentum Velocity</span>
+                {streamConnected && (
+                  <span className="flex items-center gap-1 text-[8px] text-green-400">
+                    <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {btcTicker && <span className="text-[13px] font-mono font-bold text-white">{formatUSD(btcTicker.last)}</span>}
@@ -1494,9 +1996,10 @@ export default function OverviewPage() {
             </div>
           </div>
 
-          {/* Analysis — 2 cols */}
-          <div className="col-span-12 lg:col-span-2 rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+          {/* Strategy Conditions — 3 cols */}
+          <div className="col-span-12 lg:col-span-3 rounded-2xl overflow-hidden"
+            style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div className="flex items-center gap-1.5">
                 <Activity size={11} className="text-blue-400" />
                 <span className="text-[11px] font-bold text-white">Conditions</span>
@@ -1510,12 +2013,16 @@ export default function OverviewPage() {
             </div>
           </div>
 
-          {/* BTC Market — 3 cols */}
-          <div className="col-span-12 lg:col-span-3 rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-              <span className="text-[11px] font-bold text-white">BTC Market</span>
+          {/* Order Book + BTC Market — 3 cols */}
+          <div className="col-span-12 lg:col-span-3 rounded-2xl overflow-hidden"
+            style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center gap-1.5">
+                <BookOpen size={11} className="text-neutral-500" />
+                <span className="text-[11px] font-bold text-white">BTC Market</span>
+              </div>
               {streamConnected
-                ? <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />Binance Direct</span>
+                ? <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />Binance</span>
                 : <span className="flex items-center gap-1 text-[8px] text-neutral-600"><WifiOff size={8} />Connecting</span>}
             </div>
             <div className="p-4">
@@ -1524,25 +2031,67 @@ export default function OverviewPage() {
           </div>
         </div>
 
-        {/* ── All Live Agents ── */}
-        <AllAgentsPanel
-          strategyResult={strategyResult}
-          chartCandles={chartCandles}
-          activity={activity}
-          btcTicker={btcTicker}
-        />
+        {/* ── 5. Bottom row: Individual Agents + Activity ── */}
+        <div className="grid grid-cols-12 gap-3">
 
-        {/* Footer strip */}
+          {/* Agents — 8 cols */}
+          <div className="col-span-12 lg:col-span-8">
+            <AllAgentsPanel
+              strategyResult={strategyResult}
+              chartCandles={chartCandles}
+              activity={activity}
+              btcTicker={btcTicker}
+            />
+          </div>
+
+          {/* Activity feed — 4 cols */}
+          <div className="col-span-12 lg:col-span-4 rounded-2xl overflow-hidden flex flex-col"
+            style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+              style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center gap-2">
+                <Bell size={11} className="text-neutral-600" />
+                <span className="text-[12px] font-bold text-white">Live Activity</span>
+                {activity.length > 0 && (
+                  <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold"
+                    style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#22c55e" }}>
+                    {activity.length}
+                  </span>
+                )}
+              </div>
+              <span className="flex items-center gap-1 text-[8px] text-neutral-700">
+                <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />live
+              </span>
+            </div>
+            <div className="overflow-y-auto flex-1" style={{ maxHeight: 340 }}>
+              {activity.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <Zap size={14} className="text-neutral-800" />
+                  </div>
+                  <p className="text-[10px] text-neutral-700">Waiting for signals…</p>
+                  <p className="text-[8px] text-neutral-800">Fires on every bar close</p>
+                </div>
+              ) : (
+                activity.map((ev, i) => <ActivityRow key={i} ev={ev} />)
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
         <div className="flex items-center justify-between px-1 pb-2">
           <div className="flex items-center gap-2 text-[8px] text-neutral-800">
             <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
-            <span>TradeOS · BTC/USDT live · Binance WebSocket</span>
+            <span>TradeOS · BTC/USDT live · Binance WebSocket · 4 strategies active</span>
           </div>
-          {lastUpdate && (
-            <span className="text-[8px] text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</span>
-          )}
+          {lastUpdate && <span className="text-[8px] text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</span>}
         </div>
       </div>
+
+      {/* ── Floating Master Agent Chat ── */}
+      <FloatingChat agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
     </>
   );
 }
