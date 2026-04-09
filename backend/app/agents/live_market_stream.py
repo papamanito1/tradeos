@@ -52,7 +52,7 @@ BINANCE_WS_BASE = "wss://stream.binance.com:9443/stream"
 BINANCE_WS_TESTNET = "wss://testnet.binance.vision/stream"
 
 # Default watchlist (no API key required for any of these)
-DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"]
+DEFAULT_SYMBOLS = ["BTC/USDT"]
 TIMEFRAMES = ["1m"]
 
 

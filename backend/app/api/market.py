@@ -9,7 +9,7 @@ from app.exchange.paper_trading import PaperTradingEngine
 router = APIRouter(prefix="/api/market", tags=["market"])
 _engine = PaperTradingEngine()
 
-WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"]
+WATCHLIST = ["BTC/USDT"]
 
 
 @router.get("/ticker/{symbol:path}")
