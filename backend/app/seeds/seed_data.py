@@ -49,158 +49,54 @@ async def seed():
             session.add(rs)
             print("Created default risk settings.")
 
-        # ── Demo strategies ────────────────────────────────────────────────────
-        demo_strategies = [
-            {
-                "name": "BTC EMA Crossover",
-                "strategy_type": "ema_crossover",
-                "symbols": ["BTC/USDT"],
-                "timeframe": "1h",
-                "parameters": {"fast_period": 9, "slow_period": 21},
-                "capital_allocation": 2000.0,
-                "mode": "paper",
-                "is_enabled": True,
-            },
-            {
-                "name": "ETH Breakout",
-                "strategy_type": "breakout",
-                "symbols": ["ETH/USDT"],
-                "timeframe": "4h",
-                "parameters": {"lookback": 20},
-                "capital_allocation": 1500.0,
-                "mode": "paper",
-                "is_enabled": True,
-            },
-            {
-                "name": "SOL Mean Reversion",
-                "strategy_type": "mean_reversion",
-                "symbols": ["SOL/USDT"],
-                "timeframe": "15m",
-                "parameters": {"period": 20, "std_dev": 2.0},
-                "capital_allocation": 1000.0,
-                "mode": "off",
-                "is_enabled": False,
-            },
-            {
-                "name": "Smart Money — BTC Liquidity Sweep",
-                "strategy_type": "smart_money_sweep",
-                "symbols": ["BTC/USDT"],
-                "timeframe": "1m",
-                "parameters": {
-                    "htf_ema": 200,
-                    "htf_slope_bars": 50,
-                    "htf_min_slope": 0.0002,
-                    "atr_period": 14,
-                    "atr_min_pct": 0.0010,
-                    "atr_max_pct": 0.0500,
-                    "vwap_period": 200,
-                    "vwap_band_pct": 0.004,
-                    "pullback_ema": 21,
-                    "pullback_ema_band": 0.003,
-                    "sweep_lookback": 10,
-                    "sweep_min_pct": 0.0003,
-                    "reclaim_min_pct": 0.0005,
-                    "funding_lookback": 30,
-                    "funding_max_bias": 0.80,
-                    "news_vol_period": 20,
-                    "news_vol_spike": 3.0,
-                    "atr_sl_mult": 1.5,
-                    "r_mult_tp1": 1.0,
-                    "r_mult_tp2": 2.0,
-                },
-                "capital_allocation": 3000.0,
-                "mode": "paper",
-                "is_enabled": True,
-            },
-            {
-                "name": "HFT Book Scalper — BTC",
-                "strategy_type": "hft_book_scalper",
-                "symbols": ["BTC/USDT"],
-                "timeframe": "1m",
-                "parameters": {
-                    "obi_threshold":   0.18,
-                    "micro_threshold": 0.15,
-                    "tfi_threshold":   0.12,
-                    "max_spread_ticks": 2,
-                    "min_atr_pct":   0.0002,
-                    "max_atr_pct":   0.0300,
-                    "obi_period":    10,
-                    "tfi_period":    5,
-                    "repl_period":   20,
-                    "drift_period":  3,
-                    "tick_size_pct": 0.00005,
-                    "tp_ticks":      1,
-                    "sl_ticks":      2,
-                    "max_hold_bars": 5,
-                },
-                "capital_allocation": 2000.0,
-                "mode": "paper",
-                "is_enabled": True,
-            },
-            {
-                "name": "BTC Momentum Velocity 15m",
-                "strategy_type": "btc_momentum_velocity",
-                "symbols": ["BTC/USDT"],
-                "timeframe": "15m",
-                "parameters": {
-                    "ema_trend_period":    50,
-                    "ema_pullback_period": 21,
-                    "rsi_period":          14,
-                    "atr_period":          14,
-                    "vwap_window":         50,
-                    "vol_avg_period":      20,
-                    "rsi_cross_lookback":  3,
-                    "rsi_trigger_long":    52,
-                    "rsi_trigger_short":   48,
-                    "vol_ratio_min":       1.4,
-                    "body_ratio_min":      0.50,
-                    "pullback_atr_mult":   1.2,
-                    "sl_atr_mult":         1.5,
-                    "tp_atr_mult":         3.0,
-                    "atr_min_pct":         0.001,
-                    "atr_max_pct":         0.012,
-                    "ema_slope_bars":      5,
-                },
-                "capital_allocation": 3000.0,
-                "mode": "paper",
-                "is_enabled": True,
-            },
-            {
-                "name": "QOFS — BTC/ETH HFT Scalper",
-                "strategy_type": "quantum_order_flow_scalper",
-                "symbols": ["BTC/USDT", "ETH/USDT"],
-                "timeframe": "1m",
-                "parameters": {
-                    "vwap_period": 50,
-                    "vwap_entry_band_pct": 0.003,
-                    "vwap_max_band_pct": 0.015,
-                    "ema_fast": 3,
-                    "ema_slow": 8,
-                    "ofi_period": 10,
-                    "ofi_threshold": 0.20,
-                    "vol_period": 20,
-                    "vol_min_pct": 0.0003,
-                    "vol_max_pct": 0.025,
-                    "rvol_period": 20,
-                    "rvol_threshold": 1.25,
-                    "regime_period": 30,
-                    "regime_trend_thresh": 0.10,
-                    "regime_revert_thresh": -0.10,
-                    "min_score": 3,
-                    "sl_pct": 0.003,
-                    "tp_pct": 0.005,
-                },
-                "capital_allocation": 2500.0,
-                "mode": "paper",
-                "is_enabled": True,
-            },
-        ]
+        # ── Remove all strategies except BTC Momentum Velocity ────────────────
+        keep_name = "BTC Momentum Velocity 15m"
+        all_strats = await session.execute(select(Strategy))
+        for s in all_strats.scalars().all():
+            if s.name != keep_name:
+                await session.delete(s)
+                print(f"Removed strategy: {s.name}")
 
-        for s_data in demo_strategies:
-            result = await session.execute(select(Strategy).where(Strategy.name == s_data["name"]))
-            if not result.scalar_one_or_none():
-                session.add(Strategy(**s_data))
-                print(f"Created strategy: {s_data['name']}")
+        # ── Ensure BTC Momentum Velocity 15m exists and is enabled ────────────
+        result = await session.execute(select(Strategy).where(Strategy.name == keep_name))
+        existing_mv = result.scalar_one_or_none()
+        mv_params = {
+            "ema_trend_period":    50,
+            "ema_pullback_period": 21,
+            "rsi_period":          14,
+            "atr_period":          14,
+            "vwap_window":         50,
+            "vol_avg_period":      20,
+            "rsi_cross_lookback":  3,
+            "rsi_trigger_long":    52,
+            "rsi_trigger_short":   48,
+            "vol_ratio_min":       1.4,
+            "body_ratio_min":      0.50,
+            "pullback_atr_mult":   1.2,
+            "sl_atr_mult":         1.5,
+            "tp_atr_mult":         3.0,
+            "atr_min_pct":         0.001,
+            "atr_max_pct":         0.012,
+            "ema_slope_bars":      5,
+        }
+        if not existing_mv:
+            session.add(Strategy(
+                name=keep_name,
+                strategy_type="btc_momentum_velocity",
+                symbols=["BTC/USDT"],
+                timeframe="15m",
+                parameters=mv_params,
+                capital_allocation=10000.0,
+                mode="paper",
+                is_enabled=True,
+            ))
+            print(f"Created strategy: {keep_name}")
+        else:
+            existing_mv.is_enabled = True
+            existing_mv.mode = "paper"
+            existing_mv.capital_allocation = 10000.0
+            existing_mv.parameters = mv_params
+            print(f"Updated strategy: {keep_name}")
 
         # ── Sample journal entries ─────────────────────────────────────────────
         result = await session.execute(select(JournalEntry).limit(1))
