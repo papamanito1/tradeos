@@ -3,17 +3,19 @@ from app.strategies.ema_crossover import EMACrossoverStrategy
 from app.strategies.breakout import BreakoutStrategy
 from app.strategies.mean_reversion import MeanReversionStrategy
 from app.strategies.quantum_order_flow_scalper import QuantumOrderFlowScalper
+from app.strategies.smart_money_sweep import SmartMoneySweep
 
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "ema_crossover": EMACrossoverStrategy,
     "breakout": BreakoutStrategy,
     "mean_reversion": MeanReversionStrategy,
     "quantum_order_flow_scalper": QuantumOrderFlowScalper,
+    "smart_money_sweep": SmartMoneySweep,
 }
 
 __all__ = [
     "BaseStrategy", "Signal", "SignalDirection",
     "EMACrossoverStrategy", "BreakoutStrategy", "MeanReversionStrategy",
-    "QuantumOrderFlowScalper",
+    "QuantumOrderFlowScalper", "SmartMoneySweep",
     "STRATEGY_REGISTRY",
 ]
