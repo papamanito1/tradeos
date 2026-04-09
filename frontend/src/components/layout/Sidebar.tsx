@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Zap, TrendingUp, FileText, ShieldAlert,
-  BarChart2, Activity, BookOpen, Settings, LogOut,
+  BarChart2, Activity, BookOpen, Settings, LogOut, Rocket,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Logo } from "@/components/ui/Logo";
@@ -15,6 +15,7 @@ const NAV_SECTIONS = [
     label: "Trading",
     items: [
       { label: "Overview",   href: "/dashboard",            icon: LayoutDashboard },
+      { label: "Trade BTC",  href: "/dashboard/trade",      icon: Rocket },
       { label: "Strategies", href: "/dashboard/strategies", icon: Zap },
       { label: "Positions",  href: "/dashboard/positions",  icon: TrendingUp },
       { label: "Orders",     href: "/dashboard/orders",     icon: FileText },
