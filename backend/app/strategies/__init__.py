@@ -5,6 +5,7 @@ from app.strategies.mean_reversion import MeanReversionStrategy
 from app.strategies.quantum_order_flow_scalper import QuantumOrderFlowScalper
 from app.strategies.smart_money_sweep import SmartMoneySweep
 from app.strategies.hft_book_scalper import HftBookScalper
+from app.strategies.btc_momentum_velocity import BtcMomentumVelocity
 
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "ema_crossover": EMACrossoverStrategy,
@@ -13,11 +14,13 @@ STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "quantum_order_flow_scalper": QuantumOrderFlowScalper,
     "smart_money_sweep": SmartMoneySweep,
     "hft_book_scalper": HftBookScalper,
+    "btc_momentum_velocity": BtcMomentumVelocity,
 }
 
 __all__ = [
     "BaseStrategy", "Signal", "SignalDirection",
     "EMACrossoverStrategy", "BreakoutStrategy", "MeanReversionStrategy",
     "QuantumOrderFlowScalper", "SmartMoneySweep", "HftBookScalper",
+    "BtcMomentumVelocity",
     "STRATEGY_REGISTRY",
 ]
