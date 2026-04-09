@@ -29,7 +29,6 @@ interface Analysis {
   conditions: AnalysisCondition[];
   indicators: Record<string, number | null>;
   last_signal: Record<string, unknown> | null;
-  candles: Array<{ timestamp: string; open: number; high: number; low: number; close: number; volume: number }>;
 }
 
 interface ActivityEvent {
@@ -566,19 +565,26 @@ export default function OverviewPage() {
     if (d) setActivity(d);
   }, [authFetch]);
 
-  const fetchAnalysis = useCallback(async () => {
-    setAnalysisLoading(true);
-    const d: Analysis | null = await authFetch("/api/paper/analysis");
-    if (d) {
-      setAnalysis(d);
-      // Use candles from analysis endpoint to seed the chart
-      if (d.candles?.length) {
-        setChartCandles(d.candles.map((c: { timestamp: string; open: number; high: number; low: number; close: number; volume: number }) => ({
+  // Load chart candles directly from market API (Bybit-backed, reliable)
+  const fetchChartCandles = useCallback(async () => {
+    try {
+      const d = await authFetch("/api/market/candles/BTC%2FUSDT?timeframe=15m&limit=120");
+      if (Array.isArray(d) && d.length > 0) {
+        setChartCandles(d.map((c: { timestamp: string; open: number; high: number; low: number; close: number; volume: number }) => ({
           ...c, is_closed: true,
         })));
       }
+    } catch { /* silent */ }
+  }, [authFetch]);
+
+  const fetchAnalysis = useCallback(async () => {
+    setAnalysisLoading(true);
+    try {
+      const d: Analysis | null = await authFetch("/api/paper/analysis");
+      if (d) setAnalysis(d);
+    } finally {
+      setAnalysisLoading(false);
     }
-    setAnalysisLoading(false);
   }, [authFetch]);
 
   const fetchSignals = useCallback(async () => {
@@ -587,13 +593,14 @@ export default function OverviewPage() {
   }, [authFetch]);
 
   useEffect(() => {
-    fetchData(); fetchActivity(); fetchAnalysis(); fetchSignals();
-    const i1 = setInterval(fetchData,     15_000);
-    const i2 = setInterval(fetchActivity, 20_000);
-    const i3 = setInterval(fetchAnalysis, 60_000);  // refresh every candle
-    const i4 = setInterval(fetchSignals,  30_000);
-    return () => { clearInterval(i1); clearInterval(i2); clearInterval(i3); clearInterval(i4); };
-  }, [fetchData, fetchActivity, fetchAnalysis, fetchSignals]);
+    fetchData(); fetchActivity(); fetchChartCandles(); fetchAnalysis(); fetchSignals();
+    const i1 = setInterval(fetchData,         15_000);
+    const i2 = setInterval(fetchActivity,     20_000);
+    const i3 = setInterval(fetchChartCandles, 60_000);  // refresh every 15m candle
+    const i4 = setInterval(fetchAnalysis,     60_000);
+    const i5 = setInterval(fetchSignals,      30_000);
+    return () => { clearInterval(i1); clearInterval(i2); clearInterval(i3); clearInterval(i4); clearInterval(i5); };
+  }, [fetchData, fetchActivity, fetchChartCandles, fetchAnalysis, fetchSignals]);
 
   // ── Binance direct stream for live BTC 15m candle ────────────────────────
   useBinanceStream({
@@ -605,6 +612,16 @@ export default function OverviewPage() {
     onCandle: useCallback((sym: string, candle: BinanceCandle) => {
       if (sym !== "BTC/USDT") return;
       setLiveCandle(candle);
+      // Merge live candle into the historical chart candles
+      setChartCandles(prev => {
+        if (!prev.length) return prev;
+        const last = prev[prev.length - 1];
+        const lastMs = new Date(last.timestamp).getTime();
+        const curMs  = new Date(candle.timestamp).getTime();
+        if (lastMs === curMs) return [...prev.slice(0, -1), { ...candle }];
+        if (curMs > lastMs)   return [...prev.slice(-119), { ...candle }];
+        return prev;
+      });
     }, []),
   });
 

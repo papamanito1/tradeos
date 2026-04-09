@@ -322,5 +322,4 @@ async def get_analysis(current_user: dict = Depends(get_current_user)):
             "body_ratio": round(body_ratio, 3),
         },
         "last_signal": last_signal,
-        "candles":     candles_raw[-100:],   # last 100 bars for frontend chart
     }
