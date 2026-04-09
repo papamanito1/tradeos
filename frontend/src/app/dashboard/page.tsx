@@ -573,6 +573,9 @@ export default function OverviewPage() {
   // ── Frontend strategy engine (no backend needed) ─────────────────────────
   const strategyResult = useStrategyEngine(chartCandles);
 
+  const addToast = useCallback((t: Omit<Toast, "id">) =>
+    setToasts(p => [...p.slice(-4), { ...t, id: ++toastId.current }]), []);
+
   // Toast when the engine fires a live signal
   const prevSignalRef = useRef<string | null>(null);
   useEffect(() => {
@@ -583,9 +586,6 @@ export default function OverviewPage() {
       addToast({ kind: "signal", direction: strategyResult.signal.direction, symbol: "BTC/USDT", price: strategyResult.signal.entry, strategy: "Momentum Velocity 15m" });
     }
   }, [strategyResult.signal, addToast]);
-
-  const addToast = useCallback((t: Omit<Toast, "id">) =>
-    setToasts(p => [...p.slice(-4), { ...t, id: ++toastId.current }]), []);
 
   const authFetch = useCallback(async (url: string) => {
     try {
