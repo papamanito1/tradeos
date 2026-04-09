@@ -49,16 +49,17 @@ async def seed():
             session.add(rs)
             print("Created default risk settings.")
 
-        # ── Remove all strategies except BTC Momentum Velocity ────────────────
-        keep_name = "BTC Momentum Velocity 15m"
+        # ── Keep only our two live strategies ────────────────────────────────
+        keep_names = {"BTC Momentum Velocity 15m", "HFT VWAP Scalper 1m"}
         all_strats = await session.execute(select(Strategy))
         for s in all_strats.scalars().all():
-            if s.name != keep_name:
+            if s.name not in keep_names:
                 await session.delete(s)
                 print(f"Removed strategy: {s.name}")
 
         # ── Ensure BTC Momentum Velocity 15m exists and is enabled ────────────
-        result = await session.execute(select(Strategy).where(Strategy.name == keep_name))
+        mv_name = "BTC Momentum Velocity 15m"
+        result = await session.execute(select(Strategy).where(Strategy.name == mv_name))
         existing_mv = result.scalar_one_or_none()
         mv_params = {
             "ema_trend_period":    50,
@@ -81,22 +82,60 @@ async def seed():
         }
         if not existing_mv:
             session.add(Strategy(
-                name=keep_name,
+                name=mv_name,
                 strategy_type="btc_momentum_velocity",
                 symbols=["BTC/USDT"],
                 timeframe="15m",
                 parameters=mv_params,
                 capital_allocation=10000.0,
-                mode="paper",
+                mode="live",
                 is_enabled=True,
             ))
-            print(f"Created strategy: {keep_name}")
+            print(f"Created strategy: {mv_name}")
         else:
             existing_mv.is_enabled = True
-            existing_mv.mode = "paper"
+            existing_mv.mode = "live"
             existing_mv.capital_allocation = 10000.0
             existing_mv.parameters = mv_params
-            print(f"Updated strategy: {keep_name}")
+            print(f"Updated strategy: {mv_name}")
+
+        # ── Ensure HFT VWAP Scalper 1m exists and is enabled ─────────────────
+        hft_name = "HFT VWAP Scalper 1m"
+        result = await session.execute(select(Strategy).where(Strategy.name == hft_name))
+        existing_hft = result.scalar_one_or_none()
+        hft_params = {
+            "obi_threshold":      0.18,
+            "tfi_threshold":      0.12,
+            "micro_edge_ticks":   0.15,
+            "near_vwap_atr_mult": 0.20,
+            "max_spread_ticks":   2,
+            "sl_atr_mult":        0.35,
+            "tp1_r":              0.6,
+            "tp2_r":              1.2,
+            "ema9_period":        9,
+            "ema21_period":       21,
+            "atr_period":         14,
+            "swing_lookback":     10,
+            "cooldown_bars":      3,
+        }
+        if not existing_hft:
+            session.add(Strategy(
+                name=hft_name,
+                strategy_type="hft_vwap_scalper",
+                symbols=["BTC/USDT"],
+                timeframe="1m",
+                parameters=hft_params,
+                capital_allocation=5000.0,
+                mode="live",
+                is_enabled=True,
+            ))
+            print(f"Created strategy: {hft_name}")
+        else:
+            existing_hft.is_enabled = True
+            existing_hft.mode = "live"
+            existing_hft.capital_allocation = 5000.0
+            existing_hft.parameters = hft_params
+            print(f"Updated strategy: {hft_name}")
 
         # ── Sample journal entries ─────────────────────────────────────────────
         result = await session.execute(select(JournalEntry).limit(1))
