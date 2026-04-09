@@ -126,6 +126,17 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)):
     return WATCHLIST
 
 
+@router.get("/signals")
+async def get_signals(
+    symbol: str = Query("BTC/USDT"),
+    limit: int = Query(50, le=200),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return recent strategy signals for a symbol (used for chart overlays)."""
+    from app.core.signal_cache import get_signals
+    return get_signals(symbol, limit)
+
+
 @router.get("/stream-status")
 async def get_stream_status(current_user: dict = Depends(get_current_user)):
     """Report whether the live WebSocket stream is connected."""

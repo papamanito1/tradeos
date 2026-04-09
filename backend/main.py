@@ -109,6 +109,21 @@ async def startup():
     except Exception as e:
         logger.warning(f"Live stream agent failed to start: {e}")
 
+    # ── Trading pipeline: Signal → Risk → Execution (paper) ──────────────────
+    try:
+        from app.agents.signal_agent import SignalAgent
+        from app.agents.execution_agent import ExecutionAgent
+        from app.exchange.paper_trading import PaperTradingEngine
+
+        paper_engine = PaperTradingEngine()
+        exec_agent = ExecutionAgent(exchange=paper_engine, mode="paper")
+        signal_agent = SignalAgent(execution_agent=exec_agent)
+
+        await signal_agent.start()
+        logger.info("Signal agent started — strategies will run every 60 s")
+    except Exception as e:
+        logger.warning(f"Signal/execution pipeline failed to start: {e}")
+
     logger.info("TradeOS ready")
 
 
