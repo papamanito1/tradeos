@@ -5,7 +5,8 @@ import {
   DollarSign, TrendingUp, TrendingDown, Activity,
   Layers, BarChart2, ShieldCheck, RefreshCw, WifiOff,
   Zap, ArrowUpRight, ArrowDownRight, Bell, Bot, BookOpen,
-  CheckCircle2, XCircle,
+  CheckCircle2, XCircle, Brain, Cpu, RotateCcw, X as XIcon,
+  Target, Shield, FileText,
 } from "lucide-react";
 import { overviewApi } from "@/lib/api";
 import { Overview } from "@/types";
@@ -16,6 +17,8 @@ import {
   useBinanceStream, BinanceCandle, BinanceTicker, BinanceOrderBook,
 } from "@/hooks/useBinanceStream";
 import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
+import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
+import { useMasterAgent, type MasterSignal, type ConvictionGrade } from "@/hooks/useMasterAgent";
 
 // ─── Chart constants ──────────────────────────────────────────────────────────
 const CW = 1000, CH = 220, PY = 14, BAR = 5;
@@ -617,6 +620,289 @@ function AgentCard({
   );
 }
 
+// ─── Master Agent Panel ───────────────────────────────────────────────────────
+const GRADE_META: Record<ConvictionGrade, { color: string; bg: string; border: string; label: string }> = {
+  "A+": { color: "#22c55e", bg: "rgba(34,197,94,0.08)",  border: "rgba(34,197,94,0.25)",  label: "ULTRA HIGH" },
+  "A":  { color: "#0a84ff", bg: "rgba(10,132,255,0.08)", border: "rgba(10,132,255,0.25)", label: "HIGH" },
+  "B":  { color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)", label: "MODERATE" },
+  "C":  { color: "#8b5cf6", bg: "rgba(139,92,246,0.08)", border: "rgba(139,92,246,0.25)", label: "LOW" },
+  "X":  { color: "#4b5563", bg: "rgba(75,85,99,0.06)",   border: "rgba(75,85,99,0.15)",   label: "NO TRADE" },
+};
+
+function MasterAgentPanel({ agent, strategyResult, orbResult }: {
+  agent: ReturnType<typeof useMasterAgent>;
+  strategyResult: StrategyResult;
+  orbResult: ORBResult;
+}) {
+  const { direction, conviction, grade, signal, votes, consensus_count, regime, thoughts,
+          paper_position, paper_stats, last_price, price_24h } = agent;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { openPaperTrade, closePaperTrade, resetPaper } = agent as any;
+
+  const gm = GRADE_META[grade];
+  const isLong  = direction === "LONG";
+  const isShort = direction === "SHORT";
+  const dirColor = isLong ? "#22c55e" : isShort ? "#ef4444" : "#4b5563";
+  const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-500";
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: "#080810", border: "1px solid rgba(255,255,255,0.07)" }}>
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.4)" }}>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Brain size={20} style={{ color: gm.color }} />
+            {grade !== "X" && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full animate-ping" style={{ background: gm.color, opacity: 0.5 }} />}
+            {grade !== "X" && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: gm.color }} />}
+          </div>
+          <div>
+            <div className="text-[13px] font-bold text-white tracking-wide flex items-center gap-2">
+              MASTER AGENT
+              <span className="text-[9px] px-2 py-0.5 rounded font-mono" style={{ background: gm.bg, border: `1px solid ${gm.border}`, color: gm.color }}>
+                {gm.label}
+              </span>
+            </div>
+            <div className="text-[9px] text-neutral-600">Multi-strategy confluence · Hedge fund analytics · Live paper trading</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-6">
+          {/* Regime */}
+          <div className="text-center">
+            <div className="text-[8px] text-neutral-700">REGIME</div>
+            <div className={`text-[10px] font-bold ${regime === "TRENDING" ? "text-blue-400" : regime === "VOLATILE" ? "text-red-400" : regime === "RANGING" ? "text-yellow-400" : "text-neutral-600"}`}>
+              {regime}
+            </div>
+          </div>
+          {/* Live price */}
+          {last_price && (
+            <div className="text-center">
+              <div className="text-[8px] text-neutral-700">BTC PRICE</div>
+              <div className="text-[11px] font-mono font-bold text-white">${last_price.toLocaleString()}</div>
+              {price_24h != null && (
+                <div className={`text-[8px] ${price_24h >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {price_24h >= 0 ? "+" : ""}{price_24h.toFixed(2)}%
+                </div>
+              )}
+            </div>
+          )}
+          {/* Consensus */}
+          <div className="text-center">
+            <div className="text-[8px] text-neutral-700">CONSENSUS</div>
+            <div className="flex gap-1 mt-1 justify-center">
+              {votes.map((v, i) => {
+                const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
+                return (
+                  <div key={i} className="w-2 h-2 rounded-full" title={v.name}
+                    style={{ background: aligned ? gm.color : v.bias !== "neutral" ? "#4b5563" : "#1e1e2e" }} />
+                );
+              })}
+            </div>
+            <div className="text-[8px] text-neutral-600 mt-0.5">{consensus_count}/3 agree</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-12 gap-0">
+
+        {/* Left: Conviction + Signal + Paper P&L */}
+        <div className="col-span-12 lg:col-span-4 p-4 space-y-3" style={{ borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+
+          {/* Direction + Conviction gauge */}
+          <div className="rounded-xl p-4 text-center space-y-2" style={{ background: gm.bg, border: `1px solid ${gm.border}` }}>
+            <div className="text-[11px] font-semibold" style={{ color: gm.color }}>
+              {direction === "LONG" ? "▲ " : direction === "SHORT" ? "▼ " : "— "}{direction} · GRADE {grade}
+            </div>
+            {/* Conviction bar */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-[9px]">
+                <span className="text-neutral-700">Conviction</span>
+                <span className="font-mono" style={{ color: gm.color }}>{conviction}/100</span>
+              </div>
+              <div className="h-2 bg-neutral-900 rounded-full overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-700"
+                  style={{ width: `${conviction}%`, background: `linear-gradient(90deg, ${gm.color}88, ${gm.color})` }} />
+              </div>
+            </div>
+            {/* Grade scale */}
+            <div className="flex justify-between text-[8px] text-neutral-800">
+              <span>X</span><span>C</span><span>B</span><span>A</span><span>A+</span>
+            </div>
+          </div>
+
+          {/* Strategy votes */}
+          <div className="space-y-1.5">
+            {votes.map(v => {
+              const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
+              return (
+                <div key={v.name} className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: aligned ? gm.color : v.bias !== "neutral" ? "#4b5563" : "#1e1e2e" }} />
+                  <span className="text-[9px] text-neutral-500 flex-1">{v.name}</span>
+                  <span className={`text-[9px] font-bold ${v.bias === "long" ? "text-green-400" : v.bias === "short" ? "text-red-400" : "text-neutral-700"}`}>
+                    {v.bias === "long" ? "▲ LONG" : v.bias === "short" ? "▼ SHORT" : "NEUTRAL"}
+                  </span>
+                  <span className="text-[8px] font-mono text-neutral-700">{(v.met_pct * 100).toFixed(0)}%</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Master signal card */}
+          {signal ? (
+            <div className="rounded-xl p-3 space-y-2" style={{ background: isLong ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${isLong ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}` }}>
+              <div className="flex items-center justify-between">
+                <span className={`text-[10px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+                  {isLong ? "▲ LONG" : "▼ SHORT"} SIGNAL · {grade}
+                </span>
+                <span className="text-[8px] text-neutral-600">{signal.size_pct}% size</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-[9px] font-mono">
+                <div><span className="text-neutral-700 block">Entry</span><span className="text-white">${signal.entry.toFixed(0)}</span></div>
+                <div><span className="text-red-400 block">SL</span><span className="text-red-300">${signal.sl.toFixed(0)}</span></div>
+                <div><span className="text-green-400 block">TP</span><span className="text-green-300">${signal.tp.toFixed(0)}</span></div>
+              </div>
+              <div className="text-[8px] text-neutral-600">R:R {signal.rr}</div>
+              {!paper_position?.open && (
+                <button onClick={() => openPaperTrade(signal)}
+                  className="w-full py-1.5 rounded-lg text-[9px] font-bold text-white transition-colors"
+                  style={{ background: isLong ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)", border: `1px solid ${isLong ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}` }}>
+                  <FileText size={9} className="inline mr-1" />Paper Trade
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+              <Cpu size={11} className="text-neutral-700" />
+              <span className="text-[10px] text-neutral-700">Scanning for high-conviction setup…</span>
+            </div>
+          )}
+
+          {/* Paper stats */}
+          <div className="rounded-xl p-3 space-y-2" style={{ background: "rgba(139,92,246,0.04)", border: "1px solid rgba(139,92,246,0.12)" }}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <FileText size={10} className="text-violet-400" />
+                <span className="text-[10px] font-semibold text-white">Paper P&L</span>
+              </div>
+              <button onClick={resetPaper} className="text-[8px] text-neutral-700 hover:text-red-400 flex items-center gap-1 transition-colors">
+                <RotateCcw size={8} />Reset
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                ["Total P&L", `${paper_stats.total_pnl >= 0 ? "+" : ""}$${paper_stats.total_pnl.toFixed(2)}`, pnlColor(paper_stats.total_pnl)],
+                ["Win Rate",  paper_stats.total_trades > 0 ? `${paper_stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
+                ["Wins/Loss", `${paper_stats.wins}W / ${paper_stats.losses}L`, "text-neutral-400"],
+                ["Trades",    `${paper_stats.total_trades}`, "text-neutral-500"],
+              ].map(([l, v, cls]) => (
+                <div key={l} className="text-center rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.02)" }}>
+                  <div className="text-[8px] text-neutral-700">{l}</div>
+                  <div className={`text-[10px] font-bold font-mono ${cls}`}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Open position */}
+            {paper_position?.open && (
+              <div className="rounded-lg p-2.5 space-y-1.5" style={{ background: paper_position.direction === "LONG" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${paper_position.direction === "LONG" ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"}` }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${paper_position.direction === "LONG" ? "bg-green-400" : "bg-red-400"}`} />
+                    <span className={`text-[9px] font-bold ${paper_position.direction === "LONG" ? "text-green-400" : "text-red-400"}`}>
+                      OPEN {paper_position.direction}
+                    </span>
+                  </div>
+                  <button onClick={closePaperTrade} className="text-[8px] text-neutral-700 hover:text-red-400 flex items-center gap-0.5 transition-colors">
+                    <XIcon size={8} />Close
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-[9px] font-mono">
+                  <div><span className="text-neutral-700">Entry</span><br /><span className="text-white">${paper_position.entry?.toFixed(0)}</span></div>
+                  <div>
+                    <span className="text-neutral-700">P&L</span><br />
+                    <span className={pnlColor(paper_position.pnl_usd ?? 0)}>
+                      {(paper_position.pnl_usd ?? 0) >= 0 ? "+" : ""}${(paper_position.pnl_usd ?? 0).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Commentary feed */}
+        <div className="col-span-12 lg:col-span-8 p-4 flex flex-col">
+          <div className="flex items-center gap-2 mb-3">
+            <Cpu size={11} className="text-neutral-600" />
+            <span className="text-[11px] font-semibold text-white">Live Analyst Feed</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse ml-1" />
+            <span className="text-[9px] text-green-400">thinking · updates every 12s</span>
+            <div className="ml-auto flex items-center gap-3 text-[9px] text-neutral-700">
+              <span>Momentum 15m</span>
+              <span className="w-px h-3 bg-neutral-800" />
+              <span>ORB-30</span>
+              <span className="w-px h-3 bg-neutral-800" />
+              <span>HFT Flow</span>
+              <span className="w-px h-3 bg-neutral-800" />
+              <span>Risk Engine</span>
+            </div>
+          </div>
+
+          {/* Terminal feed */}
+          <div className="flex-1 overflow-y-auto space-y-0.5 font-mono text-[10px]"
+            style={{ maxHeight: 340, background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,0.04)" }}>
+            {thoughts.length === 0 && (
+              <div className="text-neutral-800 flex items-center gap-2">
+                <RefreshCw size={10} className="animate-spin" />
+                Initialising brain… loading market data
+              </div>
+            )}
+            {thoughts.map((t, i) => {
+              const isSignal  = t.includes("★") || t.includes("CONSENSUS") || t.includes("A+");
+              const isTP      = t.includes("✅") || t.includes("TP HIT");
+              const isSL      = t.includes("⛔") || t.includes("SL HIT");
+              const isPaper   = t.includes("📄") || t.includes("Paper");
+              const isWarning = t.includes("VOLATILE") || t.includes("RANGING") || t.includes("risk") || t.includes("Risk");
+              const cls = isSignal  ? "text-yellow-400"
+                        : isTP      ? "text-green-400"
+                        : isSL      ? "text-red-400"
+                        : isPaper   ? "text-violet-400"
+                        : isWarning ? "text-orange-400"
+                        : i === 0   ? "text-neutral-300"
+                        : "text-neutral-600";
+              return (
+                <div key={i} className={`leading-relaxed py-0.5 ${cls} ${i === 0 ? "font-semibold" : ""}`}>
+                  {t}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Bottom stat strip */}
+          <div className="flex items-center gap-6 mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+            {[
+              ["MV15",     strategyResult.bias !== "neutral" ? strategyResult.bias.toUpperCase() : "NEUTRAL",
+               strategyResult.bias === "long" ? "text-green-400" : strategyResult.bias === "short" ? "text-red-400" : "text-neutral-600"],
+              ["ORB-30",   orbResult.bias !== "neutral" ? orbResult.bias.toUpperCase() : "NEUTRAL",
+               orbResult.bias === "long" ? "text-green-400" : orbResult.bias === "short" ? "text-red-400" : "text-neutral-600"],
+              ["MV conds", `${strategyResult.met_count}/${strategyResult.total ?? 7}`, "text-neutral-400"],
+              ["ORB conds",`${orbResult.met_count}/${orbResult.total ?? 6}`, "text-neutral-400"],
+              ["OR High",  orbResult.indicators.or_high ? `$${orbResult.indicators.or_high.toFixed(0)}` : "—", "text-green-400"],
+              ["OR Low",   orbResult.indicators.or_low  ? `$${orbResult.indicators.or_low.toFixed(0)}`  : "—", "text-red-400"],
+              ["Session",  orbResult.indicators.session_label ?? "—", "text-neutral-600"],
+            ].map(([l, v, cls]) => (
+              <div key={l} className="text-center min-w-0">
+                <div className="text-[8px] text-neutral-800 truncate">{l}</div>
+                <div className={`text-[10px] font-mono font-semibold ${cls} truncate`}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AllAgentsPanel({
   strategyResult, chartCandles, activity, btcTicker,
 }: {
@@ -777,10 +1063,14 @@ export default function OverviewPage() {
   const [btcTicker, setBtcTicker]       = useState<BinanceTicker | null>(null);
   const [btcOrderBook, setBtcOrderBook] = useState<BinanceOrderBook | null>(null);
   const [signals, setSignals]           = useState<Array<{ timestamp: string; direction: string; sl?: number | null; tp?: number | null }>>([]);
+  const [candles1m, setCandles1m]       = useState<BinanceCandle[]>([]);
   const toastId = useRef(0);
 
-  // ── Frontend strategy engine (no backend needed) ─────────────────────────
+  // ── Frontend strategy engines ─────────────────────────────────────────────
   const strategyResult = useStrategyEngine(chartCandles);
+  const orbResult      = useORBStrategy(candles1m);
+
+  const masterAgent = useMasterAgent(strategyResult, orbResult, chartCandles, candles1m, btcTicker, btcOrderBook);
 
   const addToast = useCallback((t: Omit<Toast, "id">) =>
     setToasts(p => [...p.slice(-4), { ...t, id: ++toastId.current }]), []);
@@ -863,14 +1153,44 @@ export default function OverviewPage() {
     if (d) setSignals(d);
   }, [authFetch]);
 
+  // Seed 1m candles for ORB + Master Agent
+  const seed1mCandles = useCallback(async () => {
+    try {
+      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=120");
+      if (r.ok) {
+        const raw: unknown[][] = await r.json();
+        setCandles1m(raw.map(k => ({
+          timestamp: new Date(k[0] as number).toISOString(),
+          open:  parseFloat(k[1] as string), high:  parseFloat(k[2] as string),
+          low:   parseFloat(k[3] as string), close: parseFloat(k[4] as string),
+          volume:parseFloat(k[5] as string), is_closed: true,
+        })));
+        return;
+      }
+    } catch { /* fall through */ }
+    try {
+      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=120");
+      if (r.ok) {
+        const json = await r.json();
+        const list: string[][] = json?.result?.list ?? [];
+        setCandles1m([...list].reverse().map(k => ({
+          timestamp: new Date(parseInt(k[0])).toISOString(),
+          open: parseFloat(k[1]), high: parseFloat(k[2]),
+          low:  parseFloat(k[3]), close: parseFloat(k[4]),
+          volume: parseFloat(k[5]), is_closed: true,
+        })));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
-    fetchData(); fetchActivity(); fetchChartCandles(); fetchSignals();
+    fetchData(); fetchActivity(); fetchChartCandles(); fetchSignals(); seed1mCandles();
     const i1 = setInterval(fetchData,         15_000);
     const i2 = setInterval(fetchActivity,     20_000);
     const i3 = setInterval(fetchChartCandles, 60_000);
     const i5 = setInterval(fetchSignals,      30_000);
     return () => [i1, i2, i3, i5].forEach(clearInterval);
-  }, [fetchData, fetchActivity, fetchChartCandles, fetchSignals]);
+  }, [fetchData, fetchActivity, fetchChartCandles, fetchSignals, seed1mCandles]);
 
   // ── Direct Binance stream (BTC only) ─────────────────────────────────────
   useBinanceStream({
@@ -894,6 +1214,22 @@ export default function OverviewPage() {
     }, []),
     onOrderBook: useCallback((ob: BinanceOrderBook) => {
       if (ob.symbol === "BTC/USDT") setBtcOrderBook(ob);
+    }, []),
+  });
+
+  // ── 1m stream for ORB + Master Agent ─────────────────────────────────────
+  useBinanceStream({
+    symbols: ["BTC/USDT"],
+    timeframe: "1m",
+    onCandle: useCallback((_sym: string, c: BinanceCandle) => {
+      setCandles1m(prev => {
+        if (!prev.length) return [c];
+        const lMs = new Date(prev[prev.length - 1].timestamp).getTime();
+        const cMs = new Date(c.timestamp).getTime();
+        if (lMs === cMs) return [...prev.slice(0, -1), c];
+        if (cMs > lMs)   return [...prev.slice(-119), c];
+        return prev;
+      });
     }, []),
   });
 
@@ -936,6 +1272,9 @@ export default function OverviewPage() {
             <span className="text-[13px] font-semibold" style={{ color: "#ff453a" }}>Emergency Stop Active</span>
           </div>
         )}
+
+        {/* ── Master Agent ── */}
+        <MasterAgentPanel agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
 
         {/* KPI row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
