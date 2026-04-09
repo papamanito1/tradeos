@@ -164,8 +164,47 @@ function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades
 
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
-  // ── Live 15m candles from Binance WebSocket ────────────────────────────
+  // ── Candles: seed from REST, update via WebSocket ─────────────────────
   const [candles, setCandles] = useState<BinanceCandle[]>([]);
+  const seededRef = useCallback(async () => {
+    // Try Binance public REST first (no auth, browser-accessible)
+    try {
+      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=120");
+      if (r.ok) {
+        const raw: unknown[][] = await r.json();
+        setCandles(raw.map(k => ({
+          timestamp: new Date(k[0] as number).toISOString(),
+          open:      parseFloat(k[1] as string),
+          high:      parseFloat(k[2] as string),
+          low:       parseFloat(k[3] as string),
+          close:     parseFloat(k[4] as string),
+          volume:    parseFloat(k[5] as string),
+          is_closed: true,
+        })));
+        return;
+      }
+    } catch { /* fall through */ }
+    // Fallback: Bybit public REST
+    try {
+      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=120");
+      if (r.ok) {
+        const json = await r.json();
+        const list: string[][] = json?.result?.list ?? [];
+        setCandles([...list].reverse().map(k => ({
+          timestamp: new Date(parseInt(k[0])).toISOString(),
+          open:      parseFloat(k[1]),
+          high:      parseFloat(k[2]),
+          low:       parseFloat(k[3]),
+          close:     parseFloat(k[4]),
+          volume:    parseFloat(k[5]),
+          is_closed: true,
+        })));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Seed on mount
+  useEffect(() => { seededRef(); }, [seededRef]);
 
   useBinanceStream({
     symbols: ["BTC/USDT"],
