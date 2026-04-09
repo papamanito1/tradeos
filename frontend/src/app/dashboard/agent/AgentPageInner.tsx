@@ -987,7 +987,7 @@ function AgentContent() {
                   ? (server.openPositions as unknown as PaperPosition[])
                   : openPositions
               }
-              stats={server.stats ?? paperStats}
+              stats={server.stats ? { ...server.stats, avg_rr: 0, best_trade: server.stats.best_trade ?? 0, worst_trade: server.stats.worst_trade ?? 0 } : paperStats}
               trades={
                 server.trades.length > 0
                   ? (server.trades as unknown as ReturnType<typeof usePhantomAgent>["trades"])
