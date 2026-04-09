@@ -79,17 +79,23 @@ class PaperTradingEngine(BaseExchangeAdapter):
         except Exception:
             pass
 
-        # 4. Last resort: fetch from Binance REST directly
+        # 4. Bybit REST ticker (no geo-blocking)
         try:
-            import ccxt.async_support as ccxt
-            exchange = ccxt.binance({"enableRateLimit": False})
-            raw = await exchange.fetch_ticker(symbol)
-            await exchange.close()
-            return float(raw.get("last", 0))
+            import httpx
+            bsym = symbol.replace("/", "")
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://api.bybit.com/v5/market/tickers",
+                    params={"category": "spot", "symbol": bsym},
+                )
+                resp.raise_for_status()
+                items = resp.json().get("result", {}).get("list", [])
+                if items:
+                    return float(items[0].get("lastPrice", 0) or 0)
         except Exception:
             pass
 
-        # 5. Absolute fallback: hardcoded reference prices
+        # 5. Absolute fallback: hardcoded reference prices (stale — only if all else fails)
         return self._fallback_price(symbol)
 
     def _fallback_price(self, symbol: str) -> float:
@@ -233,14 +239,26 @@ class PaperTradingEngine(BaseExchangeAdapter):
                 return True
         return False
 
+    # Bybit interval mapping (no geo-blocking on Railway)
+    _BYBIT_TF: dict = {
+        "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+        "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720",
+        "1d": "D", "1w": "W",
+    }
+
     async def fetch_candles(
         self, symbol: str, timeframe: str = "1h", limit: int = 200
     ) -> list[Candle]:
         """
         Fetch OHLCV candles.
-        Priority: Live stream cache (1m) → Binance REST → mock fallback.
+        Priority: Live stream cache (1m) → Bybit REST → OKX → mock fallback.
+        Avoids Binance REST which is geo-blocked on Railway (HTTP 451).
         """
-        # 1. Use live 1m candles from WebSocket stream cache
+        import logging
+        import httpx
+        log = logging.getLogger(__name__)
+
+        # 1. Use live 1m candles from WebSocket stream cache (zero latency)
         if timeframe == "1m":
             try:
                 from app.agents.live_market_stream import LIVE_CANDLES
@@ -257,26 +275,57 @@ class PaperTradingEngine(BaseExchangeAdapter):
             except Exception:
                 pass
 
-        # 2. Fetch from Binance REST (real historical OHLCV)
+        # 2. Bybit REST — reliable from cloud, no geo-blocks
         try:
-            import ccxt.async_support as ccxt
-            exchange = ccxt.binance({"enableRateLimit": True})
-            raw = await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            await exchange.close()
-            if raw:
-                return [
-                    Candle(
-                        timestamp=datetime.fromtimestamp(c[0] / 1000, tz=timezone.utc),
-                        open=float(c[1]), high=float(c[2]),
-                        low=float(c[3]), close=float(c[4]), volume=float(c[5]),
-                    )
-                    for c in raw
-                ]
+            bsym = symbol.replace("/", "")
+            iv = self._BYBIT_TF.get(timeframe, "60")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://api.bybit.com/v5/market/kline",
+                    params={"category": "spot", "symbol": bsym, "interval": iv, "limit": limit},
+                )
+                resp.raise_for_status()
+                rows = resp.json().get("result", {}).get("list", [])
+                rows = list(reversed(rows))  # Bybit returns newest first
+                if rows:
+                    return [
+                        Candle(
+                            timestamp=datetime.fromtimestamp(int(r[0]) / 1000, tz=timezone.utc),
+                            open=float(r[1]), high=float(r[2]),
+                            low=float(r[3]), close=float(r[4]), volume=float(r[5]),
+                        )
+                        for r in rows
+                    ]
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Binance REST candles failed for {symbol}: {e}")
+            log.warning(f"Bybit candles failed for {symbol}/{timeframe}: {e}")
 
-        # 3. Mock fallback (dev/offline mode only)
+        # 3. OKX fallback
+        try:
+            okx_tf = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H",
+                      "4h": "4H", "1d": "1Dutc"}.get(timeframe, "1H")
+            okx_sym = symbol.replace("/", "-")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://www.okx.com/api/v5/market/candles",
+                    params={"instId": okx_sym, "bar": okx_tf, "limit": str(limit)},
+                )
+                resp.raise_for_status()
+                rows = resp.json().get("data", [])
+                rows = list(reversed(rows))
+                if rows:
+                    return [
+                        Candle(
+                            timestamp=datetime.fromtimestamp(int(r[0]) / 1000, tz=timezone.utc),
+                            open=float(r[1]), high=float(r[2]),
+                            low=float(r[3]), close=float(r[4]), volume=float(r[5]),
+                        )
+                        for r in rows
+                    ]
+        except Exception as e:
+            log.warning(f"OKX candles failed for {symbol}/{timeframe}: {e}")
+
+        # 4. Last resort: mock fallback (only in offline dev mode)
+        log.error(f"All candle sources failed for {symbol}/{timeframe} — using mock data")
         return self._mock_candles(symbol, timeframe, limit)
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
