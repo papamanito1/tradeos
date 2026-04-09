@@ -7,17 +7,19 @@ import {
   Bot, Power, RefreshCw, ExternalLink, Zap, Shield,
   CheckCircle2, XCircle, TrendingUp, TrendingDown,
   AlertTriangle, Activity, ChevronRight, Trash2, Copy,
-  FileText, RotateCcw, X, DollarSign,
+  FileText, RotateCcw, X, DollarSign, Cloud, Wifi, WifiOff,
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
+import { useAuth } from "@/context/AuthContext";
+import { useServerAgent, ServerPosition } from "@/hooks/useServerAgent";
 import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
 import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
 import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
 import { useORBStrategy } from "@/hooks/useORBStrategy";
+import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { formatUSD } from "@/lib/utils";
 
-type StrategyMode = "momentum" | "hft" | "orb";
 
 // ─── State colours ────────────────────────────────────────────────────────────
 const STATE_META: Record<AgentState, { label: string; color: string; pulse: boolean }> = {
@@ -54,79 +56,6 @@ function WalletInfo() {
 }
 
 // ─── Pending trade modal ──────────────────────────────────────────────────────
-function PendingTradeModal({
-  trade, onConfirm, onDismiss, mode
-}: {
-  trade: NonNullable<ReturnType<typeof usePhantomAgent>["pendingTrade"]>;
-  onConfirm: () => void;
-  onDismiss: () => void;
-  mode: AgentConfig["mode"];
-}) {
-  const isLong = trade.direction === "long";
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="w-[400px] rounded-2xl border border-neutral-700 bg-neutral-900 shadow-2xl p-6">
-        <div className="flex items-center gap-3 mb-5">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isLong ? "bg-green-500/15" : "bg-red-500/15"}`}>
-            {isLong ? <TrendingUp size={20} className="text-green-400" /> : <TrendingDown size={20} className="text-red-400" />}
-          </div>
-          <div>
-            <div className={`text-lg font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
-              {isLong ? "LONG" : "SHORT"} BTC Signal
-            </div>
-            <div className="text-[11px] text-neutral-500">Agent requesting execution</div>
-          </div>
-          <div className="ml-auto text-right">
-            <div className="text-[10px] text-neutral-600">Confidence</div>
-            <div className="text-sm font-bold text-yellow-400">{(trade.confidence * 100).toFixed(0)}%</div>
-          </div>
-        </div>
-
-        <div className="space-y-2 mb-5">
-          {[
-            ["Direction",  trade.direction.toUpperCase(), isLong ? "text-green-400" : "text-red-400"],
-            ["Entry",      formatUSD(trade.entry),         "text-white"],
-            ["Stop Loss",  trade.sl ? formatUSD(trade.sl) : "—", "text-red-400"],
-            ["Take Profit",trade.tp ? formatUSD(trade.tp) : "—", "text-green-400"],
-            ["Size",       formatUSD(trade.size_usdc) + " USDC",  "text-white"],
-            ["Mode",       mode === "paper" ? "Paper Trade" : mode === "perps" ? "Phantom Perps" : "Jupiter Spot", mode === "paper" ? "text-violet-400" : "text-violet-400"],
-          ].map(([label, val, cls]) => (
-            <div key={label} className="flex justify-between items-center py-1.5 border-b border-neutral-800">
-              <span className="text-[11px] text-neutral-500">{label}</span>
-              <span className={`text-[12px] font-semibold font-mono ${cls}`}>{val}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="text-[10px] text-neutral-600 bg-neutral-800 rounded-lg p-3 mb-5 italic leading-relaxed">
-          "{trade.reasoning}"
-        </div>
-
-        <div className="flex gap-3">
-          <button onClick={onDismiss}
-            className="flex-1 py-2.5 rounded-xl border border-neutral-700 text-[13px] font-semibold text-neutral-400 hover:text-white hover:border-neutral-600 transition-colors">
-            Skip
-          </button>
-          <button onClick={onConfirm}
-            className="flex-1 py-2.5 rounded-xl font-bold text-[13px] text-white flex items-center justify-center gap-2 transition-all"
-            style={{
-              background: mode === "paper"
-                ? "linear-gradient(135deg, #7c3aed, #6d28d9)"
-                : isLong ? "linear-gradient(135deg, #16a34a, #15803d)" : "linear-gradient(135deg, #dc2626, #b91c1c)",
-              boxShadow: mode === "paper"
-                ? "0 4px 16px rgba(139,92,246,0.3)"
-                : isLong ? "0 4px 16px rgba(34,197,94,0.3)" : "0 4px 16px rgba(239,68,68,0.3)"
-            }}>
-            {mode === "paper" ? <FileText size={14} /> : <Zap size={14} />}
-            {mode === "paper" ? "Fill Paper Trade" : mode === "perps" ? "Open Phantom Perps" : "Execute Swap"}
-            {mode !== "paper" && <ExternalLink size={12} className="opacity-70" />}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Agent log feed ───────────────────────────────────────────────────────────
 function AgentLog({ logs }: { logs: string[] }) {
   return (
@@ -183,8 +112,11 @@ function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades
 async function seedCandles(tf: "1m" | "15m"): Promise<BinanceCandle[]> {
   const interval = tf === "1m" ? "1m" : "15m";
   const bybitInterval = tf === "1m" ? "1" : "15";
+  // ORB-30 needs 30 bars for opening range + up to 90 bars after = 120 min minimum.
+  // Use 300 bars so we always cover the full 4-hour session regardless of when we load.
+  const limit = tf === "1m" ? 300 : 120;
   try {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=120`);
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
     if (r.ok) {
       const raw: unknown[][] = await r.json();
       return raw.map(k => ({
@@ -196,7 +128,7 @@ async function seedCandles(tf: "1m" | "15m"): Promise<BinanceCandle[]> {
     }
   } catch { /* fall through */ }
   try {
-    const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${bybitInterval}&limit=120`);
+    const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${bybitInterval}&limit=${limit}`);
     if (r.ok) {
       const json = await r.json();
       const list: string[][] = json?.result?.list ?? [];
@@ -234,23 +166,27 @@ function HFTBar({ label, value, min, max, goodHigh }: { label: string; value: nu
 
 // ─── Paper trading P&L panel ──────────────────────────────────────────────────
 function PaperPanel({
-  position, stats, trades, onClose, onReset,
+  openPositions, stats, trades, onClose, onReset,
 }: {
-  position: PaperPosition | null;
+  openPositions: PaperPosition[];
   stats: PaperStats;
   trades: ReturnType<typeof usePhantomAgent>["trades"];
-  onClose: () => void;
+  onClose: (key: string) => void;
   onReset: () => void;
 }) {
   const paperTrades = trades.filter(t => t.is_paper && t.exit_price != null);
   const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-400";
+  const totalUnrealized = openPositions.reduce((s, p) => s + p.unrealized_pnl, 0);
+
   return (
     <div className="card p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <FileText size={13} className="text-violet-400" />
           <span className="text-[13px] font-semibold text-white">Paper Trading</span>
-          <span className="text-[9px] bg-violet-500/10 border border-violet-500/20 text-violet-400 px-1.5 py-0.5 rounded font-mono">PAPER</span>
+          <span className="text-[9px] bg-violet-500/10 border border-violet-500/20 text-violet-400 px-1.5 py-0.5 rounded font-mono">
+            {openPositions.length > 0 ? `${openPositions.length} OPEN` : "PAPER"}
+          </span>
         </div>
         <button onClick={onReset} className="flex items-center gap-1.5 text-[10px] text-neutral-600 hover:text-red-400 transition-colors">
           <RotateCcw size={11} /> Reset
@@ -260,78 +196,82 @@ function PaperPanel({
       {/* Stats row */}
       <div className="grid grid-cols-4 gap-2">
         {[
-          ["Total P&L",   `${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)}`,  pnlColor(stats.total_pnl)],
-          ["Win Rate",    stats.total_trades > 0 ? `${stats.win_rate.toFixed(1)}%` : "—",        "text-blue-400"],
-          ["Wins / Loss", `${stats.wins} / ${stats.losses}`,                                     "text-neutral-300"],
-          ["Trades",      `${stats.total_trades}`,                                               "text-neutral-400"],
+          ["Total P&L",    `${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)}`,   pnlColor(stats.total_pnl)],
+          ["Unrealized",   openPositions.length > 0 ? `${totalUnrealized >= 0 ? "+" : ""}$${totalUnrealized.toFixed(2)}` : "—", pnlColor(totalUnrealized)],
+          ["Win Rate",     stats.total_trades > 0 ? `${stats.win_rate.toFixed(1)}%` : "—",        "text-blue-400"],
+          ["Closed",       `${stats.total_trades} (${stats.wins}W / ${stats.losses}L)`,            "text-neutral-400"],
         ].map(([l, v, cls]) => (
           <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
             <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
-            <div className={`text-[12px] font-bold font-mono ${cls}`}>{v}</div>
+            <div className={`text-[11px] font-bold font-mono ${cls}`}>{v}</div>
           </div>
         ))}
       </div>
 
-      {/* Open position */}
-      {position ? (
-        <div className="rounded-xl p-4 space-y-3"
-          style={{
-            background: position.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
-            border: `1px solid ${position.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
-          }}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full animate-pulse ${position.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
-              <span className={`text-[11px] font-bold ${position.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                OPEN {position.direction.toUpperCase()} POSITION
-              </span>
-            </div>
-            <button onClick={onClose} className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 rounded-lg px-2 py-1">
-              <X size={9} /> Close
-            </button>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
-            <div><span className="text-neutral-600 block">Entry</span><span className="text-white">${position.entry.toFixed(0)}</span></div>
-            <div><span className="text-neutral-600 block">Current</span><span className="text-white">${position.current_price.toFixed(0)}</span></div>
-            <div>
-              <span className="text-neutral-600 block">Unrealized P&L</span>
-              <span className={pnlColor(position.unrealized_pnl)}>
-                {position.unrealized_pnl >= 0 ? "+" : ""}${position.unrealized_pnl.toFixed(2)}
-                <span className="text-[9px] ml-1">({position.unrealized_pct >= 0 ? "+" : ""}{position.unrealized_pct.toFixed(3)}%)</span>
-              </span>
-            </div>
-          </div>
-
-          {/* SL/TP bar */}
-          <div className="space-y-1">
-            <div className="flex justify-between text-[9px]">
-              <span className="text-red-400">SL ${position.sl?.toFixed(0) ?? "—"}</span>
-              <span className="text-neutral-600">size ${ position.size_usdc} · {position.btc_size.toFixed(5)} BTC</span>
-              <span className="text-green-400">TP ${position.tp?.toFixed(0) ?? "—"}</span>
-            </div>
-            {position.sl && position.tp && (() => {
-              const range = position.tp - position.sl;
-              const pct   = ((position.current_price - position.sl) / range * 100);
-              const clamped = Math.min(Math.max(pct, 0), 100);
-              return (
-                <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden relative">
-                  <div className="absolute inset-0 flex">
-                    <div className="h-full bg-red-900/50"  style={{ width: "33%" }} />
-                    <div className="h-full bg-neutral-900/30" style={{ width: "34%" }} />
-                    <div className="h-full bg-green-900/50" style={{ width: "33%" }} />
-                  </div>
-                  <div className="absolute top-0 h-full w-0.5 bg-white rounded-full transition-all duration-200"
-                    style={{ left: `${clamped}%` }} />
+      {/* Open positions — one card per strategy */}
+      {openPositions.length > 0 ? (
+        <div className="space-y-2">
+          {openPositions.map(position => (
+            <div key={position.id} className="rounded-xl p-4 space-y-3"
+              style={{
+                background: position.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
+                border: `1px solid ${position.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
+              }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full animate-pulse ${position.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
+                  <span className={`text-[11px] font-bold ${position.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                    {position.direction.toUpperCase()} — {position.strategy_name}
+                  </span>
                 </div>
-              );
-            })()}
-          </div>
+                <button onClick={() => onClose(position.strategy_key)} className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 rounded-lg px-2 py-1">
+                  <X size={9} /> Close
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
+                <div><span className="text-neutral-600 block">Entry</span><span className="text-white">${position.entry.toFixed(0)}</span></div>
+                <div><span className="text-neutral-600 block">Current</span><span className="text-white">${position.current_price.toFixed(0)}</span></div>
+                <div>
+                  <span className="text-neutral-600 block">Unrealized P&L</span>
+                  <span className={pnlColor(position.unrealized_pnl)}>
+                    {position.unrealized_pnl >= 0 ? "+" : ""}${position.unrealized_pnl.toFixed(2)}
+                    <span className="text-[9px] ml-1">({position.unrealized_pct >= 0 ? "+" : ""}{position.unrealized_pct.toFixed(3)}%)</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* SL/TP bar */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-red-400">SL ${position.sl?.toFixed(0) ?? "—"}</span>
+                  <span className="text-neutral-600">${ position.size_usdc} · {position.btc_size.toFixed(5)} BTC</span>
+                  <span className="text-green-400">TP ${position.tp?.toFixed(0) ?? "—"}</span>
+                </div>
+                {position.sl && position.tp && (() => {
+                  const range   = position.tp - position.sl;
+                  const pct     = ((position.current_price - position.sl) / range * 100);
+                  const clamped = Math.min(Math.max(pct, 0), 100);
+                  return (
+                    <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden relative">
+                      <div className="absolute inset-0 flex">
+                        <div className="h-full bg-red-900/50"  style={{ width: "33%" }} />
+                        <div className="h-full bg-neutral-900/30" style={{ width: "34%" }} />
+                        <div className="h-full bg-green-900/50" style={{ width: "33%" }} />
+                      </div>
+                      <div className="absolute top-0 h-full w-0.5 bg-white rounded-full transition-all duration-200"
+                        style={{ left: `${clamped}%` }} />
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          ))}
         </div>
       ) : (
         <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <DollarSign size={13} className="text-neutral-700" />
-          <span className="text-[11px] text-neutral-700">No open paper position · waiting for signal…</span>
+          <span className="text-[11px] text-neutral-700">No open paper positions · all 3 strategies scanning for signals…</span>
         </div>
       )}
 
@@ -340,11 +280,12 @@ function PaperPanel({
         <div className="space-y-1">
           <div className="text-[10px] text-neutral-600 mb-1.5">Closed Trades</div>
           <div className="max-h-36 overflow-y-auto space-y-1">
-            {paperTrades.slice(0, 20).map(t => (
+            {paperTrades.slice(0, 30).map(t => (
               <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg" style={{ background: "rgba(255,255,255,0.02)" }}>
                 <span className={`text-[9px] font-bold w-8 ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
                   {t.direction === "long" ? "▲" : "▼"} {t.direction.toUpperCase().slice(0,1)}
                 </span>
+                <span className="text-[9px] text-neutral-700 font-mono">{t.strategy_name ?? "—"}</span>
                 <span className="text-[9px] text-neutral-600 font-mono flex-1">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
                 <span className={`text-[9px] font-mono font-bold ${pnlColor(t.pnl_usd ?? 0)}`}>
                   {(t.pnl_usd ?? 0) >= 0 ? "+" : ""}${t.pnl_usd?.toFixed(2) ?? "0"}
@@ -363,35 +304,77 @@ function PaperPanel({
   );
 }
 
+// ─── Convert HFT result → StrategyResult ─────────────────────────────────────
+function hftToStrategy(hft: HFTResult): StrategyResult {
+  const sig = hft.signal;
+  const rr = sig
+    ? Math.abs(sig.tp2 - sig.entry) / Math.abs(sig.entry - sig.sl)
+    : 0;
+  return {
+    bias:       hft.bias,
+    conditions: hft.conditions,
+    met_count:  hft.met_count,
+    total:      7,
+    all_met:    hft.all_met,
+    signal:     sig ? {
+      direction:  sig.direction,
+      entry:      sig.entry,
+      sl:         sig.sl,
+      tp:         sig.tp2,
+      confidence: sig.confidence,
+      reasoning:  `[HFT] ${sig.reasoning}`,
+      timestamp:  sig.timestamp,
+      rr:         `1 : ${rr > 0 ? rr.toFixed(1) : "1.2"}`,
+    } : null,
+    indicators: { rsi: null, ema50: null, ema21: null, vwap: null, atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null },
+  };
+}
+
+function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
+  return {
+    bias:       orb.bias,
+    conditions: orb.conditions,
+    met_count:  orb.met_count,
+    total:      6,
+    all_met:    orb.all_met,
+    signal:     orb.signal ? {
+      direction:  orb.signal.direction,
+      entry:      orb.signal.entry,
+      sl:         orb.signal.sl,
+      tp:         orb.signal.tp,
+      confidence: orb.signal.confidence,
+      reasoning:  `[ORB-30] ${orb.signal.reasoning}`,
+      timestamp:  orb.signal.timestamp,
+      rr:         orb.signal.rr,
+    } : null,
+    indicators: { rsi: null, ema50: null, ema21: null, vwap: null, atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null },
+  };
+}
+
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
-  const [strategyMode, setStrategyMode] = useState<StrategyMode>("hft");
-  const [livePrice, setLivePrice]       = useState<number | undefined>(undefined);
+  const { token } = useAuth();
+  const server = useServerAgent(token);
+  const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
 
-  // ── 15m candles (Momentum strategy) ──────────────────────────────────
+  // ── 15m candles (Momentum) ────────────────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
-  // ── 1m candles (HFT / ORB strategies) ────────────────────────────────
+  // ── 1m candles (HFT + ORB — needs 300 bars for ORB session history) ──
   const [candles1m,  setCandles1m]  = useState<BinanceCandle[]>([]);
   const [orderBook,  setOrderBook]  = useState<BinanceOrderBook | null>(null);
   const { push: pushTrade, get: getTrades } = useAggTradeBuffer();
   const [aggSnap, setAggSnap] = useState<BinanceAggTrade[]>([]);
   const aggSnapTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Seed candles on mount and on strategy switch
+  // Chart candles (1m for display)
   const [candles, setCandles] = useState<BinanceCandle[]>([]);
+
   // Seed both timeframes on mount
   useEffect(() => {
-    seedCandles("15m").then(c => { setCandles15m(c); if (strategyMode === "momentum") setCandles(c); });
-    seedCandles("1m").then(c  => { setCandles1m(c);  if (strategyMode === "hft" || strategyMode === "orb") setCandles(c); });
+    seedCandles("15m").then(c => setCandles15m(c));
+    seedCandles("1m").then(c  => { setCandles1m(c); setCandles(c); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Sync active candles when mode changes
-  useEffect(() => {
-    if (strategyMode === "momentum" && candles15m.length) setCandles(candles15m);
-    if ((strategyMode === "hft" || strategyMode === "orb") && candles1m.length) setCandles(candles1m);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyMode]);
 
   // Snapshot aggTrades every 2s so HFT hook re-renders
   useEffect(() => {
@@ -399,26 +382,24 @@ function AgentContent() {
     return () => { if (aggSnapTimer.current) clearInterval(aggSnapTimer.current); };
   }, [getTrades]);
 
-  // Subscribe to both 15m and 1m streams
+  // ── 15m stream (Momentum) ─────────────────────────────────────────────
   useBinanceStream({
     symbols: ["BTC/USDT"],
     timeframe: "15m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {
       setLivePrice(c.close);
       setCandles15m(prev => {
-        const updated = !prev.length ? [c] : (() => {
-          const lMs = new Date(prev[prev.length-1].timestamp).getTime();
-          const cMs = new Date(c.timestamp).getTime();
-          if (lMs === cMs) return [...prev.slice(0,-1), c];
-          if (cMs > lMs)   return [...prev.slice(-119), c];
-          return prev;
-        })();
-        if (strategyMode === "momentum") setCandles(updated);
-        return updated;
+        if (!prev.length) return [c];
+        const lMs = new Date(prev[prev.length-1].timestamp).getTime();
+        const cMs = new Date(c.timestamp).getTime();
+        if (lMs === cMs) return [...prev.slice(0,-1), c];
+        if (cMs > lMs)   return [...prev.slice(-119), c];
+        return prev;
       });
-    }, [strategyMode]),
+    }, []),
   });
 
+  // ── 1m stream (HFT + ORB) — keep 299 bars ────────────────────────────
   useBinanceStream({
     symbols: ["BTC/USDT"],
     timeframe: "1m",
@@ -429,84 +410,55 @@ function AgentContent() {
           const lMs = new Date(prev[prev.length-1].timestamp).getTime();
           const cMs = new Date(c.timestamp).getTime();
           if (lMs === cMs) return [...prev.slice(0,-1), c];
-          if (cMs > lMs)   return [...prev.slice(-119), c];
+          if (cMs > lMs)   return [...prev.slice(-299), c];
           return prev;
         })();
-        if (strategyMode === "hft" || strategyMode === "orb") setCandles(updated);
+        setCandles(updated);
         return updated;
       });
-    }, [strategyMode]),
+    }, []),
     onOrderBook: useCallback((ob: BinanceOrderBook) => setOrderBook(ob), []),
     onAggTrade:  useCallback((t: BinanceAggTrade) => pushTrade(t), [pushTrade]),
   });
 
-  // ── Strategy engines ──────────────────────────────────────────────────
+  // ── All 4 strategy engines run in parallel always ─────────────────────
   const momentumResult = useStrategyEngine(candles15m);
   const hftResult      = useHFTScalper(candles1m, orderBook, aggSnap);
   const orbResult      = useORBStrategy(candles1m);
+  const obiResult      = useOBIScalper(candles1m, orderBook);
 
-  // Active result fed to agent
-  const activeResult: StrategyResult = useMemo(() => {
-    if (strategyMode === "hft") {
-      return {
-        bias:       hftResult.bias,
-        conditions: hftResult.conditions,
-        met_count:  hftResult.met_count,
-        total:      7,
-        all_met:    hftResult.all_met,
-        signal:     hftResult.signal ? {
-          direction:  hftResult.signal.direction,
-          entry:      hftResult.signal.entry,
-          sl:         hftResult.signal.sl,
-          tp:         hftResult.signal.tp2,
-          confidence: hftResult.signal.confidence,
-          reasoning:  hftResult.signal.reasoning,
-          timestamp:  hftResult.signal.timestamp,
-          rr:         `1 : ${(hftResult.signal.tp2 - hftResult.signal.entry) / (hftResult.signal.entry - hftResult.signal.sl) > 0 ? ((hftResult.signal.tp2 - hftResult.signal.entry) / Math.abs(hftResult.signal.entry - hftResult.signal.sl)).toFixed(1) : "1.2"}`,
-        } : null,
-        indicators: {
-          rsi: null, ema50: null, ema21: null, vwap: null,
-          atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null,
-        },
-      };
+  // ── Strategy slots for the multi-agent hook ──────────────────────────
+  const strategies = useMemo(() => [
+    { result: momentumResult,           name: "Momentum 15m", key: "momentum" },
+    { result: hftToStrategy(hftResult), name: "HFT Scalper",  key: "hft"      },
+    { result: orbToStrategy(orbResult), name: "ORB-30",        key: "orb"      },
+    { result: obiResult,                name: "OBI Scalper",   key: "obi"      },
+  ], [momentumResult, hftResult, orbResult, obiResult]);
+
+  // ── For UI display only: best active result ───────────────────────────
+  const { activeResult, firingStrategy } = useMemo(() => {
+    const candidates = strategies;
+    const withSignal = candidates.filter(c => c.result.signal !== null);
+    if (withSignal.length > 0) {
+      const best = withSignal.reduce((a, b) =>
+        (b.result.signal!.confidence > a.result.signal!.confidence) ? b : a
+      );
+      return { activeResult: best.result, firingStrategy: best.name };
     }
-    if (strategyMode === "orb") {
-      return {
-        bias:       orbResult.bias,
-        conditions: orbResult.conditions,
-        met_count:  orbResult.met_count,
-        total:      6,
-        all_met:    orbResult.all_met,
-        signal:     orbResult.signal ? {
-          direction:  orbResult.signal.direction,
-          entry:      orbResult.signal.entry,
-          sl:         orbResult.signal.sl,
-          tp:         orbResult.signal.tp,
-          confidence: orbResult.signal.confidence,
-          reasoning:  orbResult.signal.reasoning,
-          timestamp:  orbResult.signal.timestamp,
-          rr:         orbResult.signal.rr,
-        } : null,
-        indicators: {
-          rsi: null, ema50: null, ema21: null, vwap: null,
-          atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null,
-        },
-      };
-    }
-    return momentumResult;
-  }, [strategyMode, momentumResult, hftResult, orbResult]);
+    const best = candidates.reduce((a, b) => b.result.met_count > a.result.met_count ? b : a);
+    return { activeResult: best.result, firingStrategy: best.name };
+  }, [strategies]);
 
   const {
     config, updateConfig,
     agentState, analysis,
     trades, clearTrades,
-    pendingTrade, confirmTrade, dismissPendingTrade,
     scanCount, lastScan,
     agentLog,
     walletConnected, walletAddress,
     forceScan,
-    paperPosition, paperStats, closePaperPosition, resetPaperAccount,
-  } = usePhantomAgent(activeResult, livePrice);
+    openPositions, anyPositionOpen, paperStats, closePaperPosition, resetPaperAccount,
+  } = usePhantomAgent(strategies, livePrice);
 
   const { connected } = useWallet();
   const meta = STATE_META[agentState];
@@ -515,17 +467,201 @@ function AgentContent() {
     if (walletAddress) navigator.clipboard.writeText(walletAddress);
   }, [walletAddress]);
 
+  const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-400";
+
   return (
     <div className="p-4 space-y-5">
-      {/* Pending trade modal */}
-      {pendingTrade && !config.auto_execute && (
-        <PendingTradeModal
-          trade={pendingTrade}
-          onConfirm={confirmTrade}
-          onDismiss={dismissPendingTrade}
-          mode={config.mode}
-        />
-      )}
+
+      {/* ── SERVER 24/7 AGENT PANEL ─────────────────────────────────────── */}
+      <div className="card p-5 space-y-4"
+        style={{ border: server.online ? "1px solid rgba(16,185,129,0.25)" : "1px solid rgba(255,255,255,0.06)", boxShadow: server.online ? "0 0 24px rgba(16,185,129,0.08)" : "none" }}>
+
+        {/* Header row */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.2)" }}>
+              <Cloud size={18} className="text-emerald-400" />
+            </div>
+            <div>
+              <div className="text-[14px] font-bold text-white flex items-center gap-2">
+                Server Agent — 24/7
+                {server.online
+                  ? <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"><Wifi size={9} /> ONLINE</span>
+                  : <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-500"><WifiOff size={9} /> OFFLINE</span>
+                }
+                {server.running && <span className="text-[9px] px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 animate-pulse">TRADING</span>}
+              </div>
+              <p className="text-[10px] text-neutral-600 mt-0.5">
+                Runs on Railway server 24/7 · keeps trading even when your laptop is closed
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button onClick={server.refresh}
+              className="p-2 rounded-lg hover:bg-neutral-800 text-neutral-600 hover:text-white transition-colors" title="Refresh">
+              <RefreshCw size={13} />
+            </button>
+            {server.online && (
+              <button
+                onClick={server.running ? server.stopAgent : server.startAgent}
+                className="flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-[12px] transition-all"
+                style={server.running
+                  ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
+                  : { background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981" }
+                }>
+                <Power size={13} />
+                {server.running ? "Stop Server Agent" : "Start Server Agent"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Stats strip */}
+        {server.online && server.stats && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            {[
+              ["Total P&L",    `${(server.stats.total_pnl ?? 0) >= 0 ? "+" : ""}$${(server.stats.total_pnl ?? 0).toFixed(2)}`,   pnlColor(server.stats.total_pnl ?? 0)],
+              ["Win Rate",     server.stats.total_trades > 0 ? `${server.stats.win_rate}%` : "—",   "text-blue-400"],
+              ["W / L",        `${server.stats.wins} / ${server.stats.losses}`,                      "text-neutral-300"],
+              ["Open Pos",     `${server.positions.length}`,                                          server.positions.length > 0 ? "text-green-400" : "text-neutral-500"],
+            ].map(([l, v, cls]) => (
+              <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
+                <div className={`text-[12px] font-bold font-mono ${cls}`}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Open server positions */}
+        {server.online && server.positions.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[10px] text-neutral-600 mb-1">Open Positions (server)</div>
+            {server.positions.map(pos => {
+              const pnl = pos.unrealized_pnl ?? 0;
+              return (
+                <div key={pos.id} className="rounded-xl p-3 flex items-center gap-4"
+                  style={{
+                    background: pos.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
+                    border: `1px solid ${pos.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
+                  }}>
+                  <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${pos.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-[11px] font-bold ${pos.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                      {pos.direction.toUpperCase()} — {pos.strategy_name}
+                    </div>
+                    <div className="text-[9px] text-neutral-600 font-mono">
+                      Entry ${pos.entry.toFixed(0)} · SL ${pos.sl?.toFixed(0) ?? "—"} · TP ${pos.tp?.toFixed(0) ?? "—"} · ${pos.size_usdc}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-[11px] font-bold font-mono ${pnlColor(pnl)}`}>{pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}</div>
+                    <div className="text-[9px] text-neutral-600">{pos.unrealized_pct >= 0 ? "+" : ""}{(pos.unrealized_pct ?? 0).toFixed(3)}%</div>
+                  </div>
+                  <button onClick={() => server.closePosition(pos.strategy_key)}
+                    className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 rounded-lg px-2 py-1 flex-shrink-0">
+                    <X size={9} /> Close
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Server config row */}
+        {server.online && server.config && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-neutral-800">
+            <div>
+              <div className="text-[9px] text-neutral-600 mb-1.5">Trade Size (USDC)</div>
+              <div className="flex gap-1">
+                {[50, 100, 250].map(s => (
+                  <button key={s} onClick={() => server.updateConfig({ size_usdc: s })}
+                    className="flex-1 py-1.5 rounded-lg text-[10px] font-bold border transition-colors"
+                    style={server.config!.size_usdc === s
+                      ? { background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.3)", color: "#10b981" }
+                      : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+                    }>${s}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] text-neutral-600 mb-1">Min Confidence: <span className="text-emerald-400 font-mono">{((server.config.min_confidence ?? 0.5) * 100).toFixed(0)}%</span></div>
+              <input type="range" min={0.4} max={0.95} step={0.05}
+                value={server.config.min_confidence}
+                onChange={e => server.updateConfig({ min_confidence: Number(e.target.value) })}
+                className="w-full accent-emerald-500" />
+            </div>
+            <div>
+              <div className="text-[9px] text-neutral-600 mb-1.5">Auto-Execute</div>
+              <button onClick={() => server.updateConfig({ auto_execute: !server.config!.auto_execute })}
+                className="w-full py-1.5 rounded-lg text-[10px] font-bold border transition-colors"
+                style={server.config.auto_execute
+                  ? { background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.3)", color: "#10b981" }
+                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+                }>{server.config.auto_execute ? "ON — Auto" : "OFF — Manual"}</button>
+            </div>
+            <div>
+              <div className="text-[9px] text-neutral-600 mb-1.5">Reset Account</div>
+              <button onClick={server.resetAccount}
+                className="w-full py-1.5 rounded-lg text-[10px] font-bold border border-neutral-800 text-neutral-600 hover:text-red-400 hover:border-red-500/30 transition-colors flex items-center justify-center gap-1.5">
+                <RotateCcw size={10} /> Reset
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Server agent log */}
+        {server.online && server.log.length > 0 && (
+          <div>
+            <div className="text-[9px] text-neutral-600 mb-1.5">Server Log (Railway)</div>
+            <div className="h-32 overflow-y-auto font-mono text-[9px] space-y-0.5 bg-black/40 rounded-xl p-3 border border-neutral-800">
+              {server.log.map((line, i) => (
+                <div key={i} className={`leading-relaxed ${
+                  line.includes("★") || line.includes("OPEN") ? "text-green-400" :
+                  line.includes("✅") ? "text-green-400" :
+                  line.includes("❌") ? "text-red-400" :
+                  line.includes("⚠") ? "text-yellow-400" :
+                  "text-neutral-500"
+                }`}>{line}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Server trades */}
+        {server.online && server.trades.length > 0 && (
+          <div>
+            <div className="text-[9px] text-neutral-600 mb-1.5">Closed Trades (server)</div>
+            <div className="max-h-40 overflow-y-auto space-y-1">
+              {server.trades.slice(0, 20).map(t => (
+                <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg text-[9px]" style={{ background: "rgba(255,255,255,0.02)" }}>
+                  <span className={`font-bold w-8 ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction === "long" ? "▲ L" : "▼ S"}</span>
+                  <span className="text-neutral-700 w-20">{t.strategy_name ?? "—"}</span>
+                  <span className="text-neutral-600 font-mono flex-1">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
+                  <span className={`font-mono font-bold ${pnlColor(t.pnl_usd ?? 0)}`}>{(t.pnl_usd ?? 0) >= 0 ? "+" : ""}${t.pnl_usd?.toFixed(2) ?? "0"}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${t.exit_reason === "tp" ? "bg-green-500/10 text-green-400" : t.exit_reason === "sl" ? "bg-red-500/10 text-red-400" : "bg-neutral-800 text-neutral-500"}`}>
+                    {(t.exit_reason ?? "—").toUpperCase()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!server.online && (
+          <div className="text-[11px] text-neutral-600 text-center py-2">
+            Connecting to Railway backend… (backend may be sleeping, wait ~30s)
+          </div>
+        )}
+      </div>
+
+      {/* ── BROWSER AGENT (backup — stops when laptop closes) ──────────── */}
+      <div className="flex items-center gap-3 py-2 px-4 rounded-xl border border-neutral-800 bg-neutral-900/50">
+        <Bot size={14} className="text-neutral-600" />
+        <span className="text-[11px] text-neutral-600 font-medium">Browser Agent</span>
+        <span className="text-[9px] text-neutral-700">— stops when browser closes · use Server Agent above for 24/7</span>
+      </div>
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -533,31 +669,13 @@ function AgentContent() {
           <h1 className="text-xl font-semibold text-white flex items-center gap-2.5">
             <Bot size={22} className="text-blue-400" />
             Living Agent
+            <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-1">4 STRATEGIES LIVE</span>
           </h1>
           <p className="text-xs text-neutral-600 mt-0.5">
-            {strategyMode === "hft" ? "HFT VWAP Scalper · 1m bars · OBI + TFI"
-              : strategyMode === "orb" ? "ORB-30 Breakout · 1m bars · 5yr backtest: 94.3% return · 55.3% WR"
-              : "BTC Momentum Velocity · 15m · EMA/RSI/VWAP"} · autonomous via Phantom
+            Momentum 15m · HFT Scalper 1m · ORB-30 1m · OBI Scalper 1m — all parallel · independent positions per strategy
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Strategy selector */}
-          <div className="flex rounded-xl overflow-hidden border border-neutral-800 text-[11px] font-semibold">
-            {([
-              ["momentum", "Momentum 15m"],
-              ["hft",      "HFT Scalper"],
-              ["orb",      "ORB-30 ★"],
-            ] as [StrategyMode, string][]).map(([m, label]) => (
-              <button key={m} onClick={() => setStrategyMode(m)}
-                className="px-4 py-2 transition-colors"
-                style={strategyMode === m
-                  ? { background: m === "orb" ? "rgba(245,158,11,0.2)" : "rgba(10,132,255,0.2)",
-                      color:      m === "orb" ? "#f59e0b" : "#0a84ff" }
-                  : { background: "transparent", color: "#4b5563" }}>
-                {label}
-              </button>
-            ))}
-          </div>
           <WalletInfo />
           <div className="phantom-btn-wrapper">
             <WalletMultiButton />
@@ -584,8 +702,8 @@ function AgentContent() {
         {[
           ["Scans Run",    scanCount.toString()],
           ["Last Scan",    lastScan ?? "—"],
-          ["Strategy",     strategyMode === "hft" ? "HFT 1m" : strategyMode === "orb" ? "ORB-30" : "MV 15m"],
-          ["Conditions",   analysis ? `${analysis.met_count}/${activeResult.total ?? 7}` : "—"],
+          ["Firing",       firingStrategy],
+          ["Open Pos",     anyPositionOpen ? `${openPositions.length} active` : "none"],
           ["Bias",         analysis?.bias?.toUpperCase() ?? "—"],
           ["Mode",         config.mode === "paper" ? "📄 PAPER" : config.mode === "perps" ? "🚀 PERPS" : "⚡ SPOT"],
           ["Wallet",       config.mode === "paper" ? "Not needed" : connected ? "Connected" : "Disconnected"],
@@ -635,6 +753,78 @@ function AgentContent() {
           </div>
         </div>
       )}
+
+      {/* ── All-strategy live status strip ───────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          {
+            name: "Momentum 15m",
+            bias: momentumResult.bias,
+            met: momentumResult.met_count,
+            total: momentumResult.total ?? 7,
+            hasSignal: !!momentumResult.signal,
+            conf: momentumResult.signal?.confidence,
+            color: "#0a84ff",
+          },
+          {
+            name: "HFT Scalper",
+            bias: hftResult.bias,
+            met: hftResult.met_count,
+            total: 7,
+            hasSignal: !!hftResult.signal,
+            conf: hftResult.signal?.confidence,
+            color: "#a78bfa",
+          },
+          {
+            name: orbResult.status === "building_orb" ? `ORB-30 ★ (${orbResult.indicators.bars_in_orb}/30)`
+                : orbResult.status === "past_window"  ? `ORB-30 ★ · next ${orbResult.indicators.next_session}`
+                : "ORB-30 ★",
+            bias: orbResult.bias,
+            met: orbResult.met_count,
+            total: orbResult.total ?? 6,
+            hasSignal: !!orbResult.signal,
+            conf: orbResult.signal?.confidence,
+            color: "#f59e0b",
+          },
+          {
+            name: "OBI Scalper 1m",
+            bias: obiResult.bias,
+            met: obiResult.met_count,
+            total: 3,
+            hasSignal: !!obiResult.signal,
+            conf: obiResult.signal?.confidence,
+            color: "#10b981",
+          },
+        ].map(s => {
+          const biasColor = s.bias === "long" ? "#22c55e" : s.bias === "short" ? "#ef4444" : "#4b5563";
+          const pct = Math.round(s.met / s.total * 100);
+          return (
+            <div key={s.name} className="card p-4 relative overflow-hidden"
+              style={s.hasSignal ? { border: `1px solid ${s.color}40`, boxShadow: `0 0 16px ${s.color}15` } : {}}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-bold text-white">{s.name}</span>
+                {s.hasSignal ? (
+                  <span className="text-[8px] font-bold px-2 py-0.5 rounded-full animate-pulse"
+                    style={{ background: `${s.color}20`, color: s.color, border: `1px solid ${s.color}40` }}>
+                    ⚡ SIGNAL
+                  </span>
+                ) : (
+                  <span className="text-[8px] text-neutral-700 px-2 py-0.5 rounded-full border border-neutral-800">SCANNING</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-bold" style={{ color: biasColor }}>{s.bias.toUpperCase()}</span>
+                <span className="text-[9px] text-neutral-600">{s.met}/{s.total} conds</span>
+                {s.conf != null && <span className="text-[9px] ml-auto" style={{ color: s.color }}>{(s.conf * 100).toFixed(0)}% conf</span>}
+              </div>
+              <div className="h-1 rounded-full bg-neutral-800 overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${pct}%`, background: s.hasSignal ? s.color : `${s.color}60` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
       {/* Config + log grid */}
       <div className="grid grid-cols-12 gap-4">
@@ -715,7 +905,7 @@ function AgentContent() {
           <div>
             <div className="flex justify-between mb-1.5">
               <label className="text-[10px] text-neutral-600">Min Conditions Met</label>
-              <span className="text-[10px] font-mono text-blue-400">{config.min_conditions}/7</span>
+              <span className="text-[10px] font-mono text-blue-400">{config.min_conditions}+ met</span>
             </div>
             <input type="range" min={3} max={7} step={1}
               value={config.min_conditions}
@@ -754,8 +944,8 @@ function AgentContent() {
         {/* Right: conditions + HFT meters + log */}
         <div className="col-span-12 lg:col-span-7 space-y-4">
 
-          {/* HFT-specific meters (only when HFT mode) */}
-          {strategyMode === "hft" && (
+          {/* HFT microstructure meters — always visible */}
+          {(
             <div className="card p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Zap size={13} className="text-yellow-400" />
@@ -788,16 +978,137 @@ function AgentContent() {
             </div>
           )}
 
-          {/* ORB-30 session panel */}
-          {strategyMode === "orb" && (
+          {/* OBI Scalper panel — always visible */}
+          {(
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Activity size={13} className="text-emerald-400" />
+                <span className="text-[13px] font-semibold text-white">OBI Scalper 1m</span>
+                <span className="text-[9px] text-neutral-600 ml-1">Order Book Imbalance</span>
+                {obiResult.signal ? (
+                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 ml-auto animate-pulse font-bold">
+                    ⚡ {obiResult.signal.direction.toUpperCase()} SIGNAL
+                  </span>
+                ) : (
+                  <span className="text-[8px] text-neutral-700 ml-auto">scanning every 1m</span>
+                )}
+              </div>
+
+              {/* OBI Gauge */}
+              {(() => {
+                const obi = (obiResult as OBIResult).obi_indicators.obi ?? 0;
+                const pct = ((obi + 1) / 2 * 100);
+                const clampedPct = Math.min(Math.max(pct, 0), 100);
+                const obiColor = obi > 0.20 ? "#10b981" : obi < -0.20 ? "#ef4444" : "#6b7280";
+                return (
+                  <div className="mb-4">
+                    <div className="flex justify-between text-[9px] mb-1">
+                      <span className="text-red-400">ASK PRESSURE</span>
+                      <span style={{ color: obiColor }} className="font-bold font-mono">
+                        OBI {obi >= 0 ? "+" : ""}{obi.toFixed(3)}
+                      </span>
+                      <span className="text-green-400">BID PRESSURE</span>
+                    </div>
+                    <div className="h-2.5 bg-neutral-800 rounded-full overflow-hidden relative">
+                      <div className="absolute inset-0 flex">
+                        <div className="h-full bg-red-900/40"   style={{ width: "38%" }} />
+                        <div className="h-full bg-neutral-900"  style={{ width: "24%" }} />
+                        <div className="h-full bg-green-900/40" style={{ width: "38%" }} />
+                      </div>
+                      {/* Center line */}
+                      <div className="absolute top-0 bottom-0 w-px bg-neutral-600" style={{ left: "50%" }} />
+                      {/* OBI indicator */}
+                      <div className="absolute top-0.5 bottom-0.5 w-1.5 rounded-full transition-all duration-300"
+                        style={{ left: `calc(${clampedPct}% - 3px)`, background: obiColor }} />
+                    </div>
+                    <div className="flex justify-between text-[8px] text-neutral-700 mt-0.5">
+                      <span>−1.0</span>
+                      <span className="text-neutral-600">threshold ±{(0.20).toFixed(2)}</span>
+                      <span>+1.0</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Indicators grid */}
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                {[
+                  ["Bid Vol",  (obiResult as OBIResult).obi_indicators.bid_vol?.toFixed(2) ?? "—",  "text-green-400"],
+                  ["Ask Vol",  (obiResult as OBIResult).obi_indicators.ask_vol?.toFixed(2) ?? "—",  "text-red-400"],
+                  ["RSI(14)",  (obiResult as OBIResult).obi_indicators.rsi?.toFixed(1)    ?? "—",  (() => { const r = (obiResult as OBIResult).obi_indicators.rsi ?? 50; return r > 55 ? "text-green-400" : r < 45 ? "text-red-400" : "text-neutral-400"; })()],
+                  ["EMA9",     (obiResult as OBIResult).obi_indicators.ema9?.toFixed(1)   ?? "—",  "text-blue-400"],
+                  ["EMA21",    (obiResult as OBIResult).obi_indicators.ema21?.toFixed(1)  ?? "—",  "text-neutral-400"],
+                  ["Bias",     obiResult.bias.toUpperCase(), obiResult.bias === "long" ? "text-green-400" : obiResult.bias === "short" ? "text-red-400" : "text-neutral-500"],
+                ].map(([l, v, cls]) => (
+                  <div key={l} className="bg-neutral-900 rounded-lg p-2">
+                    <div className="text-[8px] text-neutral-600">{l}</div>
+                    <div className={`text-[11px] font-mono font-semibold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Conditions checklist */}
+              <div className="space-y-1.5">
+                {obiResult.conditions.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    {c.met
+                      ? <CheckCircle2 size={10} className="text-emerald-400 flex-shrink-0" />
+                      : <XCircle     size={10} className="text-neutral-700 flex-shrink-0" />}
+                    <span className={`text-[9px] flex-1 ${c.met ? "text-neutral-300" : "text-neutral-600"}`}>{c.name}</span>
+                    <span className={`text-[9px] font-mono ${c.met ? "text-emerald-400" : "text-neutral-700"}`}>{c.value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Strategy spec */}
+              <div className="flex gap-4 mt-3 pt-3 border-t border-neutral-800">
+                {[["SL", "0.4%", "text-red-400"], ["TP", "0.8%", "text-green-400"],
+                  ["R:R", "1:2", "text-white"], ["Timeframe", "1m", "text-blue-400"],
+                  ["Max Hold", "10 min", "text-neutral-400"], ["Signals", "3/3 req", "text-emerald-400"],
+                ].map(([l, v, cls]) => (
+                  <div key={l} className="flex-1 text-center">
+                    <div className="text-[7px] text-neutral-700">{l}</div>
+                    <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ORB-30 session panel — always visible */}
+          {(
             <div className="card p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Activity size={13} className="text-amber-400" />
                 <span className="text-[13px] font-semibold text-white">ORB-30 Session</span>
-                <span className="text-[9px] text-amber-400 ml-auto">
-                  {orbResult.indicators.session_label}
-                </span>
+                {/* Status badge */}
+                {orbResult.status === "building_orb" && (
+                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 ml-auto animate-pulse">
+                    BUILDING {orbResult.indicators.bars_in_orb}/30
+                  </span>
+                )}
+                {orbResult.status === "watching" && (
+                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-auto">
+                    WATCHING · bar {orbResult.indicators.bars_since_orb}/210
+                  </span>
+                )}
+                {orbResult.status === "past_window" && (
+                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-500 ml-auto">
+                    NEXT SIGNAL @ {orbResult.indicators.next_session}
+                  </span>
+                )}
+                {orbResult.status === "no_data" && (
+                  <span className="text-[8px] text-neutral-600 ml-auto">Loading…</span>
+                )}
+                <span className="text-[9px] text-amber-400/60 ml-2">{orbResult.indicators.session_label}</span>
               </div>
+
+              {/* Past window notice */}
+              {orbResult.status === "past_window" && (
+                <div className="mb-3 p-2.5 rounded-lg bg-neutral-900 border border-neutral-800 text-[10px] text-neutral-500 text-center">
+                  Trade window expired ({orbResult.indicators.bars_since_orb}/210 bars) · Next ORB closes at {orbResult.indicators.next_session}
+                </div>
+              )}
 
               {/* OR levels */}
               <div className="grid grid-cols-3 gap-3 mb-4">
@@ -828,7 +1139,7 @@ function AgentContent() {
                 </div>
                 {orbResult.indicators.bars_since_orb > 0 && (
                   <div className="text-[9px] text-neutral-600 flex justify-between mt-1">
-                    <span>Bars since ORB: {orbResult.indicators.bars_since_orb}/{90}</span>
+                    <span>Trade window: {orbResult.indicators.bars_since_orb}/210 bars</span>
                     <span className={orbResult.bias === "long" ? "text-green-400" : orbResult.bias === "short" ? "text-red-400" : "text-neutral-500"}>
                       Bias: {orbResult.bias.toUpperCase()}
                     </span>
@@ -854,7 +1165,7 @@ function AgentContent() {
           {/* Paper trading panel */}
           {config.mode === "paper" && (
             <PaperPanel
-              position={paperPosition}
+              openPositions={openPositions}
               stats={paperStats}
               trades={trades}
               onClose={closePaperPosition}
@@ -869,10 +1180,10 @@ function AgentContent() {
               <span className="text-[13px] font-semibold text-white">Live Strategy Conditions</span>
               <span className="text-[9px] text-green-400 ml-auto flex items-center gap-1">
                 <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />
-                live · {strategyMode === "hft" ? "1m bar" : "15m bar"}
+                live · best signal · multi-strategy
               </span>
             </div>
-            {candles.length >= (strategyMode === "momentum" ? 60 : 35) ? (
+            {candles.length >= 35 ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className={`text-sm font-bold ${activeResult.bias === "long" ? "text-green-400" : activeResult.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
@@ -897,7 +1208,7 @@ function AgentContent() {
             ) : (
               <div className="text-center py-6 text-neutral-700 text-sm flex items-center justify-center gap-2">
                 <RefreshCw size={13} className="animate-spin" />
-                Loading live candles… ({candles.length}/{strategyMode === "momentum" ? 60 : 35})
+                Loading live candles… ({candles.length}/35)
               </div>
             )}
           </div>
@@ -944,7 +1255,7 @@ function AgentContent() {
           {
             icon: Bot,
             title: "How the Agent Works",
-            body: "Scans BTC Momentum Velocity strategy every 60s. When 5+ conditions are met and confidence exceeds your threshold, it fires a trade signal.",
+            body: "All 4 strategies scan independently every 20s. Each can open its own position simultaneously — up to 4 concurrent trades. OBI Scalper fires fastest (1m, tight R:R). Auto-executes with no confirmation.",
           },
           {
             icon: Shield,

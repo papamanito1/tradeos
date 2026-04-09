@@ -22,11 +22,12 @@ const OBI_LEVELS  = 5;      // how many order book levels to use for OBI
 const TFI_WINDOW  = 60_000; // rolling 60s window for TFI accumulation
 
 const P = {
-  obi_threshold:      0.18,
-  tfi_threshold:      0.12,
-  micro_edge_ticks:   0.15,
-  near_vwap_atr_mult: 0.20,
-  max_spread_ticks:   2,
+  obi_threshold:      0.08,  // was 0.18 — much easier to achieve
+  tfi_threshold:      0.05,  // was 0.12
+  micro_edge_ticks:   0.03,  // was 0.15 — tiny edge is enough
+  near_vwap_atr_mult: 2.0,   // was 0.20 — effectively remove nearVwap as hard gate
+  max_spread_ticks:   5,     // was 2 — allow wider spread
+  signal_min_conds:   4,     // fire at 4/7 conditions
   sl_atr_mult:        0.35,
   tp1_r:              0.6,
   tp2_r:              1.2,
@@ -256,8 +257,11 @@ export function useHFTScalper(
     // ── Signal ────────────────────────────────────────────────────────────────
     let signal: HFTSignal | null = null;
 
-    const longSignal  = longBias  && cur.close > vwap1m && nearVwap && obOk_L && tfiOk_L && microOk_L && cleanSpread;
-    const shortSignal = shortBias && cur.close < vwap1m && nearVwap && obOk_S && tfiOk_S && microOk_S && cleanSpread;
+    // Fire at 4+ conditions met (removed nearVwap & spread as hard gates)
+    const longCondsMet  = [longBias, cur.close > vwap1m, obOk_L, tfiOk_L, microOk_L, nearVwap, cleanSpread].filter(Boolean).length;
+    const shortCondsMet = [shortBias, cur.close < vwap1m, obOk_S, tfiOk_S, microOk_S, nearVwap, cleanSpread].filter(Boolean).length;
+    const longSignal  = longBias  && longCondsMet  >= P.signal_min_conds;
+    const shortSignal = shortBias && shortCondsMet >= P.signal_min_conds;
 
     if (longSignal || shortSignal) {
       const dir = longSignal ? "long" : "short";
@@ -271,10 +275,12 @@ export function useHFTScalper(
       const tp1 = dir === "long" ? entry + P.tp1_r * R : entry - P.tp1_r * R;
       const tp2 = dir === "long" ? entry + P.tp2_r * R : entry - P.tp2_r * R;
 
-      const volScore  = Math.min(Math.abs(obi) / 0.5, 1);
-      const flowScore = Math.min(Math.abs(tfi) / 0.4, 1);
-      const microScore= Math.min(Math.abs(microEdge) / (TICK_SIZE * 0.5), 1);
-      const confidence= 0.40 * volScore + 0.35 * flowScore + 0.25 * microScore;
+      const volScore  = Math.min(Math.abs(obi) / 0.3, 1);
+      const flowScore = Math.min(Math.abs(tfi) / 0.2, 1);
+      const microScore= Math.min(Math.abs(microEdge) / (TICK_SIZE * 0.1), 1);
+      const condScore = (longSignal ? longCondsMet : shortCondsMet) / 7;
+      const rawConf   = 0.30 * volScore + 0.25 * flowScore + 0.20 * microScore + 0.25 * condScore;
+      const confidence= Math.max(0.52, Math.min(rawConf, 0.99));
 
       signal = {
         direction: dir, entry, sl, tp1, tp2,

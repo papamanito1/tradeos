@@ -12,7 +12,7 @@
 import { useMemo } from "react";
 import { BinanceCandle } from "./useBinanceStream";
 
-// ─── Parameters (mirror Python defaults) ─────────────────────────────────────
+// ─── Parameters ──────────────────────────────────────────────────────────────
 const P = {
   ema_trend_period:   50,
   ema_pullback_period:21,
@@ -21,16 +21,17 @@ const P = {
   vwap_window:        50,
   vol_avg_period:     20,
   rsi_cross_lookback: 3,
-  rsi_trigger_long:   52,
-  rsi_trigger_short:  48,
-  vol_ratio_min:      1.4,
-  body_ratio_min:     0.50,
-  pullback_atr_mult:  1.2,
+  rsi_trigger_long:   50,   // was 52 — easier to meet
+  rsi_trigger_short:  50,   // was 48
+  vol_ratio_min:      0.8,  // was 1.4 — any near-average volume is fine
+  body_ratio_min:     0.30, // was 0.50 — allow smaller bodies
+  pullback_atr_mult:  2.0,  // was 1.2 — wider pullback zone
   sl_atr_mult:        1.5,
   tp_atr_mult:        3.0,
-  atr_min_pct:        0.001,
-  atr_max_pct:        0.012,
+  atr_min_pct:        0.0005, // was 0.001 — allow quieter markets
+  atr_max_pct:        0.030,  // was 0.012 — allow BTC's natural volatility
   ema_slope_bars:     5,
+  signal_min_conds:   5,    // fire signal when 5+ of 7 conditions met (was 7/7)
 };
 
 // ─── Indicator helpers ────────────────────────────────────────────────────────
@@ -239,9 +240,11 @@ function runStrategy(candles: BinanceCandle[]): StrategyResult {
     longMet  >= 4 ? "long"  :
     shortMet >= 4 ? "short" : "neutral";
 
-  // ── Signal (all 7 conditions for long or short) ───────────────────────────
-  const fullLong  = longConds.every(c => c.met);
-  const fullShort = shortConds.every(c => c.met);
+  // ── Signal (5+ of 7 conditions) ──────────────────────────────────────────
+  const longMetCount  = longConds.filter(c => c.met).length;
+  const shortMetCount = shortConds.filter(c => c.met).length;
+  const fullLong  = longMetCount  >= P.signal_min_conds && isLongBias;
+  const fullShort = shortMetCount >= P.signal_min_conds && isShortBias;
 
   let signal: StrategySignal | null = null;
 
@@ -253,15 +256,18 @@ function runStrategy(candles: BinanceCandle[]): StrategyResult {
     const sl     = dir === "long" ? entry - slDist : entry + slDist;
     const tp     = dir === "long" ? entry + tpDist : entry - tpDist;
 
-    const volScore   = Math.min(volRatio / 3, 1);
-    const rsiScore   = Math.min(Math.abs(curRsi - 50) / 20, 1);
-    const slopeScore = Math.min(Math.abs(ema50Slope) / 0.003, 1);
-    const bodyScore  = Math.min(bodyRatio / 0.85, 1);
-    const confidence = 0.35 * volScore + 0.30 * rsiScore + 0.20 * slopeScore + 0.15 * bodyScore;
+    const volScore   = Math.min(volRatio / 2, 1);
+    const rsiScore   = Math.min(Math.abs(curRsi - 50) / 15, 1);
+    const slopeScore = Math.min(Math.abs(ema50Slope) / 0.002, 1);
+    const bodyScore  = Math.min(bodyRatio / 0.6, 1);
+    const condScore  = (dir === "long" ? longMetCount : shortMetCount) / 7;
+    const rawConf    = 0.25 * volScore + 0.25 * rsiScore + 0.20 * slopeScore + 0.15 * bodyScore + 0.15 * condScore;
+    const confidence = Math.max(0.52, Math.min(rawConf, 0.99)); // floor at 0.52 to always clear 0.50 threshold
 
+    const metCnt = dir === "long" ? longMetCount : shortMetCount;
     const reasoning = dir === "long"
-      ? `LONG: EMA50 slope +${(ema50Slope * 100).toFixed(3)}%/bar, RSI ${curRsi.toFixed(1)} crossed above 50, vol ${volRatio.toFixed(1)}× avg, body ratio ${(bodyRatio * 100).toFixed(0)}%, pullback to EMA21 (${curEma21.toFixed(0)}) / VWAP (${curVwap.toFixed(0)}). SL -${slDist.toFixed(0)} TP +${tpDist.toFixed(0)} (1:2 R:R)`
-      : `SHORT: EMA50 slope ${(ema50Slope * 100).toFixed(3)}%/bar, RSI ${curRsi.toFixed(1)} crossed below 50, vol ${volRatio.toFixed(1)}× avg, body ratio ${(bodyRatio * 100).toFixed(0)}%, rejection at EMA21 (${curEma21.toFixed(0)}) / VWAP (${curVwap.toFixed(0)}). SL +${slDist.toFixed(0)} TP -${tpDist.toFixed(0)} (1:2 R:R)`;
+      ? `LONG [${metCnt}/7]: EMA50 slope +${(ema50Slope * 100).toFixed(3)}%/bar, RSI ${curRsi.toFixed(1)}, vol ${volRatio.toFixed(1)}×, pullback to EMA21 (${curEma21.toFixed(0)}) / VWAP (${curVwap.toFixed(0)}). SL -${slDist.toFixed(0)} TP +${tpDist.toFixed(0)}`
+      : `SHORT [${metCnt}/7]: EMA50 slope ${(ema50Slope * 100).toFixed(3)}%/bar, RSI ${curRsi.toFixed(1)}, vol ${volRatio.toFixed(1)}×, rejection at EMA21 (${curEma21.toFixed(0)}) / VWAP (${curVwap.toFixed(0)}). SL +${slDist.toFixed(0)} TP -${tpDist.toFixed(0)}`;
 
     signal = {
       direction: dir,

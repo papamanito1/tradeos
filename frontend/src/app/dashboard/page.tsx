@@ -2,15 +2,14 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
-  DollarSign, TrendingUp, TrendingDown, Activity,
-  Layers, BarChart2, ShieldCheck, RefreshCw, WifiOff,
+  TrendingUp, TrendingDown, Activity,
+  BarChart2, ShieldCheck, RefreshCw, WifiOff,
   Zap, ArrowUpRight, ArrowDownRight, Bell, Bot, BookOpen,
   CheckCircle2, XCircle, Brain, Cpu, RotateCcw, X as XIcon,
   Target, Shield, FileText, Send, MessageSquare,
 } from "lucide-react";
 import { overviewApi } from "@/lib/api";
 import { Overview } from "@/types";
-import { KPICard } from "@/components/dashboard/KPICard";
 import { formatUSD, formatPct, pnlColor, cn } from "@/lib/utils";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import {
@@ -644,24 +643,40 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
     );
   }
 
-  // Agent message
-  const textCls = isSys
+  // Agent message — auto signals use same bright style as responses
+  const isSignal = isAuto && (msg.content.includes("▲ LONG") || msg.content.includes("▼ SHORT"));
+  const isNoSig  = isAuto && msg.content.startsWith("NO SIGNAL");
+  const textCls  = isSys
     ? (msg.content.includes("✅") ? "text-green-400" : msg.content.includes("⛔") ? "text-red-400" : "text-violet-400")
-    : isAuto ? "text-neutral-500" : "text-neutral-200";
+    : isSignal ? (msg.content.includes("▲ LONG") ? "text-green-300" : "text-red-300")
+    : isNoSig  ? "text-neutral-500"
+    : isAuto   ? "text-neutral-400"
+    : "text-neutral-200";
+
+  const bgStyle = isSys ? "rgba(139,92,246,0.06)"
+    : isSignal && msg.content.includes("▲ LONG") ? "rgba(34,197,94,0.06)"
+    : isSignal && msg.content.includes("▼ SHORT") ? "rgba(239,68,68,0.06)"
+    : isAuto ? "rgba(255,255,255,0.025)"
+    : "rgba(255,255,255,0.05)";
+
+  const borderStyle = isSys ? "1px solid rgba(139,92,246,0.15)"
+    : isSignal && msg.content.includes("▲ LONG") ? "1px solid rgba(34,197,94,0.2)"
+    : isSignal && msg.content.includes("▼ SHORT") ? "1px solid rgba(239,68,68,0.2)"
+    : "1px solid rgba(255,255,255,0.06)";
 
   return (
     <div className="flex items-start gap-2">
       <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
-        style={{ background: isSys ? "rgba(139,92,246,0.12)" : isAuto ? "rgba(255,255,255,0.04)" : "rgba(10,132,255,0.12)", border: isSys ? "1px solid rgba(139,92,246,0.2)" : "1px solid rgba(255,255,255,0.08)" }}>
-        <Brain size={10} style={{ color: isSys ? "#a78bfa" : isAuto ? "#374151" : "#60aaff" }} />
+        style={{ background: isSys ? "rgba(139,92,246,0.12)" : isSignal && msg.content.includes("▲") ? "rgba(34,197,94,0.12)" : isSignal ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.04)", border: isSys ? "1px solid rgba(139,92,246,0.2)" : "1px solid rgba(255,255,255,0.08)" }}>
+        <Brain size={10} style={{ color: isSys ? "#a78bfa" : isSignal && msg.content.includes("▲") ? "#4ade80" : isSignal ? "#f87171" : "#4b5563" }} />
       </div>
-      <div className="max-w-[85%]">
+      <div className="max-w-[90%]">
         <div className="rounded-2xl rounded-tl-sm px-3.5 py-2.5"
-          style={{ background: isSys ? "rgba(139,92,246,0.06)" : isAuto ? "rgba(255,255,255,0.025)" : "rgba(255,255,255,0.05)", border: isSys ? "1px solid rgba(139,92,246,0.15)" : "1px solid rgba(255,255,255,0.06)" }}>
-          <p className={`text-[11px] leading-relaxed whitespace-pre-line ${textCls}`}>{msg.content}</p>
+          style={{ background: bgStyle, border: borderStyle }}>
+          <p className={`text-[11px] leading-relaxed whitespace-pre-line font-mono ${textCls}`}>{msg.content}</p>
         </div>
         <div className="text-[8px] text-neutral-700 mt-0.5 pl-1 flex items-center gap-1">
-          {isAuto && <span className="text-[7px] text-neutral-800 italic">auto-analysis</span>}
+          {isAuto && <span className="text-[7px] text-neutral-800 italic">live scan</span>}
           {isSys  && <span className="text-[7px] text-violet-800 italic">system</span>}
           <span className="ml-auto">{msg.timestamp}</span>
         </div>
@@ -712,12 +727,9 @@ function ChatInterface({
   }, [handleSend]);
 
   const quickPrompts = useMemo(() => {
-    const base = ["What's your analysis?", "Should I trade now?", "What's the entry?"];
-    if (direction === "LONG")  base.push("Confirm the long setup");
-    if (direction === "SHORT") base.push("Confirm the short setup");
-    if (conviction >= 55)      base.push("Give me the trade levels");
-    else                        base.push("When will a signal fire?");
-    return base.slice(0, 4);
+    if (direction === "LONG"  && conviction >= 55) return ["Show long signal", "Entry SL TP", "Should I trade now?", "Paper stats"];
+    if (direction === "SHORT" && conviction >= 55) return ["Show short signal", "Entry SL TP", "Should I trade now?", "Paper stats"];
+    return ["Current signal?", "Entry SL TP", "Paper stats", "When will signal fire?"];
   }, [direction, conviction]);
 
   return (
@@ -739,8 +751,8 @@ function ChatInterface({
               <Brain size={18} style={{ color: gm.color }} />
             </div>
             <div className="text-center">
-              <div className="text-[11px] text-neutral-400">Ask the Master Agent anything</div>
-              <div className="text-[9px] text-neutral-700 mt-0.5">Market analysis · Trade signals · Risk management</div>
+              <div className="text-[11px] text-neutral-400">Signal feed active</div>
+              <div className="text-[9px] text-neutral-700 mt-0.5">Entry · SL · TP · R:R · Grade</div>
             </div>
           </div>
         ) : (
@@ -1317,7 +1329,8 @@ export default function OverviewPage() {
   // Seed 1m candles for ORB + Master Agent
   const seed1mCandles = useCallback(async () => {
     try {
-      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=120");
+      // 300 bars so ORB-30 always has its full 4-hour session history
+      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=300");
       if (r.ok) {
         const raw: unknown[][] = await r.json();
         setCandles1m(raw.map(k => ({
@@ -1330,7 +1343,7 @@ export default function OverviewPage() {
       }
     } catch { /* fall through */ }
     try {
-      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=120");
+      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=300");
       if (r.ok) {
         const json = await r.json();
         const list: string[][] = json?.result?.list ?? [];
@@ -1378,7 +1391,7 @@ export default function OverviewPage() {
     }, []),
   });
 
-  // ── 1m stream for ORB + Master Agent ─────────────────────────────────────
+  // ── 1m stream for ORB + Master Agent — keep 299 bars so ORB-30 always has its window ──
   useBinanceStream({
     symbols: ["BTC/USDT"],
     timeframe: "1m",
@@ -1388,7 +1401,7 @@ export default function OverviewPage() {
         const lMs = new Date(prev[prev.length - 1].timestamp).getTime();
         const cMs = new Date(c.timestamp).getTime();
         if (lMs === cMs) return [...prev.slice(0, -1), c];
-        if (cMs > lMs)   return [...prev.slice(-119), c];
+        if (cMs > lMs)   return [...prev.slice(-299), c];
         return prev;
       });
     }, []),
@@ -1448,27 +1461,6 @@ export default function OverviewPage() {
 
         {/* ── Master Agent Hero ── */}
         <MasterAgentPanel agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
-
-        {/* ── Premium stat strip ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {[
-            { label: "Portfolio Equity",  value: formatUSD(d?.equity || 0),                 sub: `Available ${formatUSD(d?.available_balance || 0)}`, icon: DollarSign, color: "#0a84ff" },
-            { label: "Daily P&L",         value: formatUSD(d?.daily_pnl || 0),              sub: formatPct(d?.daily_pnl_pct || 0),                      icon: d?.daily_pnl >= 0 ? TrendingUp : TrendingDown, color: (d?.daily_pnl || 0) >= 0 ? "#22c55e" : "#ef4444" },
-            { label: "Win Rate",          value: `${(d?.win_rate || 0).toFixed(1)}%`,       sub: `${d?.total_trades || 0} total trades`,               icon: BarChart2, color: "#0a84ff" },
-            { label: "Active Strategies", value: String(d?.active_strategies || 0),         sub: "Running live",                                        icon: Layers, color: "#a78bfa" },
-          ].map(({ label, value, sub, icon: Icon, color }) => (
-            <div key={label} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${color}15`, border: `1px solid ${color}25` }}>
-                <Icon size={16} style={{ color }} />
-              </div>
-              <div className="min-w-0">
-                <div className="text-[9px] text-neutral-600 uppercase tracking-wide">{label}</div>
-                <div className="text-[16px] font-bold font-mono" style={{ color }}>{value}</div>
-                <div className="text-[8px] text-neutral-700 truncate">{sub}</div>
-              </div>
-            </div>
-          ))}
-        </div>
 
         {/* ── Live Agent Signal ── */}
         <LiveAgentSignal result={strategyResult} />

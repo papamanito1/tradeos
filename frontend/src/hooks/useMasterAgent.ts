@@ -149,94 +149,28 @@ function buildThought(ctx: {
   grade: ConvictionGrade;
   candles15m: BinanceCandle[];
   ticker: BinanceTicker | null;
+  signal?: MasterSignal | null;
 }, ts: string): string {
-  const { price, ema50, ema21, atrPct, votes, orb, regime, ob, direction, conviction, grade: g, candles15m, ticker } = ctx;
-  const t = `[${ts}]`;
+  const { price, direction, conviction, grade: g, signal, votes } = ctx;
+  const aligned = votes.filter(v => v.bias === direction.toLowerCase()).length;
+  const pStr = price ? `$${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
 
-  const pool: string[] = [];
-
-  // Price vs EMAs
-  if (price && ema50) {
-    const diff = ((price - ema50) / ema50 * 100).toFixed(2);
-    const rel  = price > ema50 ? "above" : "below";
-    pool.push(`${t} Price ${rel} EMA50 by ${Math.abs(+diff)}% — ${price > ema50 ? "bullish" : "bearish"} structure intact`);
-  }
-  if (price && ema21) {
-    pool.push(`${t} EMA21 ${ema21.toFixed(0)} — ${price > ema21 ? "price holding above near-term average" : "price rejected below near-term average"}`);
+  // If there is an active signal → always show the full signal card
+  if (signal && direction !== "FLAT") {
+    const riskPct = ((Math.abs(signal.entry - signal.sl) / signal.entry) * 100).toFixed(2);
+    return [
+      `${direction}  ·  Entry ${pStr}  ·  SL $${signal.sl.toFixed(0)} (${riskPct}%)  ·  TP $${signal.tp.toFixed(0)}  ·  ${signal.rr} R:R`,
+      `Grade ${g}  ·  ${conviction}/100  ·  ${aligned}/3 strategies aligned  ·  Size ${signal.size_pct}%`,
+    ].join("\n");
   }
 
-  // ATR / volatility
-  if (atrPct != null) {
-    if (atrPct > 0.018)      pool.push(`${t} ATR elevated at ${(atrPct * 100).toFixed(2)}% — high-vol environment, widen stops`);
-    else if (atrPct < 0.008) pool.push(`${t} ATR compressed ${(atrPct * 100).toFixed(2)}% — coiling, breakout imminent`);
-    else                      pool.push(`${t} ATR ${(atrPct * 100).toFixed(2)}% — normal vol regime, standard sizing`);
+  // No signal — show bias status and what's missing
+  if (direction !== "FLAT") {
+    const needed = 55 - conviction;
+    return `${direction} bias  ·  ${conviction}/100 conviction (${g})  ·  ${aligned}/3 aligned  ·  Need ${needed > 0 ? `+${needed} pts` : "signal trigger"}  ·  BTC ${pStr}`;
   }
 
-  // Order book imbalance
-  if (ob && ob.bids.length > 0 && ob.asks.length > 0) {
-    const bidVol = ob.bids.slice(0, 5).reduce((s, l) => s + l.amount, 0);
-    const askVol = ob.asks.slice(0, 5).reduce((s, l) => s + l.amount, 0);
-    const obi    = (bidVol - askVol) / (bidVol + askVol);
-    if (Math.abs(obi) > 0.2)
-      pool.push(`${t} Order book: ${obi > 0 ? "bid-heavy" : "ask-heavy"} at top 5 levels (OBI ${obi.toFixed(3)}) — ${obi > 0 ? "buyer" : "seller"} dominance`);
-  }
-
-  // ORB session
-  if (orb.current_session?.or_established && orb.indicators.or_high && orb.indicators.or_low) {
-    pool.push(`${t} ORB-30 session: $${orb.indicators.or_high.toFixed(0)} / $${orb.indicators.or_low.toFixed(0)} (range ${orb.indicators.or_range_pct?.toFixed(2)}%) — levels active`);
-  }
-  if (orb.bias !== "neutral") {
-    pool.push(`${t} ORB bias ${orb.bias.toUpperCase()} — 15m EMA20 ${orb.indicators.ema20_15m?.toFixed(0)} confirms session direction`);
-  }
-
-  // Strategy votes
-  const aligned = votes.filter(v => v.bias === direction.toLowerCase());
-  if (aligned.length === 3)      pool.push(`${t} ★ ALL 3 strategies in ${direction} consensus — maximum conviction, executing at grade ${g}`);
-  else if (aligned.length === 2) pool.push(`${t} 2/3 strategies aligned ${direction} — sufficient edge to act`);
-  const strongest = [...votes].sort((a, b) => b.conf - a.conf)[0];
-  if (strongest?.signal)         pool.push(`${t} Strongest signal: ${strongest.name} at ${(strongest.conf * 100).toFixed(0)}% confidence`);
-
-  // Regime commentary
-  if (regime === "TRENDING") pool.push(`${t} Regime: TRENDING — momentum strategies have highest edge, run winners longer`);
-  if (regime === "RANGING")  pool.push(`${t} Regime: RANGING — HFT mean-reversion approach favored, tight targets`);
-  if (regime === "VOLATILE") pool.push(`${t} Regime: VOLATILE — reduce size 50%, priority on capital preservation`);
-
-  // Conviction
-  if (conviction >= 85)       pool.push(`${t} Conviction A+ (${conviction}/100) — sizing at full allocation`);
-  else if (conviction >= 70)  pool.push(`${t} Conviction A (${conviction}/100) — deploying 75% of standard size`);
-  else if (conviction >= 55)  pool.push(`${t} Conviction B (${conviction}/100) — scaled-down entry, watching for improvement`);
-  else if (conviction >= 40)  pool.push(`${t} Conviction C (${conviction}/100) — monitoring only, no entry at this edge`);
-  else                         pool.push(`${t} No edge detected — capital remains flat, waiting for higher-quality setup`);
-
-  // 24h change
-  if (ticker?.change_pct != null) {
-    const chg = ticker.change_pct;
-    pool.push(`${t} BTC 24h: ${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% — ${Math.abs(chg) > 3 ? "significant move" : "stable"} daily session`);
-  }
-
-  // Volume observation
-  if (candles15m.length >= 2) {
-    const vol1 = candles15m[candles15m.length - 1].volume;
-    const avgVol = candles15m.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-    const ratio  = vol1 / avgVol;
-    if (ratio > 1.5) pool.push(`${t} Volume surge: current bar ${ratio.toFixed(1)}× 20-bar avg — institutional participation`);
-    else if (ratio < 0.5) pool.push(`${t} Low volume ${ratio.toFixed(1)}× avg — low conviction move, wait for volume confirmation`);
-  }
-
-  // Hedge fund maxims (rotation)
-  const maxims = [
-    `${t} Risk protocol: max 2% per trade. Drawdown gate: pause trading after −5% daily.`,
-    `${t} Position thesis must survive a 1.5× adverse move without requiring exit.`,
-    `${t} Trade what you see, not what you think — price action is the final arbiter.`,
-    `${t} Kelly sizing: fractional 25% of theoretical Kelly — protecting the book.`,
-    `${t} Correlation check: 3-strategy confluence reduces false positive rate ~70%.`,
-    `${t} Entry is nothing — exit is everything. Respect your SL unconditionally.`,
-    `${t} A+ setups are rare. Wait. Stay patient. The market will give you the pitch.`,
-  ];
-  pool.push(...maxims);
-
-  // Return a random selection
-  return pool[Math.floor(Math.random() * pool.length)];
+  return `FLAT  ·  No edge  ·  ${conviction}/100  ·  Strategies diverging  ·  BTC ${pStr}  ·  Waiting for confluence`;
 }
 
 // ─── Conviction calculator ────────────────────────────────────────────────────
@@ -322,8 +256,20 @@ interface ResponseCtx {
   paperStats:     MasterState["paper_stats"];
 }
 
+function formatSignal(sig: MasterSignal, conv: number, g: ConvictionGrade, aligned: number): string {
+  const riskUsd  = Math.abs(sig.entry - sig.sl);
+  const rewardUsd= Math.abs(sig.tp - sig.entry);
+  const riskPct  = (riskUsd / sig.entry * 100).toFixed(2);
+  return [
+    `${sig.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}  ·  Grade ${g}  ·  ${conv}/100  ·  ${aligned}/3 aligned`,
+    `Entry   $${sig.entry.toFixed(0)}`,
+    `SL      $${sig.sl.toFixed(0)}  (−${riskPct}%  /  −$${riskUsd.toFixed(0)})`,
+    `TP      $${sig.tp.toFixed(0)}  (+$${rewardUsd.toFixed(0)})`,
+    `R:R     ${sig.rr}  ·  Size ${sig.size_pct}% of account`,
+  ].join("\n");
+}
+
 function generateResponse(userMsg: string, ctx: ResponseCtx): string {
-  const m   = userMsg.toLowerCase().trim();
   const p   = ctx.price;
   const pStr = p ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
   const dir  = ctx.direction;
@@ -332,168 +278,47 @@ function generateResponse(userMsg: string, ctx: ResponseCtx): string {
   const sig  = ctx.signal;
   const aligned = ctx.votes.filter(v => v.bias === dir.toLowerCase()).length;
 
-  // ── Greetings ───────────────────────────────────────────────────────────
-  if (/^(hi|hello|hey|sup|yo|gm|good morning|good afternoon|good evening|what's up|wassup)/i.test(m)) {
-    const snap = dir !== "FLAT"
-      ? `I'm watching a ${dir} setup — Grade ${g}, ${conv}/100 conviction. BTC at ${pStr}.`
-      : `No strong edge right now. BTC at ${pStr}, running flat.`;
-    return `${snap} I'm monitoring Momentum 15m, ORB-30, and HFT Order Flow in real-time. Ask me anything.`;
-  }
+  // ── Always lead with the signal if one exists ────────────────────────────
+  if (sig && dir !== "FLAT" && conv >= 55) {
+    const base = formatSignal(sig, conv, g, aligned);
 
-  // ── Full analysis / what do you see ─────────────────────────────────────
-  if (/analys|assess|situation|outlook|overview|what.*see|what.*happen|current.*state|status|update me|brief|summary/i.test(m)) {
-    const mv  = ctx.votes[0]; const orb = ctx.votes[1]; const hft = ctx.votes[2];
-    const chg = ctx.ticker?.change_pct;
-    return [
-      `BTC ${pStr} ${chg != null ? `(${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% 24h)` : ""} · ${ctx.regime} regime`,
-      `Direction: ${dir} · Conviction: ${conv}/100 (Grade ${g}) · ${aligned}/3 strategies aligned`,
-      `Momentum 15m: ${mv.bias.toUpperCase()} · ${(mv.met_pct * 100).toFixed(0)}% conditions`,
-      `ORB-30: ${orb.bias.toUpperCase()} · ${(orb.met_pct * 100).toFixed(0)}% conditions`,
-      `HFT Flow: ${hft.bias.toUpperCase()}`,
-      sig ? `▶ Signal: ${sig.direction} @ ${pStr} · SL $${sig.sl.toFixed(0)} · TP $${sig.tp.toFixed(0)} · ${sig.rr} R:R · ${sig.size_pct}% size`
-          : `No active signal (need conviction ≥ 55).`,
-    ].join("\n");
-  }
-
-  // ── Long / buy ──────────────────────────────────────────────────────────
-  if (/\b(long|buy|bull|go up|pump|should i buy|go long|enter long)\b/i.test(m)) {
-    if (dir === "LONG" && conv >= 55) {
-      return sig
-        ? `Grade ${g} LONG setup confirmed. Entry $${sig.entry.toFixed(0)}, SL $${sig.sl.toFixed(0)}, TP $${sig.tp.toFixed(0)} (${sig.rr} R:R). Size: ${sig.size_pct}% of account. ${aligned}/3 strategies aligned. ${conv >= 85 ? "Maximum conviction — go full size." : conv >= 70 ? "High conviction — 75% size." : "Moderate conviction — 50% size."}`
-        : `LONG bias at ${conv}/100 but conditions not fully complete. Wait for the signal to trigger cleanly. Chasing is the #1 mistake.`;
+    // Add a one-line context relevant to the question
+    const m = userMsg.toLowerCase();
+    if (/paper|stats|pnl|p&l|how.*doing/i.test(m)) {
+      const st = ctx.paperStats; const pos = ctx.paperPos;
+      const posLine = pos?.open
+        ? `Open ${pos.direction} @ $${pos.entry?.toFixed(0)} · unrealized ${(pos.pnl_usd ?? 0) >= 0 ? "+" : ""}$${(pos.pnl_usd ?? 0).toFixed(2)}`
+        : "No open paper position";
+      return `${base}\n\nPaper account: ${st.total_trades} trades · ${st.wins}W/${st.losses}L · ${st.total_pnl >= 0 ? "+" : ""}$${st.total_pnl.toFixed(2)} P&L\n${posLine}`;
     }
-    if (dir === "SHORT") return `I'm SHORT biased (${conv}/100). Going long against the tape is low probability. Respect the bias — wait for a flip before buying.`;
-    return `Not enough confluence yet. Conviction ${conv}/100 — below 55 threshold. ${ctx.votes[0].bias === "long" ? "Momentum is bullish" : "Momentum is " + ctx.votes[0].bias} but we need 2+ strategies to align. Stay patient.`;
-  }
-
-  // ── Short / sell ────────────────────────────────────────────────────────
-  if (/\b(short|sell|bear|go down|dump|should i sell|go short|enter short)\b/i.test(m)) {
-    if (dir === "SHORT" && conv >= 55) {
-      return sig
-        ? `Grade ${g} SHORT setup confirmed. Entry $${sig.entry.toFixed(0)}, SL $${sig.sl.toFixed(0)}, TP $${sig.tp.toFixed(0)} (${sig.rr} R:R). Size: ${sig.size_pct}% of account. ${aligned}/3 strategies aligned.`
-        : `SHORT bias at ${conv}/100 but conditions not fully complete. Wait for the full setup. Patience is alpha.`;
+    if (/wait|patience|should.*trade|enter|execute/i.test(m)) {
+      const verdict = conv >= 85 ? "A+ setup — execute." : conv >= 70 ? "Grade A — take it." : "Grade B — 50% size.";
+      return `${base}\n\n${verdict}`;
     }
-    if (dir === "LONG") return `I'm LONG biased (${conv}/100). Shorting against the tape here is low probability. Wait for the bias to flip.`;
-    return `Not enough confluence for a short. Conviction ${conv}/100 — need 55+. ${ctx.votes[0].bias === "short" ? "Momentum is bearish" : "Momentum is " + ctx.votes[0].bias} — waiting for more alignment.`;
+    return base;
   }
 
-  // ── Should I trade ──────────────────────────────────────────────────────
-  if (/should i trade|should i enter|take.*trade|place.*trade|execute/i.test(m)) {
-    if (conv >= 85 && sig) return `Yes — Grade A+ (${conv}/100). ${sig.direction} @ $${sig.entry.toFixed(0)}. ${aligned}/3 aligned. Full size. This is the setup. Execute.`;
-    if (conv >= 70 && sig) return `Yes with 75% size — Grade A (${conv}/100). ${sig.direction} setup. Entry $${sig.entry.toFixed(0)}, SL $${sig.sl.toFixed(0)}, TP $${sig.tp.toFixed(0)}.`;
-    if (conv >= 55 && sig) return `Cautiously yes — Grade B (${conv}/100). 50% size. Entry $${sig.entry.toFixed(0)}. Accept you may need to scale in.`;
-    return `Not yet. Conviction ${conv}/100 — below the 55 threshold. No signal active. Wait for the setup to develop. Sitting on your hands is also a position.`;
-  }
+  // ── No signal — show bias status ─────────────────────────────────────────
+  const mv  = ctx.votes[0]; const orb = ctx.votes[1]; const hft = ctx.votes[2];
+  const needed = Math.max(0, 55 - conv);
 
-  // ── Entry price ─────────────────────────────────────────────────────────
-  if (/\b(entry|where.*enter|enter at|buy at|sell at|price.*in|level|where.*in)\b/i.test(m)) {
-    if (sig) return `Entry: $${sig.entry.toFixed(0)} — ${sig.direction === "LONG" ? "buy at market or best bid" : "sell at market or best ask"}. Risk: $${Math.abs(sig.entry - sig.sl).toFixed(0)} to stop (${((Math.abs(sig.entry - sig.sl) / sig.entry) * 100).toFixed(2)}%). ${aligned}/3 strategies confirmed.`;
-    return `No signal yet. BTC at ${pStr}. ${dir !== "FLAT" ? `Bias is ${dir} (${conv}/100) — entry will trigger when conditions complete.` : "Running flat — no entry level to give."}`;
-  }
-
-  // ── Stop loss ───────────────────────────────────────────────────────────
-  if (/\b(stop|sl|stop.?loss|where.*stop|risk.*level|stop.*where)\b/i.test(m)) {
-    if (sig) {
-      const riskPct = (Math.abs(sig.entry - sig.sl) / sig.entry * 100).toFixed(2);
-      return `Stop: $${sig.sl.toFixed(0)} — ${riskPct}% from entry. ${+riskPct > 1.5 ? "Wider stop adjusted for current volatility." : "Tight stop — clean market structure."} Rule: never move your stop against the position. Ever.`;
-    }
-    if (ctx.atrPct && p) return `No signal yet. Typical stop: 1.5× ATR from entry = ~$${(p * ctx.atrPct * 1.5).toFixed(0)} (ATR is ${(ctx.atrPct * 100).toFixed(2)}% of price).`;
-    return "No active signal. Stop placement calculated when setup triggers.";
-  }
-
-  // ── Take profit ─────────────────────────────────────────────────────────
-  if (/\b(target|tp|take.?profit|profit.*target|exit.*at|where.*exit|where.*out)\b/i.test(m)) {
-    if (sig) return `TP: $${sig.tp.toFixed(0)} — ${sig.rr} R:R. ${sig.direction === "LONG" ? `$${(sig.tp - sig.entry).toFixed(0)} above entry.` : `$${(sig.entry - sig.tp).toFixed(0)} below entry.`} Strategy: take 60% at TP, trail remaining with stop at entry (risk-free).`;
-    return "No active take-profit level. Signal triggers first, then I'll give exact levels.";
-  }
-
-  // ── Momentum strategy ────────────────────────────────────────────────────
-  if (/\b(momentum|mv15|velocity|ema50|ema21|rsi|vwap)\b/i.test(m)) {
-    const mv = ctx.votes[0]; const ms = ctx.momentumResult;
-    return `Momentum Velocity 15m: ${mv.bias.toUpperCase()}, ${(mv.met_pct * 100).toFixed(0)}% conditions met (${ms.met_count}/${ms.total ?? 7}). ${mv.signal ? `Signal fired — entry $${ms.signal?.entry.toFixed(0)}, conf ${((ms.signal?.confidence ?? 0) * 100).toFixed(0)}%.` : "No signal yet."} Strategy uses: EMA50 trend filter, RSI(14) momentum, VWAP/EMA21 pullback, volume surge + ATR volatility gate. 1:2 R:R target.`;
-  }
-
-  // ── ORB strategy ─────────────────────────────────────────────────────────
-  if (/\b(orb|breakout|opening.?range|session.*range|range.*session)\b/i.test(m)) {
-    const orb = ctx.orbResult; const ov = ctx.votes[1];
-    const hi = orb.indicators.or_high; const lo = orb.indicators.or_low;
-    return [
-      `ORB-30 Breakout: ${ov.bias.toUpperCase()} bias, ${(ov.met_pct * 100).toFixed(0)}% conditions.`,
-      hi && lo ? `OR range: $${lo.toFixed(0)} – $${hi.toFixed(0)} (${orb.indicators.or_range_pct?.toFixed(2)}% of price).` : "Opening range not established.",
-      `15m EMA20: $${orb.indicators.ema20_15m?.toFixed(0) ?? "—"}.`,
-      ov.signal ? "BREAKOUT SIGNAL ACTIVE." : "Watching for breakout.",
-      `5-year backtest: +94.3% return, 55.3% WR, 2.25:1 R:R, Sharpe 1.74.`,
-    ].join(" ");
-  }
-
-  // ── HFT / order flow ─────────────────────────────────────────────────────
-  if (/\b(hft|order.?flow|order.?book|depth|obi|tfi|microstructure|book)\b/i.test(m)) {
-    const hft = ctx.votes[2];
-    return `HFT Order Flow: ${hft.bias.toUpperCase()}. Real-time Binance depth stream. OBI threshold ±0.18, TFI threshold ±0.12. ${hft.bias !== "neutral" ? `Currently ${hft.bias === "long" ? "bid-heavy — buyers absorbing asks, bullish pressure" : "ask-heavy — sellers dominating, bearish pressure"}.` : "Book is balanced — no microstructure edge either way."} Supplementary signal — highest weight on Momentum + ORB.`;
-  }
-
-  // ── Regime ───────────────────────────────────────────────────────────────
-  if (/\b(regime|trending|ranging|volatile|market.*type|volatility)\b/i.test(m)) {
-    const desc: Record<string, string> = {
-      TRENDING: "Strong directional move — momentum has highest edge. Let winners run, trail stops.",
-      RANGING:  "Oscillating market — HFT mean-reversion favored. Take profit quickly, tighter stops.",
-      VOLATILE: "High volatility — cut size 50%, widen stops, priority is capital preservation.",
-      UNKNOWN:  "Insufficient data to classify. Treating as neutral — standard sizing, wait for clarity.",
-    };
-    return `Regime: ${ctx.regime}. ${desc[ctx.regime]} ${ctx.atrPct ? `ATR: ${(ctx.atrPct * 100).toFixed(2)}% of price.` : ""}`;
-  }
-
-  // ── Conviction / grade ───────────────────────────────────────────────────
-  if (/\b(conviction|grade|confidence|edge|signal.*strength|how strong)\b/i.test(m)) {
-    const gDesc: Record<ConvictionGrade, string> = {
-      "A+": "ULTRA HIGH (85+) — 3/3 consensus, all conditions met. Full size.",
-      "A":  "HIGH (70–84) — strong confluence. 75% size.",
-      "B":  "MODERATE (55–69) — partial setup. 50% size.",
-      "C":  "LOW (40–54) — monitor only, no entry.",
-      "X":  "NO TRADE (<40) — insufficient edge. Capital flat.",
-    };
-    return `Grade ${g}: ${gDesc[g]} Conviction: ${conv}/100. ${aligned}/3 strategies ${dir !== "FLAT" ? `aligned ${dir}` : "disagreeing (FLAT)"}. Threshold: 55+ to generate a signal.`;
-  }
-
-  // ── Risk / sizing ────────────────────────────────────────────────────────
-  if (/\b(risk|size|sizing|position.*size|kelly|how.*much|allocation|capital)\b/i.test(m)) {
-    if (sig) return `Size: ${sig.size_pct}% of account (fractional Kelly). $10K → $${(10000 * sig.size_pct / 100).toFixed(0)} per trade. Max risk per trade: 2%. Daily drawdown gate: pause at −5%. Grade ${g} = ${g === "A+" ? "100%" : g === "A" ? "75%" : g === "B" ? "50%" : "25%"} of standard allocation.`;
-    return `No signal yet. Standard sizing: 25% fractional Kelly, scaled by conviction. Max 2% risk per trade. Daily −5% gate halts trading. Right now: flat (${conv}/100 conviction — below 55 threshold).`;
-  }
-
-  // ── Paper trade stats ────────────────────────────────────────────────────
-  if (/\b(paper|pnl|p&l|profit.*loss|how.*doing|stats|portfolio|position.*open|open.*position)\b/i.test(m)) {
+  // Paper stats question with no signal
+  if (/paper|stats|pnl|p&l|how.*doing/i.test(userMsg.toLowerCase())) {
     const st = ctx.paperStats; const pos = ctx.paperPos;
-    let r = `Paper stats: ${st.total_trades} trades · ${st.wins}W/${st.losses}L · ${st.win_rate.toFixed(1)}% WR · ${st.total_pnl >= 0 ? "+" : ""}$${st.total_pnl.toFixed(2)} total P&L.`;
-    if (pos?.open) r += ` Open ${pos.direction} @ $${pos.entry?.toFixed(0)}, unrealized ${(pos.pnl_usd ?? 0) >= 0 ? "+" : ""}$${(pos.pnl_usd ?? 0).toFixed(2)}.`;
-    else           r += " No open position.";
-    return r;
+    const posLine = pos?.open
+      ? `Open ${pos.direction} @ $${pos.entry?.toFixed(0)} · unrealized ${(pos.pnl_usd ?? 0) >= 0 ? "+" : ""}$${(pos.pnl_usd ?? 0).toFixed(2)}`
+      : "No open position";
+    return `Paper account: ${st.total_trades} trades · ${st.wins}W/${st.losses}L · ${st.total_pnl >= 0 ? "+" : ""}$${st.total_pnl.toFixed(2)} P&L\n${posLine}\n\nNo active signal — conviction ${conv}/100`;
   }
 
-  // ── BTC price ────────────────────────────────────────────────────────────
-  if (/\b(btc|bitcoin|price|how.*market|market.*price|how.*bitcoin)\b/i.test(m)) {
-    const chg = ctx.ticker?.change_pct;
-    return [
-      `BTC: ${pStr} ${chg != null ? `(${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% 24h)` : ""}`,
-      ctx.ema50v ? `EMA50: $${ctx.ema50v.toFixed(0)} — price ${p && p > ctx.ema50v ? "above (bullish)" : "below (bearish)"}` : "",
-      ctx.ema21v ? `EMA21: $${ctx.ema21v.toFixed(0)}` : "",
-      `Regime: ${ctx.regime}`,
-    ].filter(Boolean).join(" · ");
-  }
-
-  // ── Wait / patience ──────────────────────────────────────────────────────
-  if (/\b(wait|patient|patience|sit.*out|hold.*off|not.*trade|no.*trade)\b/i.test(m)) {
-    if (conv < 55) return `Correct call. Conviction ${conv}/100 — staying flat. The best traders sit on their hands 90% of the time. When the setup is perfect, it's obvious. This one isn't there yet.`;
-    return `If you're unsure, trust your risk limits. Grade ${g} setup at ${conv}/100. ${sig ? "Signal is active but sizing is always your call." : "Waiting for signal to fire."} Missing a trade costs nothing. Taking a bad trade costs real money.`;
-  }
-
-  // ── Default / catch-all ──────────────────────────────────────────────────
-  const defaults = [
-    `${ctx.regime} market, ${dir} bias, ${conv}/100 conviction (${g}). ${sig ? `Active ${sig.direction} signal @ $${sig.entry.toFixed(0)}.` : "No signal yet."} Ask me about specific levels, strategies, risk, or regime.`,
-    `Monitoring Momentum 15m (${ctx.votes[0].bias.toUpperCase()}), ORB-30 (${ctx.votes[1].bias.toUpperCase()}), HFT Flow (${ctx.votes[2].bias.toUpperCase()}). ${aligned}/3 aligned ${dir !== "FLAT" ? dir : "(no direction)"}. ${conv >= 55 ? `Grade ${g} setup.` : "Below signal threshold."}`,
-    `BTC ${pStr} · ${ctx.regime} · ${dir} · ${conv}/100. ${sig ? `Signal: ${sig.direction} · Entry $${sig.entry.toFixed(0)} · ${sig.rr} R:R.` : "Scanning…"} What would you like to know about the current setup?`,
-  ];
-  return defaults[Math.floor(Math.random() * defaults.length)];
+  return [
+    `NO SIGNAL  ·  BTC ${pStr}`,
+    `Conviction  ${conv}/100 (${g})  ·  Need +${needed} pts to trigger`,
+    `Momentum    ${mv.bias.toUpperCase()}  ·  ${(mv.met_pct * 100).toFixed(0)}% conditions`,
+    `ORB-30      ${orb.bias.toUpperCase()}  ·  ${(orb.met_pct * 100).toFixed(0)}% conditions`,
+    `HFT Flow    ${hft.bias.toUpperCase()}`,
+    `${aligned}/3 strategies aligned${dir !== "FLAT" ? ` (${dir})` : " (diverging)"}  ·  Watching…`,
+  ].join("\n");
 }
 
 // ─── Main hook ────────────────────────────────────────────────────────────────
@@ -649,25 +474,26 @@ export function useMasterAgent(
   const generateThought = useCallback(() => {
     const ts  = new Date().toLocaleTimeString();
     const thought = buildThought({
-      price:     core.price,
-      ema50:     core.ema50v,
-      ema21:     core.ema21v,
-      atrPct:    core.atrPct,
-      votes:     core.votes,
-      orb:       orbResult,
-      regime:    core.regime,
-      ob:        orderBook,
-      direction: core.direction,
+      price:      core.price,
+      ema50:      core.ema50v,
+      ema21:      core.ema21v,
+      atrPct:     core.atrPct,
+      votes:      core.votes,
+      orb:        orbResult,
+      regime:     core.regime,
+      ob:         orderBook,
+      direction:  core.direction,
       conviction: core.conviction,
-      grade:     core.grade,
+      grade:      core.grade,
       candles15m,
       ticker,
+      signal:     core.signal,
     }, ts);
     setThoughts(prev => [thought, ...prev].slice(0, 30));
     // Push into chat feed as an auto-thought
     setChat(prev => [
       ...prev,
-      { id: ++chatMsgId.current, role: "agent" as const, content: thought.replace(/^\[\d{1,2}:\d{2}:\d{2}( [AP]M)?\] /, ""), timestamp: ts, type: "auto" as const },
+      { id: ++chatMsgId.current, role: "agent" as const, content: thought, timestamp: ts, type: "auto" as const },
     ].slice(-80));
   }, [core, orbResult, orderBook, candles15m, ticker]);
 
