@@ -210,6 +210,23 @@
   animation: slideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* ─── Premium glow animations ────────────────────────────────────────────────── */
+@keyframes glow-green {
+  0%, 100% { box-shadow: 0 0 8px rgba(34,197,94,0.2); }
+  50%       { box-shadow: 0 0 20px rgba(34,197,94,0.4); }
+}
+@keyframes glow-blue {
+  0%, 100% { box-shadow: 0 0 8px rgba(10,132,255,0.2); }
+  50%       { box-shadow: 0 0 20px rgba(10,132,255,0.4); }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up { animation: fade-up 0.3s cubic-bezier(0.16,1,0.3,1) forwards; }
+.animate-glow-green { animation: glow-green 2s ease infinite; }
+.animate-glow-blue  { animation: glow-blue  2s ease infinite; }
+
 /* ─── Wallet Adapter overrides ───────────────────────────────────────────────── */
 .wallet-adapter-button {
   background: rgba(124, 58, 237, 0.15) !important;

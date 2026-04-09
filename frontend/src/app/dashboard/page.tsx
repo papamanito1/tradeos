@@ -214,71 +214,72 @@ function StrategyChart({
 // ─── Analysis Panel (pure frontend, no backend) ───────────────────────────────
 function AnalysisPanel({ result, candleCount }: { result: StrategyResult; candleCount: number }) {
   const { conditions, indicators, bias, met_count, total, all_met } = result;
-  const biasCls = bias === "long" ? "text-green-400" : bias === "short" ? "text-red-400" : "text-neutral-500";
+  const isLong  = bias === "long";
+  const isShort = bias === "short";
+  const biasColor = isLong ? "#22c55e" : isShort ? "#ef4444" : "#4b5563";
 
   if (candleCount < 60) return (
-    <div className="flex flex-col items-center justify-center h-48 gap-2 text-neutral-700">
-      <RefreshCw size={14} className="animate-spin" />
-      <span className="text-xs">Loading candles… ({candleCount}/60)</span>
+    <div className="flex flex-col items-center justify-center h-48 gap-3 text-neutral-700">
+      <div className="w-8 h-8 rounded-full border border-neutral-800 flex items-center justify-center">
+        <RefreshCw size={13} className="animate-spin text-neutral-600" />
+      </div>
+      <div className="text-center">
+        <div className="text-[11px] text-neutral-600">Loading candles</div>
+        <div className="text-[9px] text-neutral-800 mt-0.5">{candleCount}/60 bars</div>
+      </div>
     </div>
   );
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-[9px] text-neutral-600 uppercase tracking-wider mb-0.5">Bias</div>
-          <div className={`text-sm font-bold uppercase ${biasCls}`}>
-            {bias === "long" ? "▲ BULLISH" : bias === "short" ? "▼ BEARISH" : "— NEUTRAL"}
-          </div>
+      {/* Bias header */}
+      <div className="rounded-xl px-3 py-2.5" style={{ background: `${biasColor}0d`, border: `1px solid ${biasColor}28` }}>
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] font-bold" style={{ color: biasColor }}>
+            {isLong ? "▲ BULLISH" : isShort ? "▼ BEARISH" : "— NEUTRAL"}
+          </span>
+          <span className="text-[10px] font-mono font-bold" style={{ color: biasColor }}>{met_count}<span className="text-neutral-700 font-normal">/{total}</span></span>
         </div>
-        <div className="text-right">
-          <div className="text-[9px] text-neutral-600 mb-0.5">Conditions</div>
-          <div className="flex items-center gap-1 justify-end">
-            <span className={`text-xl font-bold ${all_met ? "text-green-400" : "text-neutral-300"}`}>{met_count}</span>
-            <span className="text-neutral-600 text-sm">/ {total}</span>
-          </div>
+        <div className="flex gap-0.5 h-1 mt-2">
+          {Array.from({ length: total ?? 7 }).map((_, i) => (
+            <div key={i} className="flex-1 rounded-full transition-all duration-500"
+              style={{ background: i < met_count ? biasColor : "#1a1a2e" }} />
+          ))}
         </div>
       </div>
 
-      <div className="flex gap-0.5 h-1">
-        {Array.from({ length: 7 }).map((_, i) => (
-          <div key={i} className="flex-1 rounded-full" style={{ background: i < met_count ? "#22c55e" : "#1e1e2e" }} />
-        ))}
-      </div>
-
+      {/* Conditions */}
       <div className="space-y-1">
         {conditions.map((c, i) => (
-          <div key={i} className="flex items-center gap-2">
-            {c.met
-              ? <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" />
-              : <XCircle     size={11} className="text-neutral-700 flex-shrink-0" />}
-            <span className={`text-[10px] flex-1 ${c.met ? "text-neutral-300" : "text-neutral-600"}`}>{c.name}</span>
-            <span className={`text-[9px] font-mono ${c.met ? "text-green-400" : "text-neutral-700"}`}>{c.value}</span>
+          <div key={i} className="flex items-center gap-2 py-0.5">
+            <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${c.met ? "bg-green-500/15" : "bg-neutral-800"}`}>
+              {c.met ? <CheckCircle2 size={9} className="text-green-400" /> : <XCircle size={9} className="text-neutral-700" />}
+            </div>
+            <span className={`text-[9px] flex-1 leading-tight ${c.met ? "text-neutral-300" : "text-neutral-700"}`}>{c.name}</span>
+            <span className={`text-[8px] font-mono ${c.met ? "text-green-400" : "text-neutral-800"}`}>{c.value}</span>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-3 gap-x-3 gap-y-1 pt-2 border-t border-neutral-800">
+      {/* Indicator grid */}
+      <div className="rounded-xl p-2.5 grid grid-cols-2 gap-1.5" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
         {[
-          ["RSI",    indicators.rsi       != null ? indicators.rsi.toFixed(1)              : "—"],
-          ["Vol×",   indicators.vol_ratio != null ? indicators.vol_ratio.toFixed(2) + "×"  : "—"],
-          ["ATR%",   indicators.atr_pct   != null ? indicators.atr_pct.toFixed(3) + "%"    : "—"],
-          ["EMA50",  indicators.ema50     != null ? formatUSD(indicators.ema50)            : "—"],
-          ["EMA21",  indicators.ema21     != null ? formatUSD(indicators.ema21)            : "—"],
-          ["VWAP",   indicators.vwap      != null ? formatUSD(indicators.vwap)             : "—"],
+          ["RSI",   indicators.rsi       != null ? indicators.rsi.toFixed(1)             : "—"],
+          ["Vol×",  indicators.vol_ratio != null ? indicators.vol_ratio.toFixed(2) + "×" : "—"],
+          ["EMA50", indicators.ema50     != null ? formatUSD(indicators.ema50)           : "—"],
+          ["VWAP",  indicators.vwap      != null ? formatUSD(indicators.vwap)            : "—"],
         ].map(([k, v]) => (
-          <div key={k} className="flex justify-between items-center">
-            <span className="text-[9px] text-neutral-700">{k}</span>
+          <div key={k} className="flex items-center justify-between">
+            <span className="text-[8px] text-neutral-700">{k}</span>
             <span className="text-[9px] font-mono text-neutral-500">{v}</span>
           </div>
         ))}
       </div>
 
       {all_met && (
-        <div className="flex items-center gap-1.5 p-2 rounded border border-green-500/30 bg-green-500/5">
+        <div className="flex items-center gap-2 px-2.5 py-2 rounded-xl" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
           <Zap size={10} className="text-green-400" />
-          <span className="text-[10px] text-green-400 font-semibold">All conditions met — trade imminent</span>
+          <span className="text-[9px] text-green-400 font-semibold">All conditions met</span>
         </div>
       )}
     </div>
@@ -289,95 +290,87 @@ function AnalysisPanel({ result, candleCount }: { result: StrategyResult; candle
 function LiveAgentSignal({ result }: { result: StrategyResult }) {
   const { signal, bias, met_count, total } = result;
   const isLong = signal?.direction === "long";
+  const isShort = signal?.direction === "short";
+  const biasColor = bias === "long" ? "#22c55e" : bias === "short" ? "#ef4444" : "#374151";
 
   if (!signal) {
     return (
-      <div className="card p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-2 h-2 rounded-full bg-neutral-700 animate-pulse" />
-          <span className="text-[12px] font-semibold text-white">Live Agent</span>
-          <span className="text-[9px] text-neutral-700 ml-auto flex items-center gap-1">
-            <RefreshCw size={9} /> live · every bar
-          </span>
+      <div className="rounded-2xl p-4 flex items-center gap-4" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+          style={{ background: `${biasColor}15`, border: `1px solid ${biasColor}30` }}>
+          {bias === "long" ? <TrendingUp size={18} style={{ color: biasColor }} />
+           : bias === "short" ? <TrendingDown size={18} style={{ color: biasColor }} />
+           : <Activity size={18} className="text-neutral-600" />}
         </div>
-        <div className="flex items-center gap-3 py-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${bias === "long" ? "bg-green-500/10" : bias === "short" ? "bg-red-500/10" : "bg-neutral-800"}`}>
-            {bias === "long" ? <TrendingUp size={18} className="text-green-400" /> : bias === "short" ? <TrendingDown size={18} className="text-red-400" /> : <Activity size={18} className="text-neutral-600" />}
-          </div>
-          <div>
-            <div className={`text-sm font-bold ${bias === "long" ? "text-green-400" : bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[11px] font-bold" style={{ color: biasColor }}>
               {bias === "long" ? "▲ BULLISH BIAS" : bias === "short" ? "▼ BEARISH BIAS" : "SCANNING MARKET"}
-            </div>
-            <div className="text-[10px] text-neutral-600 mt-0.5">{met_count}/{total} conditions met · waiting for full setup</div>
+            </span>
+            <span className="flex items-center gap-1 text-[8px] text-neutral-700 ml-auto">
+              <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />live · 15m bar
+            </span>
           </div>
+          <div className="flex gap-0.5 h-1 mb-1">
+            {Array.from({ length: total || 7 }).map((_, i) => (
+              <div key={i} className="flex-1 rounded-full transition-all duration-300"
+                style={{ background: i < met_count ? biasColor : "#1a1a2e" }} />
+            ))}
+          </div>
+          <div className="text-[9px] text-neutral-700">{met_count}/{total} conditions met · waiting for signal</div>
         </div>
-        <div className="flex gap-0.5 h-1 mt-1">
-          {Array.from({ length: total || 7 }).map((_, i) => (
-            <div key={i} className="flex-1 rounded-full" style={{ background: i < met_count ? (bias === "long" ? "#22c55e" : "#ef4444") : "#1e1e2e" }} />
-          ))}
+        <div className="text-center flex-shrink-0 hidden lg:block">
+          <div className="text-[8px] text-neutral-700">MOMENTUM 15m</div>
+          <div className="text-[20px] font-bold font-mono" style={{ color: biasColor }}>{met_count}</div>
+          <div className="text-[8px] text-neutral-700">/{total}</div>
         </div>
-        <div className="text-[9px] text-neutral-700 mt-2 text-center">Signal fires when all 7 conditions align</div>
       </div>
     );
   }
 
+  const glowColor = isLong ? "34,197,94" : "239,68,68";
   return (
-    <div className={`card p-4 border ${isLong ? "border-green-500/20" : "border-red-500/20"}`}
-      style={{ background: isLong ? "rgba(34,197,94,0.03)" : "rgba(239,68,68,0.03)" }}>
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-2 h-2 rounded-full animate-ping" style={{ background: isLong ? "#22c55e" : "#ef4444" }} />
-        <span className="text-[12px] font-semibold text-white">Live Agent</span>
-        <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ml-auto ${isLong ? "border-green-500/30 bg-green-500/10 text-green-400" : "border-red-500/30 bg-red-500/10 text-red-400"}`}>
-          SIGNAL ACTIVE
-        </span>
-      </div>
-
-      {/* Direction */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isLong ? "bg-green-500/15" : "bg-red-500/15"}`}>
-          {isLong ? <ArrowUpRight size={22} className="text-green-400" /> : <ArrowDownRight size={22} className="text-red-400" />}
-        </div>
-        <div>
-          <div className={`text-xl font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
-            {isLong ? "LONG BTC" : "SHORT BTC"}
+    <div className="rounded-2xl p-4" style={{
+      background: isLong ? "rgba(34,197,94,0.04)" : "rgba(239,68,68,0.04)",
+      border: `1px solid rgba(${glowColor},0.2)`,
+      boxShadow: `0 0 30px rgba(${glowColor},0.08)`,
+    }}>
+      <div className="flex items-center gap-4">
+        {/* Big direction badge */}
+        <div className="flex flex-col items-center flex-shrink-0">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center"
+            style={{ background: `rgba(${glowColor},0.12)`, border: `1px solid rgba(${glowColor},0.25)` }}>
+            {isLong ? <ArrowUpRight size={26} style={{ color: `rgb(${glowColor})` }} /> : <ArrowDownRight size={26} style={{ color: `rgb(${glowColor})` }} />}
           </div>
-          <div className="text-[10px] text-neutral-500">BTC/USDT · 15m · Momentum Velocity</div>
+          <div className="text-[8px] mt-1 font-mono" style={{ color: `rgba(${glowColor},0.7)` }}>MV 15m</div>
         </div>
-        <div className="ml-auto text-right">
-          <div className="text-[9px] text-neutral-600">Confidence</div>
-          <div className="text-lg font-bold text-yellow-400">{(signal.confidence * 100).toFixed(0)}%</div>
-        </div>
-      </div>
 
-      {/* Levels */}
-      <div className="grid grid-cols-3 gap-2 mb-3">
-        <div className="bg-blue-500/5 border border-blue-500/15 rounded-lg p-2.5 text-center">
-          <div className="text-[9px] text-blue-400/70 mb-0.5">Entry</div>
-          <div className="text-[12px] font-mono font-bold text-blue-300">{formatUSD(signal.entry)}</div>
+        {/* Direction + details */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-[16px] font-bold" style={{ color: `rgb(${glowColor})` }}>
+              {isLong ? "LONG" : "SHORT"} BTC
+            </span>
+            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full animate-pulse"
+              style={{ background: `rgba(${glowColor},0.12)`, border: `1px solid rgba(${glowColor},0.3)`, color: `rgb(${glowColor})` }}>
+              SIGNAL ACTIVE
+            </span>
+            <span className="text-[9px] text-neutral-500 ml-auto font-mono">{(signal.confidence * 100).toFixed(0)}% conf</span>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              ["Entry",       formatUSD(signal.entry),                      "text-white"],
+              ["Stop Loss",   formatUSD(signal.sl),                         "text-red-400"],
+              ["Take Profit", formatUSD(signal.tp),                         "text-green-400"],
+              ["R:R",         signal.rr,                                    "text-yellow-400"],
+            ].map(([l, v, cls]) => (
+              <div key={l} className="rounded-xl p-2 text-center" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                <div className="text-[8px] text-neutral-600 mb-0.5">{l}</div>
+                <div className={`text-[10px] font-mono font-bold ${cls}`}>{v}</div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="bg-red-500/5 border border-red-500/15 rounded-lg p-2.5 text-center">
-          <div className="text-[9px] text-red-400/70 mb-0.5">Stop Loss</div>
-          <div className="text-[12px] font-mono font-bold text-red-400">{formatUSD(signal.sl)}</div>
-          <div className="text-[8px] text-red-400/50">{isLong ? "-" : "+"}{formatUSD(Math.abs(signal.sl - signal.entry))}</div>
-        </div>
-        <div className="bg-green-500/5 border border-green-500/15 rounded-lg p-2.5 text-center">
-          <div className="text-[9px] text-green-400/70 mb-0.5">Take Profit</div>
-          <div className="text-[12px] font-mono font-bold text-green-400">{formatUSD(signal.tp)}</div>
-          <div className="text-[8px] text-green-400/50">{isLong ? "+" : "-"}{formatUSD(Math.abs(signal.tp - signal.entry))}</div>
-        </div>
-      </div>
-
-      {/* R:R */}
-      <div className="flex items-center gap-2 mb-3">
-        <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-red-400 to-green-400" style={{ width: "67%" }} />
-        </div>
-        <span className="text-[9px] font-mono text-yellow-400 font-bold">R:R {signal.rr}</span>
-      </div>
-
-      {/* Reasoning */}
-      <div className="text-[9px] text-neutral-600 leading-relaxed italic bg-neutral-900 rounded-lg p-2">
-        {signal.reasoning}
       </div>
     </div>
   );
@@ -392,86 +385,94 @@ function BTCMarketPanel({ ticker, orderBook }: { ticker: BinanceTicker | null; o
     if (prevRef.current !== null && ticker.last !== prevRef.current)
       setFlash(ticker.last > prevRef.current ? "up" : "down");
     prevRef.current = ticker.last;
-    const t = setTimeout(() => setFlash(null), 500);
+    const t = setTimeout(() => setFlash(null), 400);
     return () => clearTimeout(t);
   }, [ticker?.last]);
 
+  const isUp = (ticker?.change_pct ?? 0) >= 0;
+
   return (
     <div className="space-y-3">
-      {/* Price */}
-      <div>
-        <div className="flex items-end gap-3">
-          <span className="text-2xl font-mono font-bold transition-colors duration-300"
-            style={{ color: flash === "up" ? "#22c55e" : flash === "down" ? "#ef4444" : "#f0f0f8" }}>
+      {/* Price header */}
+      <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[9px] text-neutral-600 font-medium uppercase tracking-wider">BTC · USDT</span>
+          <span className="flex items-center gap-1 text-[8px] text-green-400">
+            <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />LIVE
+          </span>
+        </div>
+        <div className="flex items-end gap-2">
+          <span className="text-[22px] font-mono font-bold transition-colors duration-200"
+            style={{ color: flash === "up" ? "#22c55e" : flash === "down" ? "#ef4444" : "#f5f5fa" }}>
             {ticker ? formatUSD(ticker.last) : "—"}
           </span>
           {ticker && (
-            <span className={`text-sm font-semibold mb-0.5 ${ticker.change_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-              {ticker.change_pct >= 0 ? "+" : ""}{ticker.change_pct.toFixed(2)}%
+            <span className={`text-[12px] font-bold mb-0.5 px-1.5 py-0.5 rounded ${isUp ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"}`}>
+              {isUp ? "+" : ""}{ticker.change_pct.toFixed(2)}%
             </span>
           )}
         </div>
-        <div className="text-[10px] text-neutral-600 mt-0.5">Bitcoin · USDT Pair</div>
+        <div className="flex gap-3 mt-1.5 text-[9px] font-mono">
+          <span className="text-green-400">H {ticker ? formatUSD(ticker.high_24h) : "—"}</span>
+          <span className="text-red-400">L {ticker ? formatUSD(ticker.low_24h) : "—"}</span>
+          <span className="text-neutral-600 ml-auto">Vol {ticker ? `${(ticker.volume / 1000).toFixed(1)}K` : "—"}</span>
+        </div>
       </div>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-2">
-        {[
-          ["24h High",   ticker ? formatUSD(ticker.high_24h)    : "—", "text-green-400"],
-          ["24h Low",    ticker ? formatUSD(ticker.low_24h)     : "—", "text-red-400"],
-          ["Bid",        ticker ? formatUSD(ticker.bid)         : "—", "text-neutral-300"],
-          ["Ask",        ticker ? formatUSD(ticker.ask)         : "—", "text-neutral-300"],
-          ["Volume",     ticker ? `${(ticker.volume / 1000).toFixed(1)}K BTC` : "—", "text-neutral-400"],
-          ["Quote Vol",  ticker ? `$${(ticker.quote_volume / 1_000_000).toFixed(0)}M` : "—", "text-neutral-400"],
-        ].map(([label, val, cls]) => (
-          <div key={label} className="bg-neutral-900/60 rounded-lg p-2">
-            <div className="text-[9px] text-neutral-600 mb-0.5">{label}</div>
-            <div className={`text-[11px] font-mono font-semibold ${cls}`}>{val}</div>
+      {/* Bid / Ask */}
+      {ticker && (
+        <div className="grid grid-cols-2 gap-1.5">
+          <div className="rounded-xl p-2.5 text-center" style={{ background: "rgba(34,197,94,0.05)", border: "1px solid rgba(34,197,94,0.12)" }}>
+            <div className="text-[8px] text-green-400/70 mb-0.5">BID</div>
+            <div className="text-[11px] font-mono font-bold text-green-400">{formatUSD(ticker.bid)}</div>
           </div>
-        ))}
-      </div>
+          <div className="rounded-xl p-2.5 text-center" style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.12)" }}>
+            <div className="text-[8px] text-red-400/70 mb-0.5">ASK</div>
+            <div className="text-[11px] font-mono font-bold text-red-400">{formatUSD(ticker.ask)}</div>
+          </div>
+        </div>
+      )}
 
       {/* Order Book */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-1.5">
-            <BookOpen size={11} className="text-neutral-600" />
-            <span className="text-[10px] text-neutral-500 uppercase tracking-wider font-medium">Order Book</span>
+            <BookOpen size={10} className="text-neutral-600" />
+            <span className="text-[10px] text-neutral-500 font-semibold">Order Book</span>
           </div>
           {orderBook && (
-            <span className="text-[9px] text-green-400 flex items-center gap-1">
-              <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />100ms
+            <span className="text-[8px] text-neutral-700 flex items-center gap-1">
+              <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />100ms depth
             </span>
           )}
         </div>
 
         {!orderBook ? (
-          <div className="text-center py-4 text-[11px] text-neutral-700">Connecting…</div>
+          <div className="text-center py-4 text-[10px] text-neutral-700 flex items-center justify-center gap-2">
+            <RefreshCw size={10} className="animate-spin" />Connecting…
+          </div>
         ) : (() => {
-          const asks = orderBook.asks.slice(0, 8);
-          const bids = orderBook.bids.slice(0, 8);
+          const asks = orderBook.asks.slice(0, 7);
+          const bids = orderBook.bids.slice(0, 7);
           const maxSz = Math.max(...asks.map(a => a.amount), ...bids.map(b => b.amount)) || 1;
           const spread = asks.length && bids.length ? asks[0].price - bids[0].price : 0;
           return (
             <div className="space-y-px">
-              <div className="flex justify-between text-[9px] text-neutral-700 font-mono px-1 mb-1">
-                <span>Price</span><span>Size</span>
-              </div>
               {[...asks].reverse().map((a, i) => (
-                <div key={i} className="relative flex justify-between text-[10px] font-mono h-5 items-center overflow-hidden rounded-sm">
-                  <div className="absolute right-0 top-0 bottom-0 bg-red-500/10" style={{ width: `${(a.amount / maxSz) * 100}%` }} />
+                <div key={i} className="relative flex justify-between text-[9px] font-mono h-5 items-center overflow-hidden rounded">
+                  <div className="absolute right-0 top-0 bottom-0 rounded" style={{ width: `${(a.amount / maxSz) * 100}%`, background: "rgba(239,68,68,0.1)" }} />
                   <span className="relative text-red-400 pl-1">{formatUSD(a.price)}</span>
-                  <span className="relative text-neutral-500 pr-1">{a.amount.toFixed(3)}</span>
+                  <span className="relative text-neutral-600 pr-1">{a.amount.toFixed(3)}</span>
                 </div>
               ))}
-              <div className="py-0.5 text-center text-[9px] text-neutral-600 border-y border-neutral-800 font-mono my-0.5">
-                Spread {formatUSD(spread)} · {bids.length ? ((spread / bids[0].price) * 100).toFixed(3) : "0"}%
+              <div className="py-1 text-center text-[8px] text-neutral-700 font-mono border-y border-neutral-800/80">
+                spread {formatUSD(spread)}
               </div>
               {bids.map((b, i) => (
-                <div key={i} className="relative flex justify-between text-[10px] font-mono h-5 items-center overflow-hidden rounded-sm">
-                  <div className="absolute left-0 top-0 bottom-0 bg-green-500/10" style={{ width: `${(b.amount / maxSz) * 100}%` }} />
+                <div key={i} className="relative flex justify-between text-[9px] font-mono h-5 items-center overflow-hidden rounded">
+                  <div className="absolute left-0 top-0 bottom-0 rounded" style={{ width: `${(b.amount / maxSz) * 100}%`, background: "rgba(34,197,94,0.1)" }} />
                   <span className="relative text-green-400 pl-1">{formatUSD(b.price)}</span>
-                  <span className="relative text-neutral-500 pr-1">{b.amount.toFixed(3)}</span>
+                  <span className="relative text-neutral-600 pr-1">{b.amount.toFixed(3)}</span>
                 </div>
               ))}
             </div>
@@ -549,70 +550,73 @@ function AgentCard({
   const isLong  = result.bias === "long";
   const isShort = result.bias === "short";
 
-  const biasColor = isLong ? "#22c55e" : isShort ? "#ef4444" : "#4b5563";
-  const biasBg    = isLong ? "rgba(34,197,94,.07)" : isShort ? "rgba(239,68,68,.07)" : "rgba(255,255,255,.02)";
-  const biasBdr   = isLong ? "rgba(34,197,94,.18)" : isShort ? "rgba(239,68,68,.18)" : "rgba(255,255,255,.06)";
+  const biasRgb   = isLong ? "34,197,94" : isShort ? "239,68,68" : "55,65,81";
+  const biasColor = isLong ? "#22c55e"   : isShort ? "#ef4444"   : "#4b5563";
 
   return (
-    <div className="card p-4 flex flex-col gap-3" style={{ minHeight: 210 }}>
+    <div className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{ background: "rgba(255,255,255,0.025)", border: `1px solid rgba(${biasRgb},0.12)`, boxShadow: `0 0 20px rgba(${biasRgb},0.04)` }}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(10,132,255,.12)", border: "1px solid rgba(10,132,255,.2)" }}>
-            <Bot size={13} style={{ color: "#60aaff" }} />
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "rgba(10,132,255,0.1)", border: "1px solid rgba(10,132,255,0.18)" }}>
+            <Bot size={14} style={{ color: "#60aaff" }} />
           </div>
           <div>
-            <div className="text-[12px] font-semibold text-white leading-none">{name}</div>
-            <div className="text-[9px] text-neutral-700 mt-0.5">{strategy} · {timeframe}</div>
+            <div className="text-[12px] font-bold text-white leading-none">{name}</div>
+            <div className="text-[8px] text-neutral-600 mt-0.5">{strategy} · {timeframe}</div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: isReady ? "rgba(34,197,94,0.08)" : "rgba(245,158,11,0.08)", border: isReady ? "1px solid rgba(34,197,94,0.2)" : "1px solid rgba(245,158,11,0.2)" }}>
           <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: isReady ? "#22c55e" : "#f59e0b" }} />
-          <span className="text-[9px]" style={{ color: isReady ? "#22c55e" : "#f59e0b" }}>
+          <span className="text-[8px] font-bold" style={{ color: isReady ? "#22c55e" : "#f59e0b" }}>
             {isReady ? "SCANNING" : `${candleCount}/60`}
           </span>
         </div>
       </div>
 
-      {/* Bias pill */}
-      <div className="flex items-center justify-between rounded-xl px-3 py-2"
-        style={{ background: biasBg, border: `1px solid ${biasBdr}` }}>
-        <span className="text-[11px] font-bold" style={{ color: biasColor }}>
-          {isLong ? "▲ BULLISH" : isShort ? "▼ BEARISH" : "— NEUTRAL"}
-        </span>
-        <span className="text-[10px] text-neutral-600">{result.met_count}/{result.total ?? 7} conditions</span>
-      </div>
-
-      {/* Conditions mini bar */}
-      <div className="flex gap-0.5 h-1">
-        {Array.from({ length: result.total ?? 7 }).map((_, i) => (
-          <div key={i} className="flex-1 rounded-full transition-all duration-300"
-            style={{ background: i < result.met_count ? biasColor : "#1e1e2e" }} />
-        ))}
+      {/* Bias */}
+      <div className="rounded-xl px-3 py-2.5" style={{ background: `rgba(${biasRgb},0.06)`, border: `1px solid rgba(${biasRgb},0.15)` }}>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px] font-bold" style={{ color: biasColor }}>
+            {isLong ? "▲ BULLISH" : isShort ? "▼ BEARISH" : "— NEUTRAL"}
+          </span>
+          <span className="text-[9px] font-mono text-neutral-600">{result.met_count}/{result.total ?? 7}</span>
+        </div>
+        <div className="flex gap-0.5 h-1">
+          {Array.from({ length: result.total ?? 7 }).map((_, i) => (
+            <div key={i} className="flex-1 rounded-full transition-all duration-500"
+              style={{ background: i < result.met_count ? biasColor : "#111120" }} />
+          ))}
+        </div>
       </div>
 
       {/* Signal card or waiting */}
       {sig ? (
-        <div className="rounded-xl p-3 space-y-1.5"
-          style={{ background: sig.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)", border: `1px solid ${sig.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}` }}>
+        <div className="rounded-xl p-3 space-y-2"
+          style={{ background: sig.direction === "long" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${sig.direction === "long" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}` }}>
           <div className="flex items-center justify-between">
             <span className={`text-[10px] font-bold ${sig.direction === "long" ? "text-green-400" : "text-red-400"}`}>
               {sig.direction === "long" ? "▲ LONG" : "▼ SHORT"} SIGNAL
             </span>
-            <span className="text-[9px] font-mono text-neutral-500">{(sig.confidence * 100).toFixed(0)}% conf</span>
+            <span className="text-[8px] font-mono text-neutral-600">{(sig.confidence * 100).toFixed(0)}%</span>
           </div>
-          <div className="grid grid-cols-3 gap-1 text-[9px] font-mono">
-            <div><span className="text-neutral-700">Entry</span><br /><span className="text-white">{formatUSD(sig.entry)}</span></div>
-            <div><span className="text-red-400">SL</span><br /><span className="text-red-300">{formatUSD(sig.sl)}</span></div>
-            <div><span className="text-green-400">TP</span><br /><span className="text-green-300">{formatUSD(sig.tp)}</span></div>
+          <div className="grid grid-cols-3 gap-1">
+            {[["Entry","text-white",formatUSD(sig.entry)],["SL","text-red-400",formatUSD(sig.sl)],["TP","text-green-400",formatUSD(sig.tp)]].map(([l,c,v]) => (
+              <div key={l} className="text-center rounded-lg py-1" style={{ background: "rgba(0,0,0,0.2)" }}>
+                <div className="text-[7px] text-neutral-700">{l}</div>
+                <div className={`text-[9px] font-mono font-bold ${c}`}>{v}</div>
+              </div>
+            ))}
           </div>
-          {sig.rr && <div className="text-[9px] text-neutral-600">R:R {sig.rr}</div>}
+          {sig.rr && <div className="text-[8px] text-neutral-600">R:R {sig.rr}</div>}
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-center">
+        <div className="flex-1 flex items-center justify-center text-center py-2">
           <div>
-            <div className="text-[10px] text-neutral-700">Monitoring market…</div>
-            {ticker && <div className="text-[11px] font-mono text-neutral-500 mt-0.5">{formatUSD(ticker.last)}</div>}
+            <Activity size={14} className="text-neutral-800 mx-auto mb-1" />
+            <div className="text-[9px] text-neutral-700">Monitoring market…</div>
+            {ticker && <div className="text-[10px] font-mono text-neutral-600 mt-0.5">{formatUSD(ticker.last)}</div>}
           </div>
         </div>
       )}
@@ -621,12 +625,12 @@ function AgentCard({
 }
 
 // ─── Master Agent Panel ───────────────────────────────────────────────────────
-const GRADE_META: Record<ConvictionGrade, { color: string; bg: string; border: string; label: string }> = {
-  "A+": { color: "#22c55e", bg: "rgba(34,197,94,0.08)",  border: "rgba(34,197,94,0.25)",  label: "ULTRA HIGH" },
-  "A":  { color: "#0a84ff", bg: "rgba(10,132,255,0.08)", border: "rgba(10,132,255,0.25)", label: "HIGH" },
-  "B":  { color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)", label: "MODERATE" },
-  "C":  { color: "#8b5cf6", bg: "rgba(139,92,246,0.08)", border: "rgba(139,92,246,0.25)", label: "LOW" },
-  "X":  { color: "#4b5563", bg: "rgba(75,85,99,0.06)",   border: "rgba(75,85,99,0.15)",   label: "NO TRADE" },
+const GRADE_META: Record<ConvictionGrade, { color: string; rgb: string; bg: string; border: string; label: string; desc: string }> = {
+  "A+": { color: "#22c55e", rgb: "34,197,94",   bg: "rgba(34,197,94,0.08)",  border: "rgba(34,197,94,0.25)",  label: "A+ ULTRA HIGH", desc: "Execute at full size" },
+  "A":  { color: "#0a84ff", rgb: "10,132,255",  bg: "rgba(10,132,255,0.08)", border: "rgba(10,132,255,0.25)", label: "A  HIGH",        desc: "Execute at 75% size" },
+  "B":  { color: "#f59e0b", rgb: "245,158,11",  bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)", label: "B  MODERATE",    desc: "Scale in at 50%" },
+  "C":  { color: "#8b5cf6", rgb: "139,92,246",  bg: "rgba(139,92,246,0.08)", border: "rgba(139,92,246,0.25)", label: "C  LOW",         desc: "Monitor only" },
+  "X":  { color: "#374151", rgb: "55,65,81",    bg: "rgba(55,65,81,0.06)",   border: "rgba(55,65,81,0.15)",   label: "X  NO TRADE",   desc: "Insufficient edge" },
 };
 
 function MasterAgentPanel({ agent, strategyResult, orbResult }: {
@@ -642,261 +646,270 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
   const gm = GRADE_META[grade];
   const isLong  = direction === "LONG";
   const isShort = direction === "SHORT";
-  const dirColor = isLong ? "#22c55e" : isShort ? "#ef4444" : "#4b5563";
   const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-500";
 
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ background: "#080810", border: "1px solid rgba(255,255,255,0.07)" }}>
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.4)" }}>
+    <div className="rounded-2xl overflow-hidden"
+      style={{ background: "linear-gradient(135deg, #06060f 0%, #080812 100%)", border: `1px solid rgba(${gm.rgb},0.15)`, boxShadow: `0 0 40px rgba(${gm.rgb},0.06)` }}>
+
+      {/* ── TOP HEADER ───────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-5 py-3.5"
+        style={{ borderBottom: `1px solid rgba(${gm.rgb},0.1)`, background: `rgba(${gm.rgb},0.03)` }}>
         <div className="flex items-center gap-3">
-          <div className="relative">
-            <Brain size={20} style={{ color: gm.color }} />
-            {grade !== "X" && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full animate-ping" style={{ background: gm.color, opacity: 0.5 }} />}
-            {grade !== "X" && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: gm.color }} />}
+          {/* Animated brain icon */}
+          <div className="relative w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: `rgba(${gm.rgb},0.12)`, border: `1px solid rgba(${gm.rgb},0.25)` }}>
+            <Brain size={18} style={{ color: gm.color }} />
+            {grade !== "X" && (
+              <>
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full animate-ping" style={{ background: gm.color, opacity: 0.4 }} />
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full" style={{ background: gm.color }} />
+              </>
+            )}
           </div>
           <div>
-            <div className="text-[13px] font-bold text-white tracking-wide flex items-center gap-2">
-              MASTER AGENT
-              <span className="text-[9px] px-2 py-0.5 rounded font-mono" style={{ background: gm.bg, border: `1px solid ${gm.border}`, color: gm.color }}>
+            <div className="flex items-center gap-2.5">
+              <span className="text-[14px] font-bold text-white tracking-wider">MASTER AGENT</span>
+              <span className="text-[9px] px-2.5 py-0.5 rounded-full font-bold tracking-wide"
+                style={{ background: `rgba(${gm.rgb},0.15)`, border: `1px solid rgba(${gm.rgb},0.3)`, color: gm.color }}>
                 {gm.label}
               </span>
             </div>
-            <div className="text-[9px] text-neutral-600">Multi-strategy confluence · Hedge fund analytics · Live paper trading</div>
+            <div className="text-[9px] text-neutral-600 mt-0.5">{gm.desc} · Momentum × ORB-30 × HFT Flow</div>
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          {/* Regime */}
-          <div className="text-center">
-            <div className="text-[8px] text-neutral-700">REGIME</div>
-            <div className={`text-[10px] font-bold ${regime === "TRENDING" ? "text-blue-400" : regime === "VOLATILE" ? "text-red-400" : regime === "RANGING" ? "text-yellow-400" : "text-neutral-600"}`}>
-              {regime}
+        {/* Right: quick stats */}
+        <div className="hidden lg:flex items-center gap-5">
+          {[
+            ["DIRECTION", direction === "LONG" ? "▲ LONG" : direction === "SHORT" ? "▼ SHORT" : "— FLAT",
+              isLong ? "text-green-400" : isShort ? "text-red-400" : "text-neutral-600"],
+            ["CONVICTION", `${conviction}/100`, "text-white"],
+            ["CONSENSUS",  `${consensus_count}/3`, "text-white"],
+            ["REGIME",     regime, regime === "TRENDING" ? "text-blue-400" : regime === "VOLATILE" ? "text-red-400" : regime === "RANGING" ? "text-yellow-400" : "text-neutral-600"],
+          ].map(([l, v, cls]) => (
+            <div key={l} className="text-center">
+              <div className="text-[7px] font-bold text-neutral-700 tracking-widest mb-0.5">{l}</div>
+              <div className={`text-[11px] font-bold ${cls}`}>{v}</div>
             </div>
-          </div>
-          {/* Live price */}
+          ))}
           {last_price && (
-            <div className="text-center">
-              <div className="text-[8px] text-neutral-700">BTC PRICE</div>
-              <div className="text-[11px] font-mono font-bold text-white">${last_price.toLocaleString()}</div>
-              {price_24h != null && (
-                <div className={`text-[8px] ${price_24h >= 0 ? "text-green-400" : "text-red-400"}`}>
-                  {price_24h >= 0 ? "+" : ""}{price_24h.toFixed(2)}%
-                </div>
-              )}
+            <div className="text-center pl-4 border-l border-neutral-800">
+              <div className="text-[7px] text-neutral-700 tracking-widest mb-0.5">BTC</div>
+              <div className="text-[12px] font-mono font-bold text-white">${last_price.toLocaleString()}</div>
+              {price_24h != null && <div className={`text-[8px] ${price_24h >= 0 ? "text-green-400" : "text-red-400"}`}>{price_24h >= 0 ? "+" : ""}{price_24h.toFixed(2)}%</div>}
             </div>
           )}
-          {/* Consensus */}
-          <div className="text-center">
-            <div className="text-[8px] text-neutral-700">CONSENSUS</div>
-            <div className="flex gap-1 mt-1 justify-center">
-              {votes.map((v, i) => {
-                const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
-                return (
-                  <div key={i} className="w-2 h-2 rounded-full" title={v.name}
-                    style={{ background: aligned ? gm.color : v.bias !== "neutral" ? "#4b5563" : "#1e1e2e" }} />
-                );
-              })}
-            </div>
-            <div className="text-[8px] text-neutral-600 mt-0.5">{consensus_count}/3 agree</div>
-          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-0">
+      {/* ── MAIN BODY ─────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-12 gap-0 min-h-[320px]">
 
-        {/* Left: Conviction + Signal + Paper P&L */}
-        <div className="col-span-12 lg:col-span-4 p-4 space-y-3" style={{ borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+        {/* LEFT: Conviction + Strategy Votes + Signal */}
+        <div className="col-span-12 lg:col-span-3 p-4 space-y-3 flex flex-col" style={{ borderRight: `1px solid rgba(${gm.rgb},0.08)` }}>
 
-          {/* Direction + Conviction gauge */}
-          <div className="rounded-xl p-4 text-center space-y-2" style={{ background: gm.bg, border: `1px solid ${gm.border}` }}>
-            <div className="text-[11px] font-semibold" style={{ color: gm.color }}>
-              {direction === "LONG" ? "▲ " : direction === "SHORT" ? "▼ " : "— "}{direction} · GRADE {grade}
+          {/* Conviction arc card */}
+          <div className="rounded-2xl p-4" style={{ background: `rgba(${gm.rgb},0.06)`, border: `1px solid rgba(${gm.rgb},0.15)` }}>
+            <div className="text-center mb-3">
+              <div className="text-[9px] text-neutral-600 mb-1 tracking-widest uppercase">Conviction Score</div>
+              <div className="text-[40px] font-black font-mono leading-none" style={{ color: gm.color }}>{conviction}</div>
+              <div className="text-[9px] text-neutral-700 mt-0.5">out of 100</div>
             </div>
-            {/* Conviction bar */}
-            <div className="space-y-1">
-              <div className="flex justify-between text-[9px]">
-                <span className="text-neutral-700">Conviction</span>
-                <span className="font-mono" style={{ color: gm.color }}>{conviction}/100</span>
-              </div>
-              <div className="h-2 bg-neutral-900 rounded-full overflow-hidden">
-                <div className="h-full rounded-full transition-all duration-700"
-                  style={{ width: `${conviction}%`, background: `linear-gradient(90deg, ${gm.color}88, ${gm.color})` }} />
-              </div>
+            <div className="h-2 bg-black/40 rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${conviction}%`, background: `linear-gradient(90deg, rgba(${gm.rgb},0.5), ${gm.color})` }} />
             </div>
-            {/* Grade scale */}
-            <div className="flex justify-between text-[8px] text-neutral-800">
-              <span>X</span><span>C</span><span>B</span><span>A</span><span>A+</span>
+            <div className="flex justify-between mt-1 text-[7px] text-neutral-800 font-mono">
+              <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
             </div>
           </div>
 
           {/* Strategy votes */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 flex-1">
+            <div className="text-[8px] text-neutral-700 uppercase tracking-widest">Strategy Votes</div>
             {votes.map(v => {
               const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
+              const vc = v.bias === "long" ? "#22c55e" : v.bias === "short" ? "#ef4444" : "#374151";
               return (
-                <div key={v.name} className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: aligned ? gm.color : v.bias !== "neutral" ? "#4b5563" : "#1e1e2e" }} />
-                  <span className="text-[9px] text-neutral-500 flex-1">{v.name}</span>
-                  <span className={`text-[9px] font-bold ${v.bias === "long" ? "text-green-400" : v.bias === "short" ? "text-red-400" : "text-neutral-700"}`}>
-                    {v.bias === "long" ? "▲ LONG" : v.bias === "short" ? "▼ SHORT" : "NEUTRAL"}
+                <div key={v.name} className="rounded-xl px-3 py-2.5 flex items-center gap-2"
+                  style={{ background: aligned ? `rgba(${gm.rgb},0.08)` : "rgba(255,255,255,0.025)", border: `1px solid ${aligned ? `rgba(${gm.rgb},0.2)` : "rgba(255,255,255,0.05)"}` }}>
+                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: vc }} />
+                  <span className="text-[9px] text-neutral-500 flex-1 truncate">{v.name}</span>
+                  <span className="text-[9px] font-bold" style={{ color: vc }}>
+                    {v.bias === "long" ? "▲" : v.bias === "short" ? "▼" : "—"}
                   </span>
-                  <span className="text-[8px] font-mono text-neutral-700">{(v.met_pct * 100).toFixed(0)}%</span>
+                  <div className="h-1 w-10 bg-neutral-900 rounded-full overflow-hidden ml-1">
+                    <div className="h-full rounded-full" style={{ width: `${v.met_pct * 100}%`, background: vc }} />
+                  </div>
                 </div>
               );
             })}
           </div>
 
-          {/* Master signal card */}
+          {/* Signal or waiting */}
           {signal ? (
-            <div className="rounded-xl p-3 space-y-2" style={{ background: isLong ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${isLong ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}` }}>
+            <div className="rounded-2xl p-3 space-y-2"
+              style={{ background: isLong ? "rgba(34,197,94,0.07)" : "rgba(239,68,68,0.07)", border: `1px solid ${isLong ? "rgba(34,197,94,0.22)" : "rgba(239,68,68,0.22)"}`, boxShadow: `0 0 20px rgba(${isLong ? "34,197,94" : "239,68,68"},0.05)` }}>
               <div className="flex items-center justify-between">
                 <span className={`text-[10px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
-                  {isLong ? "▲ LONG" : "▼ SHORT"} SIGNAL · {grade}
+                  {isLong ? "▲ LONG" : "▼ SHORT"} · {grade} SIGNAL
                 </span>
                 <span className="text-[8px] text-neutral-600">{signal.size_pct}% size</span>
               </div>
               <div className="grid grid-cols-3 gap-1 text-[9px] font-mono">
-                <div><span className="text-neutral-700 block">Entry</span><span className="text-white">${signal.entry.toFixed(0)}</span></div>
-                <div><span className="text-red-400 block">SL</span><span className="text-red-300">${signal.sl.toFixed(0)}</span></div>
-                <div><span className="text-green-400 block">TP</span><span className="text-green-300">${signal.tp.toFixed(0)}</span></div>
+                {[["Entry","text-white",`$${signal.entry.toFixed(0)}`],["SL","text-red-400",`$${signal.sl.toFixed(0)}`],["TP","text-green-400",`$${signal.tp.toFixed(0)}`]].map(([l,c,v]) => (
+                  <div key={l} className="text-center rounded-lg py-1" style={{ background: "rgba(0,0,0,0.3)" }}>
+                    <div className="text-[7px] text-neutral-700">{l}</div>
+                    <div className={`text-[9px] font-bold ${c}`}>{v}</div>
+                  </div>
+                ))}
               </div>
-              <div className="text-[8px] text-neutral-600">R:R {signal.rr}</div>
-              {!paper_position?.open && (
-                <button onClick={() => openPaperTrade(signal)}
-                  className="w-full py-1.5 rounded-lg text-[9px] font-bold text-white transition-colors"
-                  style={{ background: isLong ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)", border: `1px solid ${isLong ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}` }}>
-                  <FileText size={9} className="inline mr-1" />Paper Trade
-                </button>
-              )}
+              <div className="flex items-center justify-between">
+                <span className="text-[8px] text-neutral-600">R:R {signal.rr}</span>
+                {!paper_position?.open && (
+                  <button onClick={() => openPaperTrade(signal)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-[8px] font-bold text-white transition-all hover:scale-105"
+                    style={{ background: isLong ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)", border: `1px solid ${isLong ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"}` }}>
+                    <FileText size={8} />Paper Trade
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
-            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-              <Cpu size={11} className="text-neutral-700" />
-              <span className="text-[10px] text-neutral-700">Scanning for high-conviction setup…</span>
+            <div className="rounded-xl px-3 py-2.5 flex items-center gap-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+              <div className="w-1.5 h-1.5 rounded-full bg-neutral-700 animate-pulse" />
+              <span className="text-[9px] text-neutral-700">Scanning for setup — grade {grade}</span>
             </div>
           )}
-
-          {/* Paper stats */}
-          <div className="rounded-xl p-3 space-y-2" style={{ background: "rgba(139,92,246,0.04)", border: "1px solid rgba(139,92,246,0.12)" }}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <FileText size={10} className="text-violet-400" />
-                <span className="text-[10px] font-semibold text-white">Paper P&L</span>
-              </div>
-              <button onClick={resetPaper} className="text-[8px] text-neutral-700 hover:text-red-400 flex items-center gap-1 transition-colors">
-                <RotateCcw size={8} />Reset
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                ["Total P&L", `${paper_stats.total_pnl >= 0 ? "+" : ""}$${paper_stats.total_pnl.toFixed(2)}`, pnlColor(paper_stats.total_pnl)],
-                ["Win Rate",  paper_stats.total_trades > 0 ? `${paper_stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
-                ["Wins/Loss", `${paper_stats.wins}W / ${paper_stats.losses}L`, "text-neutral-400"],
-                ["Trades",    `${paper_stats.total_trades}`, "text-neutral-500"],
-              ].map(([l, v, cls]) => (
-                <div key={l} className="text-center rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.02)" }}>
-                  <div className="text-[8px] text-neutral-700">{l}</div>
-                  <div className={`text-[10px] font-bold font-mono ${cls}`}>{v}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Open position */}
-            {paper_position?.open && (
-              <div className="rounded-lg p-2.5 space-y-1.5" style={{ background: paper_position.direction === "LONG" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${paper_position.direction === "LONG" ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"}` }}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${paper_position.direction === "LONG" ? "bg-green-400" : "bg-red-400"}`} />
-                    <span className={`text-[9px] font-bold ${paper_position.direction === "LONG" ? "text-green-400" : "text-red-400"}`}>
-                      OPEN {paper_position.direction}
-                    </span>
-                  </div>
-                  <button onClick={closePaperTrade} className="text-[8px] text-neutral-700 hover:text-red-400 flex items-center gap-0.5 transition-colors">
-                    <XIcon size={8} />Close
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-1 text-[9px] font-mono">
-                  <div><span className="text-neutral-700">Entry</span><br /><span className="text-white">${paper_position.entry?.toFixed(0)}</span></div>
-                  <div>
-                    <span className="text-neutral-700">P&L</span><br />
-                    <span className={pnlColor(paper_position.pnl_usd ?? 0)}>
-                      {(paper_position.pnl_usd ?? 0) >= 0 ? "+" : ""}${(paper_position.pnl_usd ?? 0).toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* Right: Commentary feed */}
-        <div className="col-span-12 lg:col-span-8 p-4 flex flex-col">
-          <div className="flex items-center gap-2 mb-3">
-            <Cpu size={11} className="text-neutral-600" />
-            <span className="text-[11px] font-semibold text-white">Live Analyst Feed</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse ml-1" />
-            <span className="text-[9px] text-green-400">thinking · updates every 12s</span>
-            <div className="ml-auto flex items-center gap-3 text-[9px] text-neutral-700">
-              <span>Momentum 15m</span>
-              <span className="w-px h-3 bg-neutral-800" />
-              <span>ORB-30</span>
-              <span className="w-px h-3 bg-neutral-800" />
-              <span>HFT Flow</span>
-              <span className="w-px h-3 bg-neutral-800" />
-              <span>Risk Engine</span>
-            </div>
+        {/* CENTER: Live analyst feed */}
+        <div className="col-span-12 lg:col-span-6 p-4 flex flex-col" style={{ borderRight: `1px solid rgba(${gm.rgb},0.08)` }}>
+          <div className="flex items-center gap-2 mb-2.5">
+            <Cpu size={10} style={{ color: gm.color }} />
+            <span className="text-[10px] font-bold text-white">Live Analyst Feed</span>
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse ml-0.5" style={{ background: gm.color }} />
+            <span className="text-[8px]" style={{ color: gm.color }}>live · refreshes every 12s</span>
+            <span className="ml-auto text-[8px] text-neutral-700">Momentum · ORB-30 · HFT Flow · Risk</span>
           </div>
 
-          {/* Terminal feed */}
-          <div className="flex-1 overflow-y-auto space-y-0.5 font-mono text-[10px]"
-            style={{ maxHeight: 340, background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,0.04)" }}>
-            {thoughts.length === 0 && (
-              <div className="text-neutral-800 flex items-center gap-2">
-                <RefreshCw size={10} className="animate-spin" />
-                Initialising brain… loading market data
+          <div className="flex-1 overflow-y-auto font-mono"
+            style={{ background: "rgba(0,0,0,0.35)", borderRadius: 12, padding: "10px 14px", border: "1px solid rgba(255,255,255,0.04)", minHeight: 200 }}>
+            {thoughts.length === 0 ? (
+              <div className="flex items-center gap-2 text-[10px] text-neutral-800">
+                <RefreshCw size={10} className="animate-spin" />Initialising brain…
               </div>
-            )}
-            {thoughts.map((t, i) => {
-              const isSignal  = t.includes("★") || t.includes("CONSENSUS") || t.includes("A+");
-              const isTP      = t.includes("✅") || t.includes("TP HIT");
-              const isSL      = t.includes("⛔") || t.includes("SL HIT");
-              const isPaper   = t.includes("📄") || t.includes("Paper");
-              const isWarning = t.includes("VOLATILE") || t.includes("RANGING") || t.includes("risk") || t.includes("Risk");
-              const cls = isSignal  ? "text-yellow-400"
-                        : isTP      ? "text-green-400"
-                        : isSL      ? "text-red-400"
-                        : isPaper   ? "text-violet-400"
-                        : isWarning ? "text-orange-400"
-                        : i === 0   ? "text-neutral-300"
-                        : "text-neutral-600";
+            ) : thoughts.map((t, i) => {
+              const isStar    = t.includes("★") || t.includes("A+") || t.includes("CONSENSUS");
+              const isTP      = t.includes("✅");
+              const isSL      = t.includes("⛔");
+              const isPaper   = t.includes("📄");
+              const isWarn    = t.includes("VOLATILE") || t.includes("risk") || t.includes("Risk");
+              const cls = isStar ? "text-yellow-300" : isTP ? "text-green-400" : isSL ? "text-red-400"
+                        : isPaper ? "text-violet-400" : isWarn ? "text-orange-400"
+                        : i === 0 ? "text-neutral-200" : "text-neutral-600";
               return (
-                <div key={i} className={`leading-relaxed py-0.5 ${cls} ${i === 0 ? "font-semibold" : ""}`}>
+                <div key={i} className={`text-[9.5px] leading-relaxed py-0.5 border-b border-white/[0.02] last:border-0 ${cls} ${i === 0 ? "font-semibold" : ""}`}>
                   {t}
                 </div>
               );
             })}
           </div>
 
-          {/* Bottom stat strip */}
-          <div className="flex items-center gap-6 mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          {/* Strategy indicator strip */}
+          <div className="grid grid-cols-7 gap-1.5 mt-3">
             {[
-              ["MV15",     strategyResult.bias !== "neutral" ? strategyResult.bias.toUpperCase() : "NEUTRAL",
-               strategyResult.bias === "long" ? "text-green-400" : strategyResult.bias === "short" ? "text-red-400" : "text-neutral-600"],
-              ["ORB-30",   orbResult.bias !== "neutral" ? orbResult.bias.toUpperCase() : "NEUTRAL",
-               orbResult.bias === "long" ? "text-green-400" : orbResult.bias === "short" ? "text-red-400" : "text-neutral-600"],
-              ["MV conds", `${strategyResult.met_count}/${strategyResult.total ?? 7}`, "text-neutral-400"],
-              ["ORB conds",`${orbResult.met_count}/${orbResult.total ?? 6}`, "text-neutral-400"],
-              ["OR High",  orbResult.indicators.or_high ? `$${orbResult.indicators.or_high.toFixed(0)}` : "—", "text-green-400"],
-              ["OR Low",   orbResult.indicators.or_low  ? `$${orbResult.indicators.or_low.toFixed(0)}`  : "—", "text-red-400"],
-              ["Session",  orbResult.indicators.session_label ?? "—", "text-neutral-600"],
-            ].map(([l, v, cls]) => (
-              <div key={l} className="text-center min-w-0">
-                <div className="text-[8px] text-neutral-800 truncate">{l}</div>
-                <div className={`text-[10px] font-mono font-semibold ${cls} truncate`}>{v}</div>
+              ["MV15",    strategyResult.bias !== "neutral" ? strategyResult.bias.toUpperCase() : "—",
+               strategyResult.bias === "long" ? "#22c55e" : strategyResult.bias === "short" ? "#ef4444" : "#374151"],
+              ["ORB-30",  orbResult.bias !== "neutral" ? orbResult.bias.toUpperCase() : "—",
+               orbResult.bias === "long" ? "#22c55e" : orbResult.bias === "short" ? "#ef4444" : "#374151"],
+              ["MV",      `${strategyResult.met_count}/${strategyResult.total ?? 7}`, "#6b7280"],
+              ["ORB",     `${orbResult.met_count}/${orbResult.total ?? 6}`, "#6b7280"],
+              ["OR Hi",   orbResult.indicators.or_high ? `$${orbResult.indicators.or_high.toFixed(0)}` : "—", "#22c55e"],
+              ["OR Lo",   orbResult.indicators.or_low  ? `$${orbResult.indicators.or_low.toFixed(0)}`  : "—", "#ef4444"],
+              ["Session", orbResult.indicators.session_label?.slice(0, 5) ?? "—", "#4b5563"],
+            ].map(([l, v, c]) => (
+              <div key={l} className="text-center rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <div className="text-[7px] text-neutral-800 truncate">{l}</div>
+                <div className="text-[9px] font-mono font-bold truncate" style={{ color: c }}>{v}</div>
               </div>
             ))}
           </div>
+        </div>
+
+        {/* RIGHT: Paper P&L */}
+        <div className="col-span-12 lg:col-span-3 p-4 flex flex-col space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <FileText size={11} className="text-violet-400" />
+              <span className="text-[10px] font-bold text-white">Paper Trading</span>
+            </div>
+            <button onClick={resetPaper} className="flex items-center gap-1 text-[8px] text-neutral-700 hover:text-red-400 transition-colors">
+              <RotateCcw size={9} />Reset
+            </button>
+          </div>
+
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-1.5">
+            {[
+              ["Total P&L", `${paper_stats.total_pnl >= 0 ? "+" : ""}$${paper_stats.total_pnl.toFixed(2)}`, pnlColor(paper_stats.total_pnl)],
+              ["Win Rate",  paper_stats.total_trades > 0 ? `${paper_stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
+              ["W / L",     `${paper_stats.wins} / ${paper_stats.losses}`, "text-neutral-400"],
+              ["Trades",    `${paper_stats.total_trades}`, "text-neutral-500"],
+            ].map(([l, v, cls]) => (
+              <div key={l} className="rounded-xl p-2.5 text-center" style={{ background: "rgba(139,92,246,0.04)", border: "1px solid rgba(139,92,246,0.1)" }}>
+                <div className="text-[8px] text-neutral-700">{l}</div>
+                <div className={`text-[11px] font-bold font-mono ${cls}`}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Open position */}
+          {paper_position?.open ? (
+            <div className="rounded-2xl p-3.5 flex-1" style={{
+              background: paper_position.direction === "LONG" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)",
+              border: `1px solid ${paper_position.direction === "LONG" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+            }}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full animate-pulse ${paper_position.direction === "LONG" ? "bg-green-400" : "bg-red-400"}`} />
+                  <span className={`text-[10px] font-bold ${paper_position.direction === "LONG" ? "text-green-400" : "text-red-400"}`}>
+                    OPEN {paper_position.direction}
+                  </span>
+                </div>
+                <button onClick={closePaperTrade} className="text-[8px] text-neutral-600 hover:text-red-400 flex items-center gap-0.5 transition-colors border border-neutral-800 rounded-lg px-1.5 py-0.5">
+                  <XIcon size={8} />Close
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                {[
+                  ["Entry",   `$${paper_position.entry?.toFixed(0) ?? "—"}`, "text-white"],
+                  ["Current", `$${(paper_position.current ?? 0).toFixed(0)}`, "text-neutral-300"],
+                ].map(([l, v, c]) => (
+                  <div key={l} className="rounded-lg p-1.5 text-center" style={{ background: "rgba(0,0,0,0.2)" }}>
+                    <div className="text-[7px] text-neutral-700">{l}</div>
+                    <div className={`text-[10px] font-mono font-bold ${c}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="text-center">
+                <div className="text-[8px] text-neutral-700 mb-0.5">Unrealized P&L</div>
+                <div className={`text-[16px] font-bold font-mono ${pnlColor(paper_position.pnl_usd ?? 0)}`}>
+                  {(paper_position.pnl_usd ?? 0) >= 0 ? "+" : ""}${(paper_position.pnl_usd ?? 0).toFixed(2)}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 rounded-2xl flex flex-col items-center justify-center gap-2 text-center"
+              style={{ background: "rgba(255,255,255,0.015)", border: "1px dashed rgba(255,255,255,0.08)", minHeight: 120 }}>
+              <Target size={20} className="text-neutral-800" />
+              <div className="text-[9px] text-neutral-700">No open position</div>
+              <div className="text-[8px] text-neutral-800">Paper trades execute<br />on signal + grade ≥ B</div>
+            </div>
+          )}
+
+          <div className="text-[8px] text-neutral-800 text-center">$500 per paper trade · auto TP/SL</div>
         </div>
       </div>
     </div>
@@ -913,24 +926,21 @@ function AllAgentsPanel({
     <div className="space-y-3">
       {/* Section header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Bot size={14} className="text-blue-400" />
-          <span className="text-[13px] font-semibold text-white">All Live Agents</span>
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-          <span className="text-[9px] text-green-400">3 agents running</span>
-        </div>
-        {btcTicker && (
-          <div className="text-[11px] font-mono text-neutral-500">
-            BTC <span className="text-white">{formatUSD(btcTicker.last)}</span>
-            <span className={`ml-1.5 ${(btcTicker.change_pct ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-              {(btcTicker.change_pct ?? 0) >= 0 ? "+" : ""}{(btcTicker.change_pct ?? 0).toFixed(2)}%
-            </span>
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(10,132,255,0.1)", border: "1px solid rgba(10,132,255,0.2)" }}>
+            <Bot size={13} style={{ color: "#60aaff" }} />
           </div>
-        )}
+          <span className="text-[13px] font-bold text-white">Individual Agents</span>
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.18)" }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-[8px] text-green-400 font-bold">3 RUNNING</span>
+          </div>
+        </div>
+        <a href="/dashboard/agent" className="text-[9px] text-neutral-600 hover:text-blue-400 transition-colors">View full agent →</a>
       </div>
 
       {/* Agent cards + activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
 
         {/* Momentum Velocity 15m agent */}
         <AgentCard
@@ -942,106 +952,113 @@ function AllAgentsPanel({
           ticker={btcTicker}
         />
 
-        {/* HFT VWAP Scalper agent — shows live conditions using same result but labelled separately */}
-        <div className="card p-4 flex flex-col gap-3" style={{ minHeight: 210 }}>
+        {/* HFT VWAP Scalper agent */}
+        <div className="rounded-2xl p-4 flex flex-col gap-3"
+          style={{ background: "rgba(245,158,11,0.03)", border: "1px solid rgba(245,158,11,0.1)" }}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.2)" }}>
-                <Zap size={13} style={{ color: "#f59e0b" }} />
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                <Zap size={14} style={{ color: "#f59e0b" }} />
               </div>
               <div>
-                <div className="text-[12px] font-semibold text-white leading-none">HFT VWAP Scalper</div>
-                <div className="text-[9px] text-neutral-700 mt-0.5">OBI · TFI · Microprice · 1m</div>
+                <div className="text-[12px] font-bold text-white leading-none">HFT VWAP Scalper</div>
+                <div className="text-[8px] text-neutral-600 mt-0.5">OBI · TFI · Microprice · 1m</div>
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
-              <span className="text-[9px] text-yellow-400">LIVE AGENT</span>
+              <span className="text-[8px] text-yellow-400 font-bold">LIVE</span>
             </div>
           </div>
-          <div className="flex-1 flex flex-col justify-center gap-2">
-            <div className="rounded-xl p-3 space-y-2" style={{ background: "rgba(245,158,11,.04)", border: "1px solid rgba(245,158,11,.12)" }}>
-              <div className="text-[10px] text-yellow-400 font-semibold">Full config on Live Agent page</div>
-              <div className="text-[9px] text-neutral-600 leading-relaxed">
-                OBI/TFI/microprice computed from live Binance depth stream.
-                Strategy runs on 1m bars with 5m EMA bias filter.
+          <div className="rounded-xl p-3" style={{ background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.1)" }}>
+            <div className="text-[9px] text-yellow-400 font-semibold mb-1">Order Flow Scalper</div>
+            <div className="text-[8px] text-neutral-600 leading-relaxed">Live Binance depth stream analysis. OBI/TFI/microprice on 1m bars, 5m EMA bias filter.</div>
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {[["OBI","0.18"],["TFI","0.12"],["Spread","2 ticks"]].map(([l,v]) => (
+              <div key={l} className="rounded-xl p-2 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <div className="text-[7px] text-neutral-700">{l}</div>
+                <div className="text-[10px] font-mono font-bold text-yellow-400">{v}</div>
               </div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-[9px]">
-              {[["OBI threshold","0.18"],["TFI threshold","0.12"],["Spread max","2 ticks"]].map(([l,v]) => (
-                <div key={l} className="rounded-lg p-2" style={{ background: "rgba(255,255,255,.02)", border: "1px solid rgba(255,255,255,.04)" }}>
-                  <div className="text-neutral-700 mb-0.5">{l}</div>
-                  <div className="font-mono text-neutral-300">{v}</div>
-                </div>
-              ))}
-            </div>
+            ))}
+          </div>
+          <div className="text-[8px] text-neutral-700 text-center mt-auto">
+            <a href="/dashboard/agent?strategy=hft" className="text-yellow-400/70 hover:text-yellow-400 transition-colors">Configure on Live Agent →</a>
           </div>
         </div>
 
         {/* ORB-30 Breakout agent */}
-        <div className="card p-4 flex flex-col gap-3" style={{ minHeight: 210 }}>
+        <div className="rounded-2xl p-4 flex flex-col gap-3"
+          style={{ background: "rgba(251,191,36,0.03)", border: "1px solid rgba(251,191,36,0.1)" }}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.25)" }}>
-                <BarChart2 size={13} style={{ color: "#f59e0b" }} />
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "rgba(251,191,36,0.12)", border: "1px solid rgba(251,191,36,0.25)" }}>
+                <BarChart2 size={14} style={{ color: "#fbbf24" }} />
               </div>
               <div>
-                <div className="text-[12px] font-semibold text-white leading-none">ORB-30 Breakout ★</div>
-                <div className="text-[9px] text-neutral-700 mt-0.5">15m EMA20 bias · 4h sessions · 1m</div>
+                <div className="text-[12px] font-bold text-white leading-none">ORB-30 ★</div>
+                <div className="text-[8px] text-neutral-600 mt-0.5">EMA20 bias · 4h sessions · 1m</div>
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.2)" }}>
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              <span className="text-[9px] text-amber-400">LIVE</span>
+              <span className="text-[8px] text-amber-400 font-bold">LIVE</span>
             </div>
           </div>
 
-          {/* 5-year backtest strip */}
+          {/* 5-year stats */}
           <div className="rounded-xl px-3 py-2.5 grid grid-cols-3 gap-2"
-            style={{ background: "rgba(245,158,11,.04)", border: "1px solid rgba(245,158,11,.12)" }}>
-            {[["5yr Return","+94.3%","text-green-400"],["Win Rate","55.3%","text-blue-400"],["R:R","2.25:1","text-white"]].map(([l,v,cls]) => (
+            style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.12)" }}>
+            {[["5yr Return","+94.3%","text-green-400"],["Win Rate","55.3%","text-blue-400"],["R:R","2.25:1","text-amber-300"]].map(([l,v,cls]) => (
               <div key={l} className="text-center">
-                <div className="text-[8px] text-neutral-700">{l}</div>
+                <div className="text-[7px] text-neutral-700">{l}</div>
                 <div className={`text-[11px] font-bold ${cls}`}>{v}</div>
               </div>
             ))}
           </div>
 
-          <div className="flex-1 flex flex-col justify-between gap-2">
-            <div className="grid grid-cols-2 gap-2 text-[9px]">
-              {[
-                ["Sharpe Ratio","1.74"],["Profit Factor","1.81"],
-                ["Max DD","−13.8%"],["Trades/mo","18.7"],
-              ].map(([l,v]) => (
-                <div key={l} className="rounded-lg p-2" style={{ background: "rgba(255,255,255,.02)", border: "1px solid rgba(255,255,255,.04)" }}>
-                  <div className="text-neutral-700 mb-0.5">{l}</div>
-                  <div className="font-mono text-neutral-300">{v}</div>
-                </div>
-              ))}
-            </div>
-            <div className="text-[9px] text-neutral-700 text-center">
-              Full analysis on{" "}
-              <a href="/dashboard/agent" className="text-amber-400 hover:underline">Live Agent → ORB-30</a>
-            </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {[["Sharpe","1.74"],["PF","1.81"],["Max DD","−13.8%"],["Trades/mo","18.7"]].map(([l,v]) => (
+              <div key={l} className="rounded-xl p-2 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <div className="text-[7px] text-neutral-700">{l}</div>
+                <div className="text-[10px] font-mono font-bold text-neutral-400">{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="text-[8px] text-neutral-700 text-center mt-auto">
+            <a href="/dashboard/agent?strategy=orb" className="text-amber-400/70 hover:text-amber-400 transition-colors">Full analysis on Live Agent →</a>
           </div>
         </div>
 
         {/* Live activity feed */}
-        <div className="card overflow-hidden flex flex-col" style={{ minHeight: 210 }}>
+        <div className="rounded-2xl overflow-hidden flex flex-col"
+          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
             <div className="flex items-center gap-2">
               <Bell size={11} className="text-neutral-600" />
-              <span className="text-[12px] font-semibold text-white">Live Activity</span>
-              {activity.length > 0 && <span className="text-[8px] bg-green-500/10 border border-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-mono">{activity.length}</span>}
+              <span className="text-[12px] font-bold text-white">Activity</span>
+              {activity.length > 0 && (
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold" style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#22c55e" }}>
+                  {activity.length}
+                </span>
+              )}
             </div>
+            <span className="flex items-center gap-1 text-[8px] text-neutral-700">
+              <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />live
+            </span>
           </div>
           <div className="overflow-y-auto flex-1 max-h-52">
             {activity.length === 0
-              ? <div className="px-5 py-8 text-center">
-                  <Zap size={16} className="text-neutral-800 mx-auto mb-2" />
-                  <p className="text-[11px] text-neutral-700">Waiting for signals…</p>
-                  <p className="text-[9px] mt-0.5 text-neutral-800">Runs on every bar close</p>
+              ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-2">
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <Zap size={14} className="text-neutral-800" />
+                  </div>
+                  <p className="text-[10px] text-neutral-700">Waiting for signals…</p>
+                  <p className="text-[8px] text-neutral-800">Fires on every bar close</p>
                 </div>
+              )
               : activity.map((ev, i) => <ActivityRow key={i} ev={ev} />)}
           </div>
         </div>
@@ -1252,9 +1269,16 @@ export default function OverviewPage() {
   }, [lastMessage, fetchData, fetchActivity, fetchSignals, addToast]);
 
   if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"
-        style={{ borderColor: "rgba(10,132,255,0.2) rgba(10,132,255,0.2) rgba(10,132,255,0.2) #0a84ff" }} />
+    <div className="flex flex-col items-center justify-center h-64 gap-4">
+      <div className="relative w-10 h-10">
+        <div className="absolute inset-0 rounded-full border border-blue-500/20 animate-ping" />
+        <div className="absolute inset-1 rounded-full border-t border-blue-500 animate-spin" />
+        <Brain size={14} className="absolute inset-0 m-auto text-blue-400" />
+      </div>
+      <div className="text-center">
+        <div className="text-[12px] text-neutral-400">Initialising TradeOS</div>
+        <div className="text-[9px] text-neutral-700 mt-0.5">Connecting to live market data…</div>
+      </div>
     </div>
   );
 
@@ -1266,73 +1290,101 @@ export default function OverviewPage() {
 
       <div className="space-y-4">
         {d?.kill_switch_active && (
-          <div className="flex items-center gap-3 px-5 py-3 rounded-apple"
-            style={{ background: "rgba(255,69,58,0.08)", border: "1px solid rgba(255,69,58,0.2)" }}>
-            <ShieldCheck size={15} style={{ color: "#ff453a" }} />
-            <span className="text-[13px] font-semibold" style={{ color: "#ff453a" }}>Emergency Stop Active</span>
+          <div className="flex items-center gap-3 px-5 py-3.5 rounded-2xl"
+            style={{ background: "rgba(255,69,58,0.08)", border: "1px solid rgba(255,69,58,0.2)", boxShadow: "0 0 20px rgba(255,69,58,0.05)" }}>
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "rgba(255,69,58,0.15)" }}>
+              <ShieldCheck size={15} style={{ color: "#ff453a" }} />
+            </div>
+            <div>
+              <div className="text-[13px] font-bold" style={{ color: "#ff453a" }}>Emergency Stop Active</div>
+              <div className="text-[9px] text-red-400/60">All trading halted · Check risk settings</div>
+            </div>
           </div>
         )}
 
-        {/* ── Master Agent ── */}
+        {/* ── Master Agent Hero ── */}
         <MasterAgentPanel agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
 
-        {/* KPI row */}
+        {/* ── Premium stat strip ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KPICard label="Total Equity"       value={formatUSD(d?.equity || 0)}             subValue={`Available ${formatUSD(d?.available_balance || 0)}`} icon={DollarSign} trend="neutral" />
-          <KPICard label="Daily PnL"           value={formatUSD(d?.daily_pnl || 0)}          subValue={formatPct(d?.daily_pnl_pct || 0)} subColor={pnlColor(d?.daily_pnl || 0)} icon={d?.daily_pnl >= 0 ? TrendingUp : TrendingDown} trend={d?.daily_pnl >= 0 ? "up" : "down"} />
-          <KPICard label="Win Rate"            value={`${(d?.win_rate || 0).toFixed(1)}%`}   subValue={`${d?.total_trades || 0} trades`} icon={BarChart2} />
-          <KPICard label="Active Strategies"  value={String(d?.active_strategies || 0)}     icon={Layers} />
+          {[
+            { label: "Portfolio Equity",  value: formatUSD(d?.equity || 0),                 sub: `Available ${formatUSD(d?.available_balance || 0)}`, icon: DollarSign, color: "#0a84ff" },
+            { label: "Daily P&L",         value: formatUSD(d?.daily_pnl || 0),              sub: formatPct(d?.daily_pnl_pct || 0),                      icon: d?.daily_pnl >= 0 ? TrendingUp : TrendingDown, color: (d?.daily_pnl || 0) >= 0 ? "#22c55e" : "#ef4444" },
+            { label: "Win Rate",          value: `${(d?.win_rate || 0).toFixed(1)}%`,       sub: `${d?.total_trades || 0} total trades`,               icon: BarChart2, color: "#0a84ff" },
+            { label: "Active Strategies", value: String(d?.active_strategies || 0),         sub: "Running live",                                        icon: Layers, color: "#a78bfa" },
+          ].map(({ label, value, sub, icon: Icon, color }) => (
+            <div key={label} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${color}15`, border: `1px solid ${color}25` }}>
+                <Icon size={16} style={{ color }} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] text-neutral-600 uppercase tracking-wide">{label}</div>
+                <div className="text-[16px] font-bold font-mono" style={{ color }}>{value}</div>
+                <div className="text-[8px] text-neutral-700 truncate">{sub}</div>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* ── Live Agent Signal ── */}
         <LiveAgentSignal result={strategyResult} />
 
         {/* ── Main row: Chart · Analysis · Market ── */}
-        <div className="grid grid-cols-12 gap-4">
+        <div className="grid grid-cols-12 gap-3">
 
           {/* Chart — 7 cols */}
-          <div className="col-span-12 lg:col-span-7 card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold text-white">BTC/USDT · 15m</span>
-                <span className="text-[10px] text-neutral-600">Momentum Velocity</span>
-                {streamConnected && <span className="flex items-center gap-1 text-[9px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live</span>}
+          <div className="col-span-12 lg:col-span-7 rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              <div className="flex items-center gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-bold text-white">BTC/USDT</span>
+                    <span className="text-[9px] px-2 py-0.5 rounded font-mono text-neutral-500" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>15m</span>
+                    <span className="text-[9px] text-neutral-600">Momentum Velocity</span>
+                  </div>
+                </div>
+                {streamConnected && <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live stream</span>}
               </div>
               <div className="flex items-center gap-2">
-                {btcTicker && <span className="text-[12px] font-mono text-neutral-300">{formatUSD(btcTicker.last)}</span>}
-                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${strategyResult.bias === "long" ? "border-green-500/30 bg-green-500/10 text-green-400" : strategyResult.bias === "short" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-neutral-700 text-neutral-600"}`}>
-                  {strategyResult.bias === "long" ? "▲ BULL" : strategyResult.bias === "short" ? "▼ BEAR" : "NEUTRAL"}
+                {btcTicker && <span className="text-[13px] font-mono font-bold text-white">{formatUSD(btcTicker.last)}</span>}
+                <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full ${strategyResult.bias === "long" ? "text-green-400" : strategyResult.bias === "short" ? "text-red-400" : "text-neutral-600"}`}
+                  style={{ background: strategyResult.bias === "long" ? "rgba(34,197,94,0.1)" : strategyResult.bias === "short" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)", border: strategyResult.bias === "long" ? "1px solid rgba(34,197,94,0.25)" : strategyResult.bias === "short" ? "1px solid rgba(239,68,68,0.25)" : "1px solid rgba(255,255,255,0.06)" }}>
+                  {strategyResult.bias === "long" ? "▲ BULLISH" : strategyResult.bias === "short" ? "▼ BEARISH" : "NEUTRAL"}
                 </span>
               </div>
             </div>
-            <StrategyChart candles={chartCandles} liveCandle={liveCandle} signals={signals} />
+            <div className="p-4">
+              <StrategyChart candles={chartCandles} liveCandle={liveCandle} signals={signals} />
+            </div>
           </div>
 
           {/* Analysis — 2 cols */}
-          <div className="col-span-12 lg:col-span-2 card p-4">
-            <div className="flex items-center justify-between mb-3">
+          <div className="col-span-12 lg:col-span-2 rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
               <div className="flex items-center gap-1.5">
-                <Activity size={12} className="text-neutral-600" />
-                <span className="text-[12px] font-semibold text-white">Analysis</span>
+                <Activity size={11} className="text-blue-400" />
+                <span className="text-[11px] font-bold text-white">Conditions</span>
               </div>
-              <span className="text-[8px] text-green-400 flex items-center gap-1">
+              <span className="flex items-center gap-1 text-[8px] text-green-400">
                 <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live
               </span>
             </div>
-            <AnalysisPanel result={strategyResult} candleCount={chartCandles.length} />
+            <div className="p-4">
+              <AnalysisPanel result={strategyResult} candleCount={chartCandles.length} />
+            </div>
           </div>
 
           {/* BTC Market — 3 cols */}
-          <div className="col-span-12 lg:col-span-3 card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[12px] font-semibold text-white">BTC Market</span>
-              </div>
+          <div className="col-span-12 lg:col-span-3 rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              <span className="text-[11px] font-bold text-white">BTC Market</span>
               {streamConnected
-                ? <span className="flex items-center gap-1 text-[9px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />{connected ? "Binance Direct" : ""}</span>
-                : <span className="flex items-center gap-1 text-[9px] text-neutral-600"><WifiOff size={9} />Connecting</span>}
+                ? <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />Binance Direct</span>
+                : <span className="flex items-center gap-1 text-[8px] text-neutral-600"><WifiOff size={8} />Connecting</span>}
             </div>
-            <BTCMarketPanel ticker={btcTicker} orderBook={btcOrderBook} />
+            <div className="p-4">
+              <BTCMarketPanel ticker={btcTicker} orderBook={btcOrderBook} />
+            </div>
           </div>
         </div>
 
@@ -1344,9 +1396,16 @@ export default function OverviewPage() {
           btcTicker={btcTicker}
         />
 
-        {lastUpdate && (
-          <p className="text-[9px] text-right text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</p>
-        )}
+        {/* Footer strip */}
+        <div className="flex items-center justify-between px-1 pb-2">
+          <div className="flex items-center gap-2 text-[8px] text-neutral-800">
+            <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
+            <span>TradeOS · BTC/USDT live · Binance WebSocket</span>
+          </div>
+          {lastUpdate && (
+            <span className="text-[8px] text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</span>
+          )}
+        </div>
       </div>
     </>
   );
