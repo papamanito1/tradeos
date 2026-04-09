@@ -15,20 +15,12 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import {
   useBinanceStream, BinanceCandle, BinanceTicker, BinanceOrderBook,
 } from "@/hooks/useBinanceStream";
+import { useStrategyEngine } from "@/hooks/useStrategyEngine";
 
 // ─── Chart constants ──────────────────────────────────────────────────────────
 const CW = 1000, CH = 220, PY = 14, BAR = 5;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface AnalysisCondition {
-  name: string; met: boolean; value: string; target: string;
-}
-interface Analysis {
-  bias: string; all_met: boolean; met_count: number; total: number;
-  conditions: AnalysisCondition[];
-  indicators: Record<string, number | null>;
-  last_signal: Record<string, unknown> | null;
-}
 interface ActivityEvent {
   kind: "signal" | "trade"; timestamp: string; symbol: string;
   direction: "long" | "short"; entry?: number; fill_price?: number;
@@ -216,21 +208,19 @@ function StrategyChart({
   );
 }
 
-// ─── Analysis Checklist ───────────────────────────────────────────────────────
-function AnalysisPanel({ analysis, loading, onRefresh }: { analysis: Analysis | null; loading: boolean; onRefresh: () => void }) {
-  if (loading && !analysis) return (
-    <div className="flex items-center justify-center h-48">
-      <div className="w-4 h-4 border-2 rounded-full animate-spin border-t-transparent border-blue-500" />
-    </div>
-  );
-  if (!analysis) return (
-    <div className="text-center py-8 text-neutral-700 text-sm">
-      <button onClick={onRefresh} className="text-blue-500 hover:text-blue-400">Retry analysis</button>
-    </div>
-  );
+// ─── Analysis Panel (pure frontend, no backend) ───────────────────────────────
+import type { StrategyResult } from "@/hooks/useStrategyEngine";
 
-  const { conditions, indicators, bias, met_count, total, all_met, last_signal } = analysis;
+function AnalysisPanel({ result, candleCount }: { result: StrategyResult; candleCount: number }) {
+  const { conditions, indicators, bias, met_count, total, all_met } = result;
   const biasCls = bias === "long" ? "text-green-400" : bias === "short" ? "text-red-400" : "text-neutral-500";
+
+  if (candleCount < 60) return (
+    <div className="flex flex-col items-center justify-center h-48 gap-2 text-neutral-700">
+      <RefreshCw size={14} className="animate-spin" />
+      <span className="text-xs">Loading candles… ({candleCount}/60)</span>
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -251,8 +241,8 @@ function AnalysisPanel({ analysis, loading, onRefresh }: { analysis: Analysis | 
       </div>
 
       <div className="flex gap-0.5 h-1">
-        {conditions.map((c, i) => (
-          <div key={i} className="flex-1 rounded-full" style={{ background: c.met ? "#22c55e" : "#1e1e2e" }} />
+        {Array.from({ length: 7 }).map((_, i) => (
+          <div key={i} className="flex-1 rounded-full" style={{ background: i < met_count ? "#22c55e" : "#1e1e2e" }} />
         ))}
       </div>
 
@@ -270,12 +260,12 @@ function AnalysisPanel({ analysis, loading, onRefresh }: { analysis: Analysis | 
 
       <div className="grid grid-cols-3 gap-x-3 gap-y-1 pt-2 border-t border-neutral-800">
         {[
-          ["RSI",    indicators.rsi        ? indicators.rsi.toFixed(1)              : "—"],
-          ["Vol×",   indicators.vol_ratio  ? indicators.vol_ratio.toFixed(2) + "×"  : "—"],
-          ["ATR%",   indicators.atr_pct    ? indicators.atr_pct.toFixed(3) + "%"    : "—"],
-          ["EMA50",  indicators.ema50      ? formatUSD(indicators.ema50)            : "—"],
-          ["EMA21",  indicators.ema21      ? formatUSD(indicators.ema21)            : "—"],
-          ["VWAP",   indicators.vwap       ? formatUSD(indicators.vwap)             : "—"],
+          ["RSI",    indicators.rsi       != null ? indicators.rsi.toFixed(1)              : "—"],
+          ["Vol×",   indicators.vol_ratio != null ? indicators.vol_ratio.toFixed(2) + "×"  : "—"],
+          ["ATR%",   indicators.atr_pct   != null ? indicators.atr_pct.toFixed(3) + "%"    : "—"],
+          ["EMA50",  indicators.ema50     != null ? formatUSD(indicators.ema50)            : "—"],
+          ["EMA21",  indicators.ema21     != null ? formatUSD(indicators.ema21)            : "—"],
+          ["VWAP",   indicators.vwap      != null ? formatUSD(indicators.vwap)             : "—"],
         ].map(([k, v]) => (
           <div key={k} className="flex justify-between items-center">
             <span className="text-[9px] text-neutral-700">{k}</span>
@@ -284,25 +274,110 @@ function AnalysisPanel({ analysis, loading, onRefresh }: { analysis: Analysis | 
         ))}
       </div>
 
-      {last_signal && (
-        <div className={`p-2 rounded border text-[10px] ${last_signal.direction === "long" ? "border-green-500/20 bg-green-500/5" : "border-red-500/20 bg-red-500/5"}`}>
-          <div className={`font-bold mb-0.5 ${last_signal.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-            Last: {String(last_signal.direction).toUpperCase()} @ {formatUSD(last_signal.entry as number)}
-          </div>
-          <div className="text-neutral-600 font-mono text-[9px]">
-            {last_signal.sl ? `SL ${formatUSD(last_signal.sl as number)}` : ""}
-            {last_signal.tp ? `  TP ${formatUSD(last_signal.tp as number)}` : ""}
-          </div>
-          <div className="text-neutral-700 mt-0.5 text-[9px]">{timeAgo(last_signal.timestamp as string)}</div>
-        </div>
-      )}
-
       {all_met && (
         <div className="flex items-center gap-1.5 p-2 rounded border border-green-500/30 bg-green-500/5">
           <Zap size={10} className="text-green-400" />
           <span className="text-[10px] text-green-400 font-semibold">All conditions met — trade imminent</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Live Agent Signal Box ────────────────────────────────────────────────────
+function LiveAgentSignal({ result }: { result: StrategyResult }) {
+  const { signal, bias, met_count, total } = result;
+  const isLong = signal?.direction === "long";
+
+  if (!signal) {
+    return (
+      <div className="card p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-2 h-2 rounded-full bg-neutral-700 animate-pulse" />
+          <span className="text-[12px] font-semibold text-white">Live Agent</span>
+          <span className="text-[9px] text-neutral-700 ml-auto flex items-center gap-1">
+            <RefreshCw size={9} /> live · every bar
+          </span>
+        </div>
+        <div className="flex items-center gap-3 py-3">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${bias === "long" ? "bg-green-500/10" : bias === "short" ? "bg-red-500/10" : "bg-neutral-800"}`}>
+            {bias === "long" ? <TrendingUp size={18} className="text-green-400" /> : bias === "short" ? <TrendingDown size={18} className="text-red-400" /> : <Activity size={18} className="text-neutral-600" />}
+          </div>
+          <div>
+            <div className={`text-sm font-bold ${bias === "long" ? "text-green-400" : bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
+              {bias === "long" ? "▲ BULLISH BIAS" : bias === "short" ? "▼ BEARISH BIAS" : "SCANNING MARKET"}
+            </div>
+            <div className="text-[10px] text-neutral-600 mt-0.5">{met_count}/{total} conditions met · waiting for full setup</div>
+          </div>
+        </div>
+        <div className="flex gap-0.5 h-1 mt-1">
+          {Array.from({ length: total || 7 }).map((_, i) => (
+            <div key={i} className="flex-1 rounded-full" style={{ background: i < met_count ? (bias === "long" ? "#22c55e" : "#ef4444") : "#1e1e2e" }} />
+          ))}
+        </div>
+        <div className="text-[9px] text-neutral-700 mt-2 text-center">Signal fires when all 7 conditions align</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`card p-4 border ${isLong ? "border-green-500/20" : "border-red-500/20"}`}
+      style={{ background: isLong ? "rgba(34,197,94,0.03)" : "rgba(239,68,68,0.03)" }}>
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-2 h-2 rounded-full animate-ping" style={{ background: isLong ? "#22c55e" : "#ef4444" }} />
+        <span className="text-[12px] font-semibold text-white">Live Agent</span>
+        <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ml-auto ${isLong ? "border-green-500/30 bg-green-500/10 text-green-400" : "border-red-500/30 bg-red-500/10 text-red-400"}`}>
+          SIGNAL ACTIVE
+        </span>
+      </div>
+
+      {/* Direction */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isLong ? "bg-green-500/15" : "bg-red-500/15"}`}>
+          {isLong ? <ArrowUpRight size={22} className="text-green-400" /> : <ArrowDownRight size={22} className="text-red-400" />}
+        </div>
+        <div>
+          <div className={`text-xl font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+            {isLong ? "LONG BTC" : "SHORT BTC"}
+          </div>
+          <div className="text-[10px] text-neutral-500">BTC/USDT · 15m · Momentum Velocity</div>
+        </div>
+        <div className="ml-auto text-right">
+          <div className="text-[9px] text-neutral-600">Confidence</div>
+          <div className="text-lg font-bold text-yellow-400">{(signal.confidence * 100).toFixed(0)}%</div>
+        </div>
+      </div>
+
+      {/* Levels */}
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="bg-blue-500/5 border border-blue-500/15 rounded-lg p-2.5 text-center">
+          <div className="text-[9px] text-blue-400/70 mb-0.5">Entry</div>
+          <div className="text-[12px] font-mono font-bold text-blue-300">{formatUSD(signal.entry)}</div>
+        </div>
+        <div className="bg-red-500/5 border border-red-500/15 rounded-lg p-2.5 text-center">
+          <div className="text-[9px] text-red-400/70 mb-0.5">Stop Loss</div>
+          <div className="text-[12px] font-mono font-bold text-red-400">{formatUSD(signal.sl)}</div>
+          <div className="text-[8px] text-red-400/50">{isLong ? "-" : "+"}{formatUSD(Math.abs(signal.sl - signal.entry))}</div>
+        </div>
+        <div className="bg-green-500/5 border border-green-500/15 rounded-lg p-2.5 text-center">
+          <div className="text-[9px] text-green-400/70 mb-0.5">Take Profit</div>
+          <div className="text-[12px] font-mono font-bold text-green-400">{formatUSD(signal.tp)}</div>
+          <div className="text-[8px] text-green-400/50">{isLong ? "+" : "-"}{formatUSD(Math.abs(signal.tp - signal.entry))}</div>
+        </div>
+      </div>
+
+      {/* R:R */}
+      <div className="flex items-center gap-2 mb-3">
+        <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-red-400 to-green-400" style={{ width: "67%" }} />
+        </div>
+        <span className="text-[9px] font-mono text-yellow-400 font-bold">R:R {signal.rr}</span>
+      </div>
+
+      {/* Reasoning */}
+      <div className="text-[9px] text-neutral-600 leading-relaxed italic bg-neutral-900 rounded-lg p-2">
+        {signal.reasoning}
+      </div>
     </div>
   );
 }
@@ -488,14 +563,26 @@ export default function OverviewPage() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [activity, setActivity]         = useState<ActivityEvent[]>([]);
   const [toasts, setToasts]             = useState<Toast[]>([]);
-  const [analysis, setAnalysis]         = useState<Analysis | null>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(true);
   const [chartCandles, setChartCandles] = useState<BinanceCandle[]>([]);
   const [liveCandle, setLiveCandle]     = useState<BinanceCandle | null>(null);
   const [btcTicker, setBtcTicker]       = useState<BinanceTicker | null>(null);
   const [btcOrderBook, setBtcOrderBook] = useState<BinanceOrderBook | null>(null);
   const [signals, setSignals]           = useState<Array<{ timestamp: string; direction: string; sl?: number | null; tp?: number | null }>>([]);
   const toastId = useRef(0);
+
+  // ── Frontend strategy engine (no backend needed) ─────────────────────────
+  const strategyResult = useStrategyEngine(chartCandles);
+
+  // Toast when the engine fires a live signal
+  const prevSignalRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!strategyResult.signal) return;
+    const key = `${strategyResult.signal.direction}-${strategyResult.signal.entry}`;
+    if (key !== prevSignalRef.current) {
+      prevSignalRef.current = key;
+      addToast({ kind: "signal", direction: strategyResult.signal.direction, symbol: "BTC/USDT", price: strategyResult.signal.entry, strategy: "Momentum Velocity 15m" });
+    }
+  }, [strategyResult.signal, addToast]);
 
   const addToast = useCallback((t: Omit<Toast, "id">) =>
     setToasts(p => [...p.slice(-4), { ...t, id: ++toastId.current }]), []);
@@ -562,27 +649,19 @@ export default function OverviewPage() {
     } catch { /* ignore */ }
   }, [authFetch]);
 
-  const fetchAnalysis = useCallback(async () => {
-    setAnalysisLoading(true);
-    const d = await authFetch("/api/paper/analysis");
-    if (d) setAnalysis(d);
-    setAnalysisLoading(false);
-  }, [authFetch]);
-
   const fetchSignals = useCallback(async () => {
     const d = await authFetch("/api/market/signals?symbol=BTC%2FUSDT&limit=50");
     if (d) setSignals(d);
   }, [authFetch]);
 
   useEffect(() => {
-    fetchData(); fetchActivity(); fetchChartCandles(); fetchAnalysis(); fetchSignals();
+    fetchData(); fetchActivity(); fetchChartCandles(); fetchSignals();
     const i1 = setInterval(fetchData,         15_000);
     const i2 = setInterval(fetchActivity,     20_000);
     const i3 = setInterval(fetchChartCandles, 60_000);
-    const i4 = setInterval(fetchAnalysis,     60_000);
     const i5 = setInterval(fetchSignals,      30_000);
-    return () => [i1, i2, i3, i4, i5].forEach(clearInterval);
-  }, [fetchData, fetchActivity, fetchChartCandles, fetchAnalysis, fetchSignals]);
+    return () => [i1, i2, i3, i5].forEach(clearInterval);
+  }, [fetchData, fetchActivity, fetchChartCandles, fetchSignals]);
 
   // ── Direct Binance stream (BTC only) ─────────────────────────────────────
   useBinanceStream({
@@ -616,7 +695,7 @@ export default function OverviewPage() {
     if (!lastMessage) return;
     const { type, data: d } = lastMessage as { type?: string; data?: Record<string, unknown> };
     if (type === "signal:new" && d && (d.direction === "long" || d.direction === "short")) {
-      addToast({ kind: "signal", direction: d.direction, symbol: "BTC/USDT", price: (d.entry as number) || 0, strategy: d.strategy_name as string });
+      addToast({ kind: "signal", direction: d.direction as "long"|"short", symbol: "BTC/USDT", price: (d.entry as number) || 0, strategy: d.strategy_name as string });
       fetchActivity(); fetchSignals();
     }
     if (type === "execution:order_placed" && d && d.event !== "paper_reset") {
@@ -657,6 +736,9 @@ export default function OverviewPage() {
           <KPICard label="Active Strategies"  value={String(d?.active_strategies || 0)}     icon={Layers} />
         </div>
 
+        {/* ── Live Agent Signal ── */}
+        <LiveAgentSignal result={strategyResult} />
+
         {/* ── Main row: Chart · Analysis · Market ── */}
         <div className="grid grid-cols-12 gap-4">
 
@@ -670,8 +752,8 @@ export default function OverviewPage() {
               </div>
               <div className="flex items-center gap-2">
                 {btcTicker && <span className="text-[12px] font-mono text-neutral-300">{formatUSD(btcTicker.last)}</span>}
-                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${analysis?.bias === "long" ? "border-green-500/30 bg-green-500/10 text-green-400" : analysis?.bias === "short" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-neutral-700 text-neutral-600"}`}>
-                  {analysis?.bias === "long" ? "▲ BULL" : analysis?.bias === "short" ? "▼ BEAR" : "NEUTRAL"}
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${strategyResult.bias === "long" ? "border-green-500/30 bg-green-500/10 text-green-400" : strategyResult.bias === "short" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-neutral-700 text-neutral-600"}`}>
+                  {strategyResult.bias === "long" ? "▲ BULL" : strategyResult.bias === "short" ? "▼ BEAR" : "NEUTRAL"}
                 </span>
               </div>
             </div>
@@ -685,14 +767,11 @@ export default function OverviewPage() {
                 <Activity size={12} className="text-neutral-600" />
                 <span className="text-[12px] font-semibold text-white">Analysis</span>
               </div>
-              <div className="flex items-center gap-1">
-                <span className="text-[8px] text-neutral-700 flex items-center gap-0.5"><Clock size={8} />60s</span>
-                <button onClick={fetchAnalysis} className="p-1 rounded hover:bg-neutral-800">
-                  <RefreshCw size={9} className={`text-neutral-700 ${analysisLoading ? "animate-spin" : ""}`} />
-                </button>
-              </div>
+              <span className="text-[8px] text-green-400 flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live
+              </span>
             </div>
-            <AnalysisPanel analysis={analysis} loading={analysisLoading} onRefresh={fetchAnalysis} />
+            <AnalysisPanel result={strategyResult} candleCount={chartCandles.length} />
           </div>
 
           {/* BTC Market — 3 cols */}
