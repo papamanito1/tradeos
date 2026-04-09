@@ -45,19 +45,21 @@ TF_SECONDS: dict[str, int] = {
     "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600,
     "8h": 28800, "12h": 43200, "1d": 86400, "1w": 604800,
 }
-MAX_BARS = 2000
+MAX_BARS = 110_000      # ~3 years of 15m bars (35_040/yr × 3 = 105_120)
+PROVIDER_PAGE = 1000   # max per single API request
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
 class BacktestRequest(BaseModel):
     strategy_type: str
     symbol: str = "BTC/USDT"
-    timeframe: str = "1h"
-    limit: int = Field(default=500, ge=50, le=MAX_BARS)
+    timeframe: str = "15m"
+    limit: int = Field(default=35_040, ge=50, le=MAX_BARS)  # 1 year default
+    years: Optional[float] = Field(default=None, ge=0.1, le=3.0)  # convenience
     initial_capital: float = Field(default=10000.0, gt=0)
     position_size_pct: float = Field(default=10.0, gt=0, le=100)
-    commission_pct: float = Field(default=0.1, ge=0)   # 0.1% = 10 bps per leg
-    slippage_pct: float = Field(default=0.05, ge=0)    # 0.05% adverse fill
+    commission_pct: float = Field(default=0.1, ge=0)
+    slippage_pct: float = Field(default=0.05, ge=0)
     parameters: dict[str, Any] = {}
 
 
@@ -123,16 +125,26 @@ async def _fetch_binance(client, symbol: str, timeframe: str, limit: int,
 
 
 async def _fetch_bybit(client, symbol: str, timeframe: str, limit: int) -> list:
-    """Fetch OHLCV from Bybit v5 — normalise to Binance row format."""
+    """
+    Fetch up to `limit` 1-min/15-min/etc. bars from Bybit v5 (linear or spot).
+    Supports very large requests (e.g. 3 years = ~105k 15m bars) by paginating
+    backwards in time.  Bybit linear (USDT perpetuals) has the longest history.
+    """
     bsym = symbol.replace("/", "")
     iv = _BYBIT_TF.get(timeframe, "60")
     tf_ms = TF_SECONDS.get(timeframe, 3600) * 1000
     all_rows: list = []
 
     end_ms = None
-    while len(all_rows) < limit:
-        params: dict = {"category": "spot", "symbol": bsym, "interval": iv,
-                        "limit": min(limit - len(all_rows), 1000)}
+    max_pages = (limit // PROVIDER_PAGE) + 5   # safety cap
+    for _ in range(max_pages):
+        page_limit = min(limit - len(all_rows), PROVIDER_PAGE)
+        params: dict = {
+            "category": "linear",   # linear perps have longest history
+            "symbol": bsym,
+            "interval": iv,
+            "limit": page_limit,
+        }
         if end_ms:
             params["end"] = end_ms
         resp = await client.get("https://api.bybit.com/v5/market/kline", params=params)
@@ -141,23 +153,20 @@ async def _fetch_bybit(client, symbol: str, timeframe: str, limit: int) -> list:
         rows = data.get("result", {}).get("list", [])
         if not rows:
             break
-        # Bybit returns newest first — reverse to oldest first
-        rows = list(reversed(rows))
+        # Bybit returns newest-first — collect as-is, prepend when done
+        rows_norm = [[int(r[0]), r[1], r[2], r[3], r[4], r[5]] for r in rows]
         existing = {r[0] for r in all_rows}
-        new = [r for r in rows if r[0] not in existing]
-        all_rows = new + all_rows
-        if len(rows) < 1000:
+        new = [r for r in rows_norm if r[0] not in existing]
+        all_rows = new + all_rows           # prepend (older data goes first)
+        if len(rows) < page_limit:
+            break                           # reached the beginning of history
+        oldest_ts = int(rows[-1][0])
+        end_ms = oldest_ts - tf_ms          # move window back
+        if len(all_rows) >= limit:
             break
-        end_ms = int(rows[0][0]) - 1  # go further back
 
     all_rows.sort(key=lambda r: int(r[0]))
-    all_rows = all_rows[-limit:]
-    # Bybit row: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
-    # Normalise to Binance format: [openTime, open, high, low, close, volume, ...]
-    return [
-        [int(r[0]), r[1], r[2], r[3], r[4], r[5]]
-        for r in all_rows
-    ]
+    return all_rows[-limit:]
 
 
 async def _fetch_okx(client, symbol: str, timeframe: str, limit: int) -> list:
@@ -212,25 +221,32 @@ def _raw_to_candles(raw: list) -> list[Candle]:
 async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> list[Candle]:
     """
     Fetch real historical OHLCV with automatic provider fallback.
-    Tries: Binance data CDN → Binance main API → Bybit → OKX
-    No API key required for any provider.
+    Supports very large requests (up to 3 years ≈ 105k 15m bars).
+
+    Provider order:
+      1. Bybit linear (best history depth, no geo-blocks from cloud VMs)
+      2. Binance data CDN (separate from trading API geo-blocks)
+      3. Binance main API
+      4. OKX
     """
     import httpx
 
+    # For very large requests, cap Binance at 2000 (they rarely have >2k clean pages)
+    binance_limit = min(limit, 2000)
+
     providers = [
-        # Bybit first — no cloud-provider geo-blocks, global availability
         ("Bybit",        lambda c: _fetch_bybit(c, symbol, timeframe, limit)),
-        # Binance CDN (data delivery network, different from trading API)
-        ("Binance-CDN",  lambda c: _fetch_binance(c, symbol, timeframe, limit,
+        ("Binance-CDN",  lambda c: _fetch_binance(c, symbol, timeframe, binance_limit,
                                                    "https://data-api.binance.vision/api/v3/klines")),
-        # Binance main (may be geo-blocked from some cloud providers)
-        ("Binance",      lambda c: _fetch_binance(c, symbol, timeframe, limit,
+        ("Binance",      lambda c: _fetch_binance(c, symbol, timeframe, binance_limit,
                                                    "https://api.binance.com/api/v3/klines")),
-        ("OKX",          lambda c: _fetch_okx(c, symbol, timeframe, limit)),
+        ("OKX",          lambda c: _fetch_okx(c, symbol, timeframe, min(limit, 1000))),
     ]
 
     last_err = None
-    async with httpx.AsyncClient(timeout=25.0) as client:
+    # Increase timeout for large paginated fetches (3-year = ~100 pages × 1 req)
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for name, fetch_fn in providers:
             try:
                 _logger.info(f"Fetching OHLCV via {name}: {symbol} {timeframe} x{limit}")
@@ -443,25 +459,56 @@ def _compute_metrics(
 
 
 def _monthly_returns(equity_curve: list[dict]) -> dict[str, float]:
-    """
-    Aggregate per-bar equity data into calendar-month returns.
-    Returns { "2024-01": 3.24, "2024-02": -1.50, ... }
-    """
+    """Aggregate equity into calendar-month return %."""
     if not equity_curve:
         return {}
-
     monthly: dict[str, list[float]] = {}
     for point in equity_curve:
-        ts = point["timestamp"][:7]  # "YYYY-MM"
+        ts = point["timestamp"][:7]
         monthly.setdefault(ts, [])
         monthly[ts].append(point["equity"])
-
     result: dict[str, float] = {}
     for month, values in sorted(monthly.items()):
         start, end = values[0], values[-1]
         if start > 0:
             result[month] = round((end / start - 1) * 100, 2)
     return result
+
+
+def _monthly_stats(trades: list[dict]) -> list[dict]:
+    """
+    Per-calendar-month breakdown: trades, wins, win-rate, avg R:R, PnL, PnL%.
+    Returns a list sorted by month ascending.
+    """
+    from collections import defaultdict
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        month = t["entry_time"][:7]   # "YYYY-MM"
+        buckets[month].append(t)
+
+    rows = []
+    for month in sorted(buckets):
+        mt = buckets[month]
+        wins   = [t for t in mt if t["pnl"] > 0]
+        losses = [t for t in mt if t["pnl"] <= 0]
+        rr_vals = [t["rr_actual"] for t in mt if t.get("rr_actual") is not None]
+        pnl_sum = sum(t["pnl"] for t in mt)
+        gross_p = sum(t["pnl"] for t in wins)
+        gross_l = abs(sum(t["pnl"] for t in losses))
+        pf = gross_p / gross_l if gross_l > 0 else (float("inf") if gross_p > 0 else 0.0)
+        rows.append({
+            "month":        month,
+            "trades":       len(mt),
+            "wins":         len(wins),
+            "losses":       len(losses),
+            "win_rate":     round(len(wins) / len(mt) * 100, 1) if mt else 0.0,
+            "avg_rr":       round(sum(rr_vals) / len(rr_vals), 3) if rr_vals else None,
+            "best_rr":      round(max(rr_vals), 3) if rr_vals else None,
+            "worst_rr":     round(min(rr_vals), 3) if rr_vals else None,
+            "pnl":          round(pnl_sum, 2),
+            "profit_factor":round(min(pf, 999.0), 2),
+        })
+    return rows
 
 
 def _duration_human(bars: int, timeframe: str) -> str:
@@ -482,8 +529,14 @@ async def run_backtest(
     if req.strategy_type not in STRATEGY_REGISTRY:
         raise HTTPException(status_code=400, detail=f"Unknown strategy: {req.strategy_type}")
 
+    # ── Resolve limit from years if provided ──────────────────────────────────
+    limit = req.limit
+    if req.years is not None:
+        bpy = BARS_PER_YEAR.get(req.timeframe, 365)
+        limit = min(int(req.years * bpy) + 50, MAX_BARS)   # +50 warm-up buffer
+
     # ── 1. Fetch real OHLCV data ───────────────────────────────────────────────
-    candles = await _fetch_ohlcv(req.symbol, req.timeframe, req.limit)
+    candles = await _fetch_ohlcv(req.symbol, req.timeframe, limit)
     if len(candles) < 60:
         raise HTTPException(status_code=422, detail="Not enough candle data returned from exchange")
 
@@ -514,20 +567,25 @@ async def run_backtest(
 
     def _close(pos: _Position, exit_price: float, reason: str, bar_idx: int, bar_time: datetime) -> None:
         nonlocal cash
-        # Apply slippage against the position (adverse fill)
         slip = slippage * (1 if pos.side == "long" else -1)
         fill_price = exit_price * (1 - slip if pos.side == "long" else 1 + slip)
-        # Gross PnL
         raw_pnl = (fill_price - pos.entry_price) * pos.size
         if pos.side == "short":
             raw_pnl = -raw_pnl
-        # Exit commission
         exit_fee = abs(pos.size * fill_price) * commission
         net_pnl = raw_pnl - exit_fee
-        # Update realized cash
         cash += net_pnl
         dur = bar_idx - pos.entry_bar
         total_fees = pos.entry_fee + exit_fee
+
+        # ── R:R calculation ───────────────────────────────────────────────────
+        risk = 0.0
+        rr_actual = None
+        if pos.sl is not None:
+            risk = abs(pos.entry_price - pos.sl) * pos.size
+        if risk > 0:
+            rr_actual = round(net_pnl / risk, 3)
+
         trades.append({
             "id": len(trades) + 1,
             "side": pos.side,
@@ -537,9 +595,13 @@ async def run_backtest(
             "exit_time": bar_time.isoformat(),
             "entry_price": round(pos.entry_price, 6),
             "exit_price": round(fill_price, 6),
+            "sl": round(pos.sl, 4) if pos.sl else None,
+            "tp": round(pos.tp, 4) if pos.tp else None,
             "size": round(pos.size, 8),
             "pnl": round(net_pnl, 4),
             "pnl_pct": round(net_pnl / (pos.size * pos.entry_price) * 100, 4) if pos.size > 0 else 0,
+            "rr_actual": rr_actual,
+            "risk_usd": round(risk, 4),
             "fees": round(total_fees, 4),
             "reason": reason,
             "duration_bars": dur,
@@ -620,25 +682,33 @@ async def run_backtest(
         equity_values, trades, req.initial_capital, final_capital,
         req.timeframe, len(candles)
     )
-    monthly = _monthly_returns(equity_curve)
+    monthly_returns = _monthly_returns(equity_curve)
+    monthly_stats   = _monthly_stats(trades)
+
+    # Overall avg R:R across all trades
+    all_rr = [t["rr_actual"] for t in trades if t.get("rr_actual") is not None]
+    overall_avg_rr = round(sum(all_rr) / len(all_rr), 3) if all_rr else None
 
     return {
-        "strategy_type": req.strategy_type,
-        "strategy_name": cls.name,
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
-        "parameters": params,
+        "strategy_type":  req.strategy_type,
+        "strategy_name":  cls.name,
+        "symbol":         req.symbol,
+        "timeframe":      req.timeframe,
+        "parameters":     params,
         "date_range": {
             "start": candles[0].timestamp.isoformat(),
-            "end": candles[-1].timestamp.isoformat(),
+            "end":   candles[-1].timestamp.isoformat(),
         },
-        "candle_count": len(candles),
-        "initial_capital": req.initial_capital,
-        "final_capital": final_capital,
-        "metrics": metrics,
-        "equity_curve": equity_curve,
-        "monthly_returns": monthly,
-        "trades": trades,
+        "candle_count":   len(candles),
+        "years_tested":   round(len(candles) / BARS_PER_YEAR.get(req.timeframe, 365), 2),
+        "initial_capital":req.initial_capital,
+        "final_capital":  final_capital,
+        "metrics":        metrics,
+        "overall_avg_rr": overall_avg_rr,
+        "equity_curve":   equity_curve,
+        "monthly_returns":monthly_returns,
+        "monthly_stats":  monthly_stats,
+        "trades":         trades,
     }
 
 

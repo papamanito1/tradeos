@@ -190,9 +190,13 @@ export interface BacktestTrade {
   exit_time: string;
   entry_price: number;
   exit_price: number;
+  sl?: number | null;
+  tp?: number | null;
   size: number;
   pnl: number;
   pnl_pct: number;
+  rr_actual?: number | null;
+  risk_usd?: number | null;
   fees: number;
   reason: string;
   duration_bars: number;

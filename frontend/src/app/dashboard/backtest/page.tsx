@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Play, ChevronDown, ChevronUp, TrendingUp, TrendingDown,
   BarChart2, Clock, Zap, Shield, DollarSign, Activity,
-  RefreshCw, Info,
+  RefreshCw, Info, Bot, Calendar,
 } from "lucide-react";
 import {
   AreaChart, Area, LineChart, Line,
@@ -67,6 +67,13 @@ function winrateColor(v: number): string {
 
 const SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT", "DOGE/USDT"];
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
+
+// ── Year → bar count presets ──────────────────────────────────────────────────
+const BARS_PER_YEAR: Record<string, number> = {
+  "1m": 525_600, "5m": 105_120, "15m": 35_040,
+  "1h": 8_760,   "4h": 2_190,   "1d": 365,
+};
+const YEAR_PRESETS = [0.25, 0.5, 1, 2, 3] as const;
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 function StatCard({
@@ -398,9 +405,10 @@ function TradeTable({ trades }: { trades: BacktestTrade[] }) {
               <Col k="exit_price" label="Exit $" right />
               <Col k="pnl" label="PnL" right />
               <Col k="pnl_pct" label="%" right />
+              <Col k="rr_actual" label="R:R" right />
               <Col k="fees" label="Fees" right />
-              <Col k="duration_human" label="Duration" right />
-              <Col k="reason" label="Reason" />
+              <Col k="duration_human" label="Dur." right />
+              <Col k="reason" label="Exit" />
             </tr>
           </thead>
           <tbody>
@@ -423,6 +431,13 @@ function TradeTable({ trades }: { trades: BacktestTrade[] }) {
                 </td>
                 <td className={`px-3 py-2 text-right font-mono ${pnlColor(t.pnl_pct)}`}>
                   {t.pnl_pct > 0 ? "+" : ""}{t.pnl_pct.toFixed(2)}%
+                </td>
+                <td className={`px-3 py-2 text-right font-mono font-semibold ${
+                  (t as any).rr_actual == null ? "text-neutral-700" :
+                  (t as any).rr_actual >= 1.2 ? "text-green-400" :
+                  (t as any).rr_actual >= 0   ? "text-yellow-400" : "text-red-400"
+                }`}>
+                  {(t as any).rr_actual != null ? ((t as any).rr_actual as number).toFixed(2) : "—"}
                 </td>
                 <td className="px-3 py-2 text-right text-neutral-600 font-mono">
                   {formatUSD(t.fees)}
@@ -524,6 +539,211 @@ function PnLDistribution({ trades }: { trades: BacktestTrade[] }) {
   );
 }
 
+// ─── Monthly R:R Table ────────────────────────────────────────────────────────
+interface MonthStat {
+  month: string; trades: number; wins: number; losses: number;
+  win_rate: number; avg_rr: number | null; best_rr: number | null;
+  worst_rr: number | null; pnl: number; profit_factor: number;
+}
+
+function MonthlyRRTable({ stats }: { stats: MonthStat[] }) {
+  if (!stats || stats.length === 0) return null;
+  const rrColor = (v: number | null) => {
+    if (v === null) return "text-neutral-600";
+    if (v >= 1.5) return "text-green-400"; if (v >= 0.5) return "text-yellow-400";
+    if (v >= 0) return "text-orange-400"; return "text-red-400";
+  };
+  const avg = (arr: (number | null)[]) => {
+    const valid = arr.filter(v => v !== null) as number[];
+    return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+  };
+  const avgRR = avg(stats.map(s => s.avg_rr));
+  const avgWR = avg(stats.map(s => s.win_rate));
+
+  return (
+    <div className="bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
+        <div className="flex items-center gap-2">
+          <Calendar size={13} className="text-blue-400" />
+          <span className="text-sm font-semibold text-white">Monthly Breakdown</span>
+          <span className="text-xs text-neutral-600">· Avg R:R per month</span>
+        </div>
+        <div className="flex items-center gap-4 text-xs">
+          <span className="text-neutral-500">Avg R:R: <span className={`font-mono font-semibold ${rrColor(avgRR)}`}>{avgRR != null ? avgRR.toFixed(2) : "—"}</span></span>
+          <span className="text-neutral-500">Avg Win Rate: <span className={`font-mono font-semibold ${winrateColor(avgWR ?? 0)}`}>{avgWR != null ? `${avgWR.toFixed(1)}%` : "—"}</span></span>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="border-b border-neutral-800 bg-neutral-900/50">
+            <tr>
+              {["Month","Trades","W","L","Win%","Avg R:R","Best R:R","Worst R:R","PnL","PF"].map((h, i) => (
+                <th key={h} className={`px-3 py-2 text-[10px] uppercase tracking-wider text-neutral-500 font-medium ${i > 1 ? "text-right" : "text-left"}`}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {stats.map(s => (
+              <tr key={s.month} className="border-b border-neutral-800/50 hover:bg-neutral-800/20 transition-colors">
+                <td className="px-3 py-2 font-mono text-neutral-400">{s.month}</td>
+                <td className="px-3 py-2 text-neutral-400 text-right">{s.trades}</td>
+                <td className="px-3 py-2 text-green-400 text-right font-semibold">{s.wins}</td>
+                <td className="px-3 py-2 text-red-400 text-right font-semibold">{s.losses}</td>
+                <td className={`px-3 py-2 text-right font-semibold ${winrateColor(s.win_rate)}`}>{s.win_rate.toFixed(1)}%</td>
+                <td className={`px-3 py-2 text-right font-mono font-bold ${rrColor(s.avg_rr)}`}>
+                  {s.avg_rr != null ? s.avg_rr.toFixed(2) : "—"}
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${rrColor(s.best_rr)}`}>
+                  {s.best_rr != null ? s.best_rr.toFixed(2) : "—"}
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${rrColor(s.worst_rr)}`}>
+                  {s.worst_rr != null ? s.worst_rr.toFixed(2) : "—"}
+                </td>
+                <td className={`px-3 py-2 text-right font-mono font-semibold ${pnlColor(s.pnl)}`}>
+                  {s.pnl >= 0 ? "+" : ""}{formatUSD(s.pnl)}
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${ratioColor(s.profit_factor, 1, 1.5)}`}>
+                  {s.profit_factor >= 999 ? "∞" : s.profit_factor.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Live Backtest Agent ──────────────────────────────────────────────────────
+interface AgentMessage { role: "agent" | "user"; text: string; ts: string; }
+
+function LiveBacktestAgent({ result }: { result: BacktestResult }) {
+  const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [thinking, setThinking] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const hasAnalyzed = useRef(false);
+
+  const analyze = useCallback((r: BacktestResult) => {
+    const m  = r.metrics;
+    const ms = (r as any).monthly_stats as MonthStat[] | undefined ?? [];
+    const avgRR = ms.length
+      ? ms.filter(s => s.avg_rr !== null).reduce((a, s) => a + (s.avg_rr ?? 0), 0) /
+        Math.max(ms.filter(s => s.avg_rr !== null).length, 1)
+      : null;
+    const bestMonth  = ms.reduce((a, s) => s.pnl > (a?.pnl ?? -Infinity) ? s : a, ms[0] as MonthStat | undefined);
+    const worstMonth = ms.reduce((a, s) => s.pnl < (a?.pnl ?? Infinity)  ? s : a, ms[0] as MonthStat | undefined);
+    const years = (r as any).years_tested as number ?? 1;
+
+    setThinking(true);
+    setTimeout(() => {
+      const lines: string[] = [];
+
+      // Overview
+      lines.push(`📊 **${r.strategy_name}** · ${r.symbol} ${r.timeframe} · ${years.toFixed(1)} years of real data (${r.candle_count.toLocaleString()} bars)`);
+      lines.push("");
+
+      // R:R analysis
+      if (avgRR !== null) {
+        if (avgRR >= 1.2) lines.push(`✅ **Avg R:R: ${avgRR.toFixed(2)}** — strong. The strategy consistently extracts more than 1R per trade on average.`);
+        else if (avgRR >= 0.5) lines.push(`⚠️ **Avg R:R: ${avgRR.toFixed(2)}** — below 1. Win rate of ${m.win_rate.toFixed(1)}% is needed to offset this. ${m.win_rate >= 55 ? "Your win rate compensates." : "Win rate is too low — edge at risk."}`);
+        else lines.push(`🔴 **Avg R:R: ${avgRR.toFixed(2)}** — very low. The strategy is cutting winners too early or letting losers run.`);
+      }
+
+      // Sharpe & drawdown
+      if (m.sharpe_ratio >= 1.5) lines.push(`✅ **Sharpe ${m.sharpe_ratio.toFixed(2)}** — excellent risk-adjusted returns.`);
+      else if (m.sharpe_ratio >= 0.7) lines.push(`⚠️ **Sharpe ${m.sharpe_ratio.toFixed(2)}** — acceptable. Tighten SL or increase TP multiplier to improve.`);
+      else lines.push(`🔴 **Sharpe ${m.sharpe_ratio.toFixed(2)}** — poor. Strategy is taking too much risk relative to returns.`);
+
+      if (m.max_drawdown_pct > 25) lines.push(`🔴 **Max DD: -${m.max_drawdown_pct.toFixed(1)}%** — dangerous drawdown. Reduce position size or tighten stops.`);
+      else if (m.max_drawdown_pct > 12) lines.push(`⚠️ **Max DD: -${m.max_drawdown_pct.toFixed(1)}%** — manageable but watch for deeper extensions.`);
+      else lines.push(`✅ **Max DD: -${m.max_drawdown_pct.toFixed(1)}%** — controlled drawdown.`);
+
+      // Monthly patterns
+      if (bestMonth)  lines.push(`📈 Best month: **${bestMonth.month}** (+${formatUSD(bestMonth.pnl)}, ${bestMonth.trades} trades)`);
+      if (worstMonth) lines.push(`📉 Worst month: **${worstMonth.month}** (${formatUSD(worstMonth.pnl)}, ${worstMonth.trades} trades)`);
+
+      // Profit factor
+      if (m.profit_factor >= 1.5) lines.push(`✅ **Profit Factor: ${m.profit_factor.toFixed(2)}** — solid edge.`);
+      else if (m.profit_factor >= 1.1) lines.push(`⚠️ **Profit Factor: ${m.profit_factor.toFixed(2)}** — thin edge. Susceptible to regime changes.`);
+      else lines.push(`🔴 **Profit Factor: ${m.profit_factor.toFixed(2)}** — no edge. Strategy loses money before fees.`);
+
+      lines.push("");
+
+      // Suggestions
+      lines.push("**💡 Agent Suggestions:**");
+      if (m.win_rate < 45)     lines.push("• Win rate below 45% — tighten entry conditions (add volume filter or wait for higher-TF confirmation)");
+      if (avgRR !== null && avgRR < 1) lines.push("• R:R below 1 — increase TP multiplier or use trailing stop to let winners run further");
+      if (m.max_drawdown_pct > 20) lines.push("• Drawdown > 20% — reduce position size from " + r.metrics.exposure_pct.toFixed(0) + "% exposure or add a daily drawdown circuit breaker");
+      if (m.total_trades < 30) lines.push("• Only " + m.total_trades + " trades in " + years.toFixed(1) + " years — low sample size. Results may not be statistically significant.");
+      if (m.max_consecutive_losses >= 5) lines.push(`• ${m.max_consecutive_losses} consecutive losses detected — consider a cooldown rule after 3 consecutive losses`);
+      if (m.profit_factor < 1.2 && m.win_rate >= 50) lines.push("• High win rate but low profit factor — winners are too small vs. losers. Widen TP or add partial take-profit at 1R.");
+      if (lines[lines.length - 1] === "**💡 Agent Suggestions:**") lines.push("• Strategy looks solid. Consider running on additional symbols for diversification.");
+
+      setMessages([{ role: "agent", text: lines.join("\n"), ts: new Date().toLocaleTimeString() }]);
+      setThinking(false);
+      hasAnalyzed.current = true;
+    }, 800);
+  }, []);
+
+  useEffect(() => {
+    if (!hasAnalyzed.current) analyze(result);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, thinking]);
+
+  return (
+    <div className="bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
+        <div className="flex items-center gap-2">
+          <Bot size={14} className="text-blue-400" />
+          <span className="text-sm font-semibold text-white">Live Backtest Agent</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse ml-1" />
+        </div>
+        <button onClick={() => analyze(result)} className="text-[10px] text-neutral-600 hover:text-white transition-colors flex items-center gap-1">
+          <RefreshCw size={10} /> Re-analyze
+        </button>
+      </div>
+
+      <div ref={scrollRef} className="p-4 max-h-80 overflow-y-auto space-y-3 font-mono text-[11px]">
+        {thinking && (
+          <div className="flex items-center gap-2 text-blue-400">
+            <RefreshCw size={11} className="animate-spin" />
+            <span>Analyzing {result.metrics.total_trades} trades over {((result as any).years_tested ?? 1).toFixed(1)} years…</span>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className="space-y-1">
+            <div className="text-[9px] text-neutral-700">{msg.ts}</div>
+            {msg.text.split("\n").map((line, j) => {
+              const isBold = line.startsWith("**") || line.includes("**");
+              const rendered = line
+                .replace(/\*\*(.+?)\*\*/g, (_, t) => `<strong class="text-white">${t}</strong>`);
+              return (
+                <div key={j}
+                  className={`leading-relaxed ${
+                    line.startsWith("✅") ? "text-green-400" :
+                    line.startsWith("⚠️") ? "text-yellow-400" :
+                    line.startsWith("🔴") ? "text-red-400" :
+                    line.startsWith("📊") || line.startsWith("💡") ? "text-blue-300" :
+                    line.startsWith("📈") ? "text-green-300" :
+                    line.startsWith("📉") ? "text-red-300" :
+                    line.startsWith("•")  ? "text-neutral-400 pl-3" :
+                    line === "" ? "h-2" : "text-neutral-300"
+                  } ${isBold && !line.startsWith("•") ? "font-semibold" : ""}`}
+                  dangerouslySetInnerHTML={{ __html: rendered }}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function BacktestPage() {
   const [types, setTypes] = useState<StrategyType[]>([]);
@@ -536,11 +756,12 @@ export default function BacktestPage() {
   const [showConfig, setShowConfig] = useState(true);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const [yearsPreset, setYearsPreset] = useState<number>(1);
   const [form, setForm] = useState({
-    strategy_type: "ema_crossover",
+    strategy_type: "btc_momentum_velocity",
     symbol: "BTC/USDT",
-    timeframe: "1h",
-    limit: 500,
+    timeframe: "15m",
+    years: 1,
     initial_capital: 10000,
     position_size_pct: 10,
     commission_pct: 0.1,
@@ -580,8 +801,15 @@ export default function BacktestPage() {
 
     try {
       const res = await backtestApi.run({
-        ...form,
-        parameters: strategyParams,
+        strategy_type:    form.strategy_type,
+        symbol:           form.symbol,
+        timeframe:        form.timeframe,
+        years:            form.years,
+        initial_capital:  form.initial_capital,
+        position_size_pct:form.position_size_pct,
+        commission_pct:   form.commission_pct,
+        slippage_pct:     form.slippage_pct,
+        parameters:       strategyParams,
       });
       setResult(res);
     } catch (e: any) {
@@ -655,14 +883,24 @@ export default function BacktestPage() {
                 </select>
               </div>
 
-              <div>
-                <label className="text-[11px] uppercase tracking-wider text-neutral-500 block mb-1.5">Bars</label>
-                <input
-                  type="number" min={50} max={2000} step={50}
-                  className="w-full bg-neutral-800 border border-neutral-700 rounded text-sm text-white px-2 py-1.5 focus:outline-none focus:border-blue-500"
-                  value={form.limit}
-                  onChange={(e) => setForm({ ...form, limit: Number(e.target.value) })}
-                />
+              <div className="col-span-2">
+                <label className="text-[11px] uppercase tracking-wider text-neutral-500 block mb-1.5">
+                  Data Range · <span className="text-blue-400 font-mono">
+                    {form.years}y ≈ {((BARS_PER_YEAR[form.timeframe] ?? 8760) * form.years).toLocaleString()} bars
+                  </span>
+                </label>
+                <div className="flex gap-1.5">
+                  {YEAR_PRESETS.map(y => (
+                    <button key={y} onClick={() => { setYearsPreset(y); setForm(f => ({ ...f, years: y })); }}
+                      className="flex-1 py-1.5 rounded text-[11px] font-bold border transition-colors"
+                      style={form.years === y
+                        ? { background: "rgba(10,132,255,0.18)", borderColor: "rgba(10,132,255,0.4)", color: "#60aaff" }
+                        : { background: "rgba(255,255,255,0.03)", borderColor: "rgba(255,255,255,0.08)", color: "#4b5563" }
+                      }>
+                      {y < 1 ? `${y * 12}m` : `${y}y`}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>
@@ -762,10 +1000,11 @@ export default function BacktestPage() {
             <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin absolute inset-0" />
           </div>
           <div className="text-center">
-            <p className="text-white text-sm font-medium">Fetching real market data from Binance...</p>
+            <p className="text-white text-sm font-medium">Fetching {form.years}y of real market data from Bybit/Binance…</p>
             <p className="text-neutral-500 text-xs mt-1">
-              Running strategy over {form.limit} {form.timeframe} bars · {elapsed}s elapsed
+              {form.timeframe} bars · ~{((BARS_PER_YEAR[form.timeframe] ?? 8760) * form.years).toLocaleString()} candles · {elapsed}s elapsed
             </p>
+            <p className="text-neutral-700 text-xs mt-0.5">Large datasets may take 30–90s to paginate</p>
           </div>
         </div>
       )}
@@ -786,7 +1025,13 @@ export default function BacktestPage() {
               </div>
               <p className="text-xs text-neutral-500 mt-1">
                 {fmtDateShort(result.date_range.start)} → {fmtDateShort(result.date_range.end)}
-                {" · "}{result.candle_count} bars · {m.total_trades} trades · real Binance data
+                {" · "}{result.candle_count.toLocaleString()} bars · {m.total_trades} trades
+                {" · "}{((result as any).years_tested ?? "?").toString()}y real data
+                {(result as any).overall_avg_rr != null && (
+                  <span className={`ml-2 font-semibold ${ratioColor((result as any).overall_avg_rr, 0.5, 1.2)}`}>
+                    · Avg R:R {((result as any).overall_avg_rr as number).toFixed(2)}
+                  </span>
+                )}
               </p>
             </div>
             <button
@@ -884,6 +1129,15 @@ export default function BacktestPage() {
                 valueClass={pnlColor(m.expectancy)}
                 tooltip="Average $ earned per trade (net of fees)"
               />
+              {(result as any).overall_avg_rr != null && (
+                <StatCard
+                  label="Avg R:R"
+                  value={((result as any).overall_avg_rr as number).toFixed(2)}
+                  sub="All trades"
+                  valueClass={ratioColor((result as any).overall_avg_rr, 0.5, 1.2)}
+                  tooltip="Average realized risk/reward across all closed trades"
+                />
+              )}
             </div>
 
             {/* Detail section */}
@@ -976,6 +1230,14 @@ export default function BacktestPage() {
               <PnLDistribution trades={result.trades} />
             </div>
           </div>
+
+          {/* ── Monthly R:R Breakdown ─────────────────────────────────────── */}
+          {(result as any).monthly_stats?.length > 0 && (
+            <MonthlyRRTable stats={(result as any).monthly_stats} />
+          )}
+
+          {/* ── Live Backtest Agent ───────────────────────────────────────── */}
+          <LiveBacktestAgent result={result} />
 
           {/* ── Trade Log ────────────────────────────────────────────────── */}
           <TradeTable trades={result.trades} />
