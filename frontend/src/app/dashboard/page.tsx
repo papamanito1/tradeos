@@ -520,9 +520,46 @@ export default function OverviewPage() {
   }, [authFetch]);
 
   const fetchChartCandles = useCallback(async () => {
+    // 1) Try backend (Bybit-backed)
     const d = await authFetch("/api/market/candles/BTC%2FUSDT?timeframe=15m&limit=120");
-    if (Array.isArray(d) && d.length > 0)
+    if (Array.isArray(d) && d.length > 0) {
       setChartCandles(d.map((c: { timestamp: string; open: number; high: number; low: number; close: number; volume: number }) => ({ ...c, is_closed: true })));
+      return;
+    }
+    // 2) Fallback: Binance public REST (no auth, no key required)
+    try {
+      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=120");
+      if (r.ok) {
+        const raw: unknown[][] = await r.json();
+        setChartCandles(raw.map(k => ({
+          timestamp:  new Date(k[0] as number).toISOString(),
+          open:       parseFloat(k[1] as string),
+          high:       parseFloat(k[2] as string),
+          low:        parseFloat(k[3] as string),
+          close:      parseFloat(k[4] as string),
+          volume:     parseFloat(k[5] as string),
+          is_closed:  true,
+        })));
+        return;
+      }
+    } catch { /* ignore */ }
+    // 3) Last resort: try Bybit directly
+    try {
+      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=120");
+      if (r.ok) {
+        const json = await r.json();
+        const list: string[][] = json?.result?.list ?? [];
+        setChartCandles([...list].reverse().map(k => ({
+          timestamp: new Date(parseInt(k[0])).toISOString(),
+          open:      parseFloat(k[1]),
+          high:      parseFloat(k[2]),
+          low:       parseFloat(k[3]),
+          close:     parseFloat(k[4]),
+          volume:    parseFloat(k[5]),
+          is_closed: true,
+        })));
+      }
+    } catch { /* ignore */ }
   }, [authFetch]);
 
   const fetchAnalysis = useCallback(async () => {
@@ -558,7 +595,8 @@ export default function OverviewPage() {
       if (sym !== "BTC/USDT") return;
       setLiveCandle(candle);
       setChartCandles(prev => {
-        if (!prev.length) return prev;
+        // Seed the chart from WebSocket if REST fetch produced nothing
+        if (!prev.length) return [{ ...candle, is_closed: false }];
         const lastMs = new Date(prev[prev.length - 1].timestamp).getTime();
         const curMs  = new Date(candle.timestamp).getTime();
         if (lastMs === curMs) return [...prev.slice(0, -1), { ...candle }];
