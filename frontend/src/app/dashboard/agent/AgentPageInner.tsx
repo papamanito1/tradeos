@@ -7,7 +7,7 @@ import {
   Bot, Power, RefreshCw, ExternalLink, Zap, Shield,
   CheckCircle2, XCircle, TrendingUp, TrendingDown,
   AlertTriangle, Activity, ChevronRight, Trash2, Copy,
-  FileText, RotateCcw, X, DollarSign, Server, Wifi, WifiOff,
+  FileText, RotateCcw, X, DollarSign,
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
@@ -15,7 +15,6 @@ import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
 import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
 import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
-import { useServerAgent, ServerPosition } from "@/hooks/useServerAgent";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { formatUSD } from "@/lib/utils";
 
@@ -270,7 +269,7 @@ function PaperPanel({
       ) : (
         <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <DollarSign size={13} className="text-neutral-700" />
-          <span className="text-[11px] text-neutral-700">No open paper positions · all 3 strategies scanning for signals…</span>
+          <span className="text-[11px] text-neutral-700">No open paper positions · all 4 strategies scanning for signals…</span>
         </div>
       )}
 
@@ -350,53 +349,9 @@ function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
   };
 }
 
-// ─── Server position card ─────────────────────────────────────────────────────
-function ServerPosCard({ pos, onClose }: { pos: ServerPosition; onClose: () => void }) {
-  const isLong  = pos.direction === "long";
-  const pnlClr  = pos.unrealized_pnl >= 0 ? "text-green-400" : "text-red-400";
-  const progress = pos.sl && pos.tp ? Math.min(Math.max(
-    (pos.current_price - pos.sl) / (pos.tp - pos.sl) * 100, 0), 100
-  ) : 50;
-  return (
-    <div className="rounded-xl p-3.5 space-y-2.5"
-      style={{
-        background: isLong ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
-        border: `1px solid ${isLong ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
-      }}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isLong ? "bg-green-400" : "bg-red-400"}`} />
-          <span className={`text-[11px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
-            {pos.direction.toUpperCase()} — {pos.strategy_name}
-          </span>
-        </div>
-        <button onClick={onClose} className="text-[9px] text-neutral-600 hover:text-red-400 border border-neutral-800 rounded px-2 py-0.5 flex items-center gap-1">
-          <X size={8} /> Close
-        </button>
-      </div>
-      <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
-        <div><span className="text-neutral-600 block text-[8px]">Entry</span><span className="text-white">${pos.entry.toFixed(0)}</span></div>
-        <div><span className="text-neutral-600 block text-[8px]">Current</span><span className="text-white">${pos.current_price.toFixed(0)}</span></div>
-        <div><span className="text-neutral-600 block text-[8px]">Unrealized</span><span className={pnlClr}>{pos.unrealized_pnl >= 0 ? "+" : ""}${pos.unrealized_pnl.toFixed(2)}</span></div>
-      </div>
-      <div className="space-y-1">
-        <div className="flex justify-between text-[8px]">
-          <span className="text-red-400">SL ${pos.sl?.toFixed(0) ?? "—"}</span>
-          <span className="text-neutral-600">${pos.size_usdc} · {pos.btc_size.toFixed(5)} BTC · {pos.rr}</span>
-          <span className="text-green-400">TP ${pos.tp?.toFixed(0) ?? "—"}</span>
-        </div>
-        <div className="h-1 bg-neutral-800 rounded-full overflow-hidden">
-          <div className="h-full w-0.5 bg-white rounded-full" style={{ marginLeft: `${progress}%` }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
   const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
-  const server = useServerAgent();
 
   // ── 15m candles (Momentum) ────────────────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
@@ -510,155 +465,6 @@ function AgentContent() {
 
   return (
     <div className="p-4 space-y-5">
-
-      {/* ── Server Agent 24/7 Panel ───────────────────────────────────────── */}
-      <div className="card p-5 space-y-4" style={{ border: "1px solid rgba(34,197,94,0.2)", boxShadow: "0 0 24px rgba(34,197,94,0.06)" }}>
-        {/* Header row */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <Server size={22} className="text-green-400" />
-              {server.running && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-400 animate-ping opacity-75" />}
-              {server.running && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-400" />}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[15px] font-bold text-white">Server Agent</span>
-                {server.error ? (
-                  <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400">
-                    <WifiOff size={8} /> Offline
-                  </span>
-                ) : server.running ? (
-                  <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 animate-pulse">
-                    <Wifi size={8} /> LIVE 24/7
-                  </span>
-                ) : (
-                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-500">STOPPED</span>
-                )}
-              </div>
-              <p className="text-[10px] text-neutral-600 mt-0.5">
-                Runs on Railway server · all 4 strategies · never stops · browser-independent
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={server.refresh} className="p-2 text-neutral-600 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors">
-              <RefreshCw size={13} className={server.loading ? "animate-spin" : ""} />
-            </button>
-            <button
-              onClick={() => server.running ? server.stopAgent() : server.startAgent()}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-[12px] transition-all"
-              style={server.running
-                ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
-                : { background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }
-              }>
-              <Power size={13} />
-              {server.running ? "Stop Server" : "Start Server"}
-            </button>
-          </div>
-        </div>
-
-        {server.error && (
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/5 border border-red-500/15 text-[11px] text-red-400">
-            <AlertTriangle size={12} /> Cannot reach backend: {server.error} — check Railway deployment
-          </div>
-        )}
-
-        {!server.error && (
-          <>
-            {/* Stats row */}
-            <div className="grid grid-cols-5 gap-2">
-              {[
-                ["Scans",       server.scanCount.toString(),   "text-white"],
-                ["Last Scan",   server.lastScan ?? "—",        "text-blue-400"],
-                ["Open Pos",    `${server.openPositions.length}`, server.openPositions.length > 0 ? "text-green-400" : "text-neutral-600"],
-                ["Total P&L",   server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—",
-                                server.stats?.total_pnl != null ? (server.stats.total_pnl >= 0 ? "text-green-400" : "text-red-400") : "text-neutral-600"],
-                ["Win Rate",    server.stats?.total_trades ? `${server.stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
-              ].map(([l, v, cls]) => (
-                <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                  <div className="text-[8px] text-neutral-600 mb-0.5">{l}</div>
-                  <div className={`text-[12px] font-bold font-mono ${cls}`}>{v}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Open server positions */}
-            {server.openPositions.length > 0 ? (
-              <div className="space-y-2">
-                <div className="text-[10px] text-neutral-600 font-semibold">Open Positions ({server.openPositions.length})</div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                  {server.openPositions.map(p => (
-                    <ServerPosCard key={p.id} pos={p} onClose={() => server.closePosition(p.strategy_key)} />
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                <Server size={12} className="text-neutral-700" />
-                <span className="text-[11px] text-neutral-700">No open server positions — scanning every 20s for signals…</span>
-              </div>
-            )}
-
-            {/* Server log */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] text-neutral-600 font-semibold">Server Log</span>
-                <button onClick={server.resetAccount} className="flex items-center gap-1 text-[9px] text-neutral-700 hover:text-red-400 transition-colors">
-                  <RotateCcw size={9} /> Reset Account
-                </button>
-              </div>
-              <div className="h-36 overflow-y-auto font-mono text-[9.5px] space-y-0.5 bg-black/40 rounded-xl p-3 border border-neutral-800">
-                {server.log.length === 0 && <div className="text-neutral-700">Waiting for server log…</div>}
-                {server.log.map((line, i) => (
-                  <div key={i} className={
-                    line.includes("★") || line.includes("OPENED") ? "text-green-400" :
-                    line.includes("error") || line.includes("failed") ? "text-red-400" :
-                    line.includes("TP") ? "text-green-400" :
-                    line.includes("SL") ? "text-red-400" :
-                    "text-neutral-500"
-                  }>{line}</div>
-                ))}
-              </div>
-            </div>
-
-            {/* Closed trades from server */}
-            {server.trades.length > 0 && (
-              <div>
-                <div className="text-[10px] text-neutral-600 font-semibold mb-1.5">Recent Closed Trades ({server.trades.length})</div>
-                <div className="max-h-40 overflow-y-auto space-y-1">
-                  {server.trades.slice(0, 20).map(t => {
-                    const pnl = t.pnl_usd ?? 0;
-                    return (
-                      <div key={t.id} className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg" style={{ background: "rgba(255,255,255,0.02)" }}>
-                        <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                          {t.direction === "long" ? "▲" : "▼"} {t.strategy_name}
-                        </span>
-                        <span className="text-[9px] text-neutral-600 font-mono flex-1">${t.entry?.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
-                        <span className={`text-[9px] font-mono font-bold ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                          {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
-                        </span>
-                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
-                          t.exit_reason === "tp" ? "bg-green-500/10 text-green-400" :
-                          t.exit_reason === "sl" ? "bg-red-500/10 text-red-400" :
-                          "bg-neutral-800 text-neutral-500"
-                        }`}>{(t.exit_reason ?? "—").toUpperCase()}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* ── Divider ───────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3">
-        <div className="flex-1 h-px bg-neutral-800" />
-        <span className="text-[10px] text-neutral-700 font-semibold">BROWSER-SIDE STRATEGY MONITOR</span>
-        <div className="flex-1 h-px bg-neutral-800" />
-      </div>
 
       {/* Header */}
       <div className="flex items-center justify-between">
