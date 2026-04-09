@@ -16,6 +16,7 @@ import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalp
 import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
+import { useServerAgent } from "@/hooks/useServerAgent";
 import { formatUSD } from "@/lib/utils";
 
 
@@ -353,6 +354,9 @@ function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
 function AgentContent() {
   const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
 
+  // ── 24/7 backend agent — source of truth for positions/P&L/trades/log ──
+  const server = useServerAgent();
+
   // ── 15m candles (Momentum) ────────────────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
   // ── 1m candles (HFT + ORB — needs 300 bars for ORB session history) ──
@@ -473,6 +477,18 @@ function AgentContent() {
             <Bot size={22} className="text-blue-400" />
             Living Agent
             <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-1">4 STRATEGIES LIVE</span>
+            {server.running ? (
+              <span className="flex items-center gap-1.5 text-[10px] font-normal px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                RUNS 24/7 · BROWSER INDEPENDENT
+              </span>
+            ) : server.error ? (
+              <span className="flex items-center gap-1.5 text-[10px] font-normal px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400">
+                Server offline — browser only
+              </span>
+            ) : (
+              <span className="text-[10px] font-normal text-neutral-600">connecting to server…</span>
+            )}
           </h1>
           <p className="text-xs text-neutral-600 mt-0.5">
             Momentum 15m · HFT Scalper 1m · ORB-30 1m · OBI Scalper 1m — all parallel · independent positions per strategy
@@ -503,13 +519,12 @@ function AgentContent() {
         <div className="h-10 w-px bg-neutral-800" />
 
         {[
-          ["Scans Run",    scanCount.toString()],
-          ["Last Scan",    lastScan ?? "—"],
-          ["Firing",       firingStrategy],
-          ["Open Pos",     anyPositionOpen ? `${openPositions.length} active` : "none"],
-          ["Bias",         analysis?.bias?.toUpperCase() ?? "—"],
-          ["Mode",         config.mode === "paper" ? "📄 PAPER" : config.mode === "perps" ? "🚀 PERPS" : "⚡ SPOT"],
-          ["Wallet",       config.mode === "paper" ? "Not needed" : connected ? "Connected" : "Disconnected"],
+          ["Scans Run",  (server.scanCount > 0 ? server.scanCount : scanCount).toString()],
+          ["Last Scan",  server.lastScan ?? lastScan ?? "—"],
+          ["Firing",     firingStrategy],
+          ["Open Pos",   server.openPositions.length > 0 ? `${server.openPositions.length} active` : anyPositionOpen ? `${openPositions.length} active` : "none"],
+          ["Server P&L", server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—"],
+          ["Mode",       "📄 PAPER"],
         ].map(([label, val]) => (
           <div key={label}>
             <div className="text-[9px] text-neutral-600 mb-0.5">{label}</div>
@@ -518,23 +533,22 @@ function AgentContent() {
         ))}
 
         <div className="ml-auto flex items-center gap-2">
-          <button onClick={forceScan}
+          <button onClick={() => { server.refresh(); forceScan(); }}
             className="p-2 rounded-lg hover:bg-neutral-800 text-neutral-600 hover:text-white transition-colors"
-            title="Force scan now">
+            title="Refresh now">
             <RefreshCw size={14} className={agentState === "scanning" ? "animate-spin" : ""} />
           </button>
 
-          {/* Master ON/OFF toggle */}
+          {/* Server agent start/stop */}
           <button
-            onClick={() => updateConfig({ enabled: !config.enabled })}
-            disabled={config.mode !== "paper" && !connected && !config.enabled}
-            className="flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-[13px] transition-all disabled:opacity-40"
-            style={config.enabled
+            onClick={() => server.running ? server.stopAgent() : server.startAgent()}
+            className="flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-[13px] transition-all"
+            style={server.running
               ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
               : { background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }
             }>
             <Power size={14} />
-            {config.enabled ? "Stop Agent" : "Start Agent"}
+            {server.running ? "Stop Agent" : "Start Agent"}
           </button>
         </div>
       </div>
@@ -965,14 +979,22 @@ function AgentContent() {
             </div>
           )}
 
-          {/* Paper trading panel */}
+          {/* Paper trading panel — server data when available, browser fallback */}
           {config.mode === "paper" && (
             <PaperPanel
-              openPositions={openPositions}
-              stats={paperStats}
-              trades={trades}
-              onClose={closePaperPosition}
-              onReset={resetPaperAccount}
+              openPositions={
+                server.openPositions.length > 0
+                  ? (server.openPositions as unknown as PaperPosition[])
+                  : openPositions
+              }
+              stats={server.stats ?? paperStats}
+              trades={
+                server.trades.length > 0
+                  ? (server.trades as unknown as ReturnType<typeof usePhantomAgent>["trades"])
+                  : trades
+              }
+              onClose={key => server.running ? server.closePosition(key) : closePaperPosition(key)}
+              onReset={() => server.running ? server.resetAccount() : resetPaperAccount()}
             />
           )}
 
@@ -1016,36 +1038,76 @@ function AgentContent() {
             )}
           </div>
 
-          {/* Agent log */}
+          {/* Agent log — prefer server log (survives page close) */}
           <div className="card p-4">
             <div className="flex items-center gap-2 mb-3">
               <ChevronRight size={13} className="text-neutral-500" />
               <span className="text-[13px] font-semibold text-white">Agent Log</span>
-              <span className="text-[9px] text-neutral-700 ml-auto">Live terminal</span>
+              {server.log.length > 0
+                ? <span className="text-[9px] text-emerald-400 ml-auto flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />server log</span>
+                : <span className="text-[9px] text-neutral-700 ml-auto">browser log</span>}
             </div>
-            <AgentLog logs={agentLog} />
+            <AgentLog logs={server.log.length > 0 ? server.log : agentLog} />
           </div>
         </div>
       </div>
 
-      {/* Trade history */}
+      {/* Trade history — server trades (persistent) + browser fallback */}
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Zap size={13} className="text-neutral-500" />
             <span className="text-[13px] font-semibold text-white">Execution History</span>
-            <span className="text-[9px] text-neutral-600">({trades.length} trades this session)</span>
+            {server.trades.length > 0
+              ? <span className="text-[9px] text-emerald-400">({server.trades.length} server trades · persistent)</span>
+              : <span className="text-[9px] text-neutral-600">({trades.length} trades this session)</span>}
           </div>
-          {trades.length > 0 && (
+          {server.trades.length === 0 && trades.length > 0 && (
             <button onClick={clearTrades}
               className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors">
               <Trash2 size={11} /> Clear
             </button>
           )}
+          {server.trades.length > 0 && (
+            <button onClick={server.resetAccount}
+              className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors">
+              <RotateCcw size={11} /> Reset Account
+            </button>
+          )}
         </div>
-        {trades.length === 0 ? (
+        {server.trades.length > 0 ? (
+          <div>
+            {server.trades.map(t => (
+              <div key={t.id} className="flex items-center gap-3 py-2 border-b border-neutral-800/60">
+                <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
+                  {t.direction === "long"
+                    ? <TrendingUp size={11} className="text-green-400" />
+                    : <TrendingDown size={11} className="text-red-400" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()} BTC</span>
+                    <span className="text-[9px] text-neutral-600">{t.strategy_name}</span>
+                    <span className="text-[9px] text-neutral-700">{new Date(t.closed_at ?? t.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  <div className="text-[9px] text-neutral-600 truncate font-mono">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "open"}</div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  {t.pnl_usd != null && (
+                    <div className={`text-[10px] font-bold font-mono ${t.pnl_usd >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {t.pnl_usd >= 0 ? "+" : ""}${t.pnl_usd.toFixed(2)}
+                    </div>
+                  )}
+                  <div className={`text-[9px] font-bold ${
+                    t.exit_reason === "tp" ? "text-green-400" : t.exit_reason === "sl" ? "text-red-400" : "text-neutral-500"
+                  }`}>{(t.exit_reason ?? "—").toUpperCase()}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : trades.length === 0 ? (
           <div className="text-center py-8 text-neutral-700 text-sm">
-            No trades executed this session. Start the agent to begin.
+            No trades yet. Agent is scanning every 20s…
           </div>
         ) : (
           <div>{trades.map(t => <TradeRow key={t.id} trade={t} />)}</div>
@@ -1058,7 +1120,7 @@ function AgentContent() {
           {
             icon: Bot,
             title: "How the Agent Works",
-            body: "All 4 strategies scan independently every 20s. Each can open its own position simultaneously — up to 4 concurrent trades. OBI Scalper fires fastest (1m, tight R:R). Auto-executes with no confirmation.",
+            body: "Runs 24/7 on the server — never stops when the browser closes. All 4 strategies scan independently every 20s. Each can hold its own position simultaneously — up to 4 concurrent trades.",
           },
           {
             icon: Shield,
