@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig } from "@/hooks/usePhantomAgent";
+import { useStrategyEngine } from "@/hooks/useStrategyEngine";
+import { useBinanceStream, BinanceCandle } from "@/hooks/useBinanceStream";
 import { formatUSD } from "@/lib/utils";
 
 // ─── State colours ────────────────────────────────────────────────────────────
@@ -162,8 +164,26 @@ function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades
 
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
-  const token   = typeof window !== "undefined" ? localStorage.getItem("token") ?? "" : "";
+  // ── Live 15m candles from Binance WebSocket ────────────────────────────
+  const [candles, setCandles] = useState<BinanceCandle[]>([]);
+
+  useBinanceStream({
+    symbols: ["BTC/USDT"],
+    timeframe: "15m",
+    onCandle: useCallback((_sym: string, c: BinanceCandle) => {
+      setCandles(prev => {
+        if (!prev.length) return [c];
+        const lastMs = new Date(prev[prev.length - 1].timestamp).getTime();
+        const curMs  = new Date(c.timestamp).getTime();
+        if (lastMs === curMs) return [...prev.slice(0, -1), c];
+        if (curMs > lastMs)   return [...prev.slice(-119), c];
+        return prev;
+      });
+    }, []),
+  });
+
+  // ── Frontend strategy engine — no backend, no auth ────────────────────
+  const strategyResult = useStrategyEngine(candles);
 
   const {
     config, updateConfig,
@@ -174,7 +194,7 @@ function AgentContent() {
     agentLog,
     walletConnected, walletAddress,
     forceScan,
-  } = usePhantomAgent(apiBase, token);
+  } = usePhantomAgent(strategyResult);
 
   const { connected } = useWallet();
   const meta = STATE_META[agentState];
@@ -391,23 +411,25 @@ function AgentContent() {
             <div className="flex items-center gap-2 mb-3">
               <Activity size={13} className="text-neutral-500" />
               <span className="text-[13px] font-semibold text-white">Live Strategy Conditions</span>
-              <span className="text-[9px] text-neutral-700 ml-auto">Updates every 60s when agent runs</span>
+              <span className="text-[9px] text-green-400 ml-auto flex items-center gap-1">
+              <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live · every bar
+            </span>
             </div>
-            {analysis ? (
+            {candles.length >= 60 ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between mb-2">
-                  <span className={`text-sm font-bold ${analysis.bias === "long" ? "text-green-400" : analysis.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
-                    {analysis.bias === "long" ? "▲ BULLISH" : analysis.bias === "short" ? "▼ BEARISH" : "— NEUTRAL"}
+                  <span className={`text-sm font-bold ${strategyResult.bias === "long" ? "text-green-400" : strategyResult.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
+                    {strategyResult.bias === "long" ? "▲ BULLISH" : strategyResult.bias === "short" ? "▼ BEARISH" : "— NEUTRAL"}
                   </span>
-                  <span className="text-[10px] text-neutral-500">{analysis.met_count}/7 conditions</span>
+                  <span className="text-[10px] text-neutral-500">{strategyResult.met_count}/7 conditions</span>
                 </div>
                 <div className="flex gap-0.5 h-1 mb-3">
                   {Array.from({ length: 7 }).map((_, i) => (
                     <div key={i} className="flex-1 rounded-full"
-                      style={{ background: i < analysis.met_count ? "#22c55e" : "#1e1e2e" }} />
+                      style={{ background: i < strategyResult.met_count ? "#22c55e" : "#1e1e2e" }} />
                   ))}
                 </div>
-                {(analysis as unknown as { conditions?: { name: string; met: boolean; value: string }[] }).conditions?.map((c, i) => (
+                {strategyResult.conditions.map((c, i) => (
                   <div key={i} className="flex items-center gap-2">
                     {c.met ? <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" /> : <XCircle size={11} className="text-neutral-700 flex-shrink-0" />}
                     <span className={`text-[10px] flex-1 ${c.met ? "text-neutral-200" : "text-neutral-600"}`}>{c.name}</span>
@@ -417,8 +439,8 @@ function AgentContent() {
               </div>
             ) : (
               <div className="text-center py-6 text-neutral-700 text-sm flex items-center justify-center gap-2">
-                <RefreshCw size={13} className={agentState === "scanning" ? "animate-spin" : ""} />
-                {config.enabled ? "Scanning…" : "Start agent to load conditions"}
+                <RefreshCw size={13} className="animate-spin" />
+                Loading live candles… ({candles.length}/60)
               </div>
             )}
           </div>
