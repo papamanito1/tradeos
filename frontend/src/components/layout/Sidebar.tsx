@@ -66,8 +66,9 @@ export function Sidebar() {
             >
               TradeOS
             </div>
-            <div className="text-[10px] mt-0.5" style={{ color: "#2a2a3e" }}>
-              v1.0 · Paper
+            <div className="text-[10px] mt-0.5 flex items-center gap-1" style={{ color: "#22c55e" }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block animate-pulse" />
+              v1.0 · Live
             </div>
           </div>
         </div>

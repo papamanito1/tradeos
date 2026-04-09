@@ -29,7 +29,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const [killSwitchActive, setKillSwitchActive] = useState(false);
-  const [mode, setMode] = useState("paper");
+  const [mode] = useState("live");
 
   useEffect(() => {
     if (!isLoading && !user) router.replace("/login");

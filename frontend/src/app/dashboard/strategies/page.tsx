@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { cn, formatUSD } from "@/lib/utils";
 
 const MODE_BADGE: Record<string, "profit" | "accent" | "neutral"> = {
-  live: "profit", paper: "accent", off: "neutral",
+  live: "profit", paper: "profit", off: "neutral",
 };
 const STATUS_BADGE: Record<string, "profit" | "warning" | "loss" | "neutral"> = {
   running: "profit", idle: "neutral", error: "loss", stopped: "neutral",
@@ -80,7 +80,7 @@ export default function StrategiesPage() {
   }
 
   async function toggleMode(s: Strategy) {
-    const next = s.mode === "off" ? "paper" : "off";
+    const next = s.mode === "off" ? "live" : "off";
     await strategiesApi.update(s.id, { mode: next });
     setStrategies((prev) => prev.map((x) => x.id === s.id ? { ...x, mode: next, is_enabled: next !== "off" } : x));
   }

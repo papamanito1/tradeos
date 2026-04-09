@@ -2,165 +2,120 @@
 
 import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
-import { AlertTriangle, Check } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Modal } from "@/components/ui/Modal";
+import { Zap, Shield, Server, Wallet } from "lucide-react";
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState<any>(null);
-  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
-  const [modeChanging, setModeChanging] = useState(false);
-  const [saved, setSaved] = useState("");
+  const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
 
-  useEffect(() => { settingsApi.get().then(setSettings); }, []);
-
-  async function switchToPaper() {
-    setModeChanging(true);
-    const res = await settingsApi.setTradingMode("paper", true);
-    if (res.trading_mode) {
-      setSettings((s: any) => ({ ...s, trading_mode: res.trading_mode }));
-      setSaved("Switched to paper mode");
-    }
-    setModeChanging(false);
-  }
-
-  async function switchToLive() {
-    if (!settings?.allow_live_trading) return;
-    const res = await settingsApi.setTradingMode("live", true);
-    if (res.trading_mode === "live") {
-      setSettings((s: any) => ({ ...s, trading_mode: "live" }));
-      setSaved("Switched to live mode");
-    }
-    setShowLiveConfirm(false);
-    setModeChanging(false);
-  }
-
-  if (!settings) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  useEffect(() => { settingsApi.get().then(setSettings).catch(() => {}); }, []);
 
   return (
     <div className="space-y-4 max-w-2xl">
-      {saved && (
-        <div className="flex items-center gap-2 text-profit bg-profit/10 border border-profit/20 rounded px-3 py-2 text-sm">
-          <Check className="w-3.5 h-3.5" /> {saved}
+
+      {/* Trading Mode — Live only */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Zap size={14} className="text-green-400" />
+          <h3 className="text-sm font-semibold text-white">Trading Mode</h3>
         </div>
-      )}
-
-      {/* Trading Mode */}
-      <div className="card p-4">
-        <h3 className="text-sm font-semibold text-white mb-4">Trading Mode</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            onClick={switchToPaper}
-            disabled={settings.trading_mode === "paper" || modeChanging}
-            className={cn(
-              "p-4 rounded-lg border-2 text-left transition-all",
-              settings.trading_mode === "paper"
-                ? "border-accent bg-accent/10"
-                : "border-surface-600 hover:border-accent/50"
-            )}
-          >
-            <div className="text-sm font-semibold text-white">Paper Trading</div>
-            <div className="text-xs text-neutral mt-1">Simulated orders — no real money at risk</div>
-            {settings.trading_mode === "paper" && (
-              <div className="text-[10px] text-accent mt-2 uppercase font-semibold">Active</div>
-            )}
-          </button>
-
-          <button
-            onClick={() => settings.allow_live_trading ? setShowLiveConfirm(true) : null}
-            disabled={settings.trading_mode === "live" || modeChanging || !settings.allow_live_trading}
-            className={cn(
-              "p-4 rounded-lg border-2 text-left transition-all relative",
-              !settings.allow_live_trading ? "opacity-50 cursor-not-allowed" : "",
-              settings.trading_mode === "live"
-                ? "border-warning bg-warning/10"
-                : "border-surface-600 hover:border-warning/50"
-            )}
-          >
-            <div className="text-sm font-semibold text-white">Live Trading</div>
-            <div className="text-xs text-neutral mt-1">Real exchange orders with real funds</div>
-            {!settings.allow_live_trading && (
-              <div className="text-[10px] text-neutral mt-2">Disabled in config (ALLOW_LIVE_TRADING=0)</div>
-            )}
-            {settings.trading_mode === "live" && (
-              <div className="text-[10px] text-warning mt-2 uppercase font-semibold">Active</div>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Exchange */}
-      <div className="card p-4">
-        <h3 className="text-sm font-semibold text-white mb-4">Exchange Configuration</h3>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <div className="label mb-1">Exchange</div>
-            <div className="text-gray-200 capitalize">{settings.exchange_id}</div>
+        <div className="flex items-center gap-4 p-4 rounded-xl border border-green-500/20 bg-green-500/5">
+          <div className="w-10 h-10 rounded-xl bg-green-500/15 flex items-center justify-center flex-shrink-0">
+            <Zap size={18} className="text-green-400" />
           </div>
-          <div>
-            <div className="label mb-1">Mode</div>
-            <div className="text-gray-200">{settings.exchange_testnet ? "Testnet" : "Mainnet"}</div>
-          </div>
-          <div>
-            <div className="label mb-1">Mock Exchange</div>
-            <div className={cn("text-sm", settings.use_mock_exchange ? "text-accent" : "text-neutral")}>
-              {settings.use_mock_exchange ? "Enabled (no real API calls)" : "Disabled"}
+          <div className="flex-1">
+            <div className="text-sm font-bold text-green-400">LIVE TRADING</div>
+            <div className="text-xs text-neutral-500 mt-0.5">
+              Real-time execution via Phantom wallet on Solana · BTC Perpetuals
             </div>
           </div>
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/25">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-[11px] font-bold text-green-400">ACTIVE</span>
+          </div>
         </div>
-        <p className="text-neutral text-xs mt-4 bg-surface-900 rounded px-3 py-2">
-          API keys are configured via environment variables (.env) for security — they cannot be set from the UI.
+        <p className="text-[11px] text-neutral-700 mt-3">
+          This system is configured for live trading only. All trades are executed on-chain via the Phantom wallet using the BTC Momentum Velocity strategy.
         </p>
       </div>
 
-      {/* System info */}
-      <div className="card p-4">
-        <h3 className="text-sm font-semibold text-white mb-4">System</h3>
-        <div className="text-xs text-neutral space-y-1.5">
-          <div>Version: TradeOS v1.0.0</div>
-          <div>Backend: FastAPI + SQLAlchemy + Redis</div>
-          <div>Frontend: Next.js 14 + Tailwind CSS</div>
-          <div>Exchange: CCXT</div>
+      {/* Phantom / Execution */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Wallet size={14} className="text-violet-400" />
+          <h3 className="text-sm font-semibold text-white">Execution Layer</h3>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            ["Protocol",   "Phantom Perps (Solana)"],
+            ["Asset",      "BTC Perpetuals"],
+            ["Strategy",   "Momentum Velocity 15m"],
+            ["Signals",    "Frontend engine (live)"],
+            ["Agent",      "Live Agent (wallet-signed)"],
+            ["Risk R:R",   "1 : 2 (ATR-adaptive)"],
+          ].map(([label, val]) => (
+            <div key={label} className="bg-neutral-900 rounded-lg p-3">
+              <div className="text-[9px] text-neutral-600 mb-1">{label}</div>
+              <div className="text-[12px] font-semibold text-white">{val}</div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Live mode confirmation modal */}
-      <Modal
-        open={showLiveConfirm}
-        onClose={() => setShowLiveConfirm(false)}
-        title="Activate Live Trading"
-      >
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 bg-warning/10 border border-warning/20 rounded p-3">
-            <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-warning text-sm font-medium">Real Money Warning</p>
-              <p className="text-neutral text-xs mt-1">
-                Live mode places REAL orders on the exchange with REAL funds.
-                All risk rules still apply but mistakes cannot be undone.
-              </p>
-            </div>
-          </div>
-          <p className="text-sm text-gray-300">
-            Are you absolutely sure you want to switch to live trading?
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={switchToLive}
-              className="btn flex-1 bg-warning/20 text-warning border border-warning/30 hover:bg-warning/30 justify-center"
-            >
-              Yes, activate live trading
-            </button>
-            <button onClick={() => setShowLiveConfirm(false)} className="btn-ghost flex-1 justify-center">
-              Cancel
-            </button>
-          </div>
+      {/* Risk */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Shield size={14} className="text-blue-400" />
+          <h3 className="text-sm font-semibold text-white">Risk Configuration</h3>
         </div>
-      </Modal>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            ["Min Conditions",   "5 / 7 to fire signal"],
+            ["Min Confidence",   "65% threshold"],
+            ["Stop Loss",        "1.5 × ATR"],
+            ["Take Profit",      "3.0 × ATR"],
+            ["ATR Filter",       "0.1% – 1.2% of price"],
+            ["Volume Filter",    "≥ 1.4× 20-bar avg"],
+          ].map(([label, val]) => (
+            <div key={label} className="bg-neutral-900 rounded-lg p-3">
+              <div className="text-[9px] text-neutral-600 mb-1">{label}</div>
+              <div className="text-[12px] font-semibold text-neutral-200">{val}</div>
+            </div>
+          ))}
+        </div>
+        <p className="text-[10px] text-neutral-700 mt-3">
+          Risk parameters are enforced by the frontend strategy engine on every bar close. Adjust them on the Live Agent page.
+        </p>
+      </div>
+
+      {/* System */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Server size={14} className="text-neutral-500" />
+          <h3 className="text-sm font-semibold text-white">System</h3>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-[12px]">
+          {[
+            ["Frontend",   "Next.js 14 · Vercel"],
+            ["Backend",    "FastAPI · Railway"],
+            ["Market Data","Binance WebSocket (direct)"],
+            ["Blockchain", "Solana Mainnet"],
+            ["Version",    "TradeOS v1.0"],
+            ["Mode",       "Live Only"],
+          ].map(([label, val]) => (
+            <div key={label}>
+              <div className="text-[9px] text-neutral-700 mb-0.5">{label}</div>
+              <div className="text-neutral-400">{val}</div>
+            </div>
+          ))}
+        </div>
+        {settings && (
+          <div className="mt-4 p-3 bg-neutral-900 rounded-lg text-[10px] text-neutral-600">
+            Backend exchange: <span className="text-neutral-400">{String(settings.exchange_id ?? "binance")}</span>
+            {" · "}
+            {settings.exchange_testnet ? "Testnet" : "Mainnet"}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

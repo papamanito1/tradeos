@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import {
   DollarSign, TrendingUp, TrendingDown, Activity,
   Layers, BarChart2, ShieldCheck, RefreshCw, WifiOff,
-  Zap, ArrowUpRight, ArrowDownRight, RotateCcw, Bell,
-  CheckCircle2, XCircle, Clock, BookOpen,
+  Zap, ArrowUpRight, ArrowDownRight, Bell,
+  CheckCircle2, XCircle, BookOpen,
 } from "lucide-react";
 import { overviewApi } from "@/lib/api";
 import { Overview } from "@/types";
@@ -521,7 +521,7 @@ function ActivityRow({ ev }: { ev: ActivityEvent }) {
         <div className="flex items-center gap-1.5">
           <span className={`text-[10px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>{isLong ? "▲" : "▼"}</span>
           <span className="text-[11px] font-semibold text-white">BTC</span>
-          {isTrade && <span className="text-[8px] bg-blue-500/10 border border-blue-500/20 text-blue-400 px-1 rounded">PAPER</span>}
+          {isTrade && <span className="text-[8px] bg-green-500/10 border border-green-500/20 text-green-400 px-1 rounded">LIVE</span>}
         </div>
         <div className="flex gap-2 text-[9px] font-mono">
           <span className="text-neutral-500">{formatUSD(isTrade ? (ev.fill_price || 0) : (ev.entry || 0))}</span>
@@ -534,26 +534,6 @@ function ActivityRow({ ev }: { ev: ActivityEvent }) {
   );
 }
 
-// ─── Reset Button ─────────────────────────────────────────────────────────────
-function ResetBtn({ onReset }: { onReset: () => void }) {
-  const [busy, setBusy] = useState(false), [done, setDone] = useState(false);
-  const go = async () => {
-    if (!confirm("Reset paper account to $10,000?")) return;
-    setBusy(true);
-    const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/paper/reset`, {
-      method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-    });
-    if (r.ok) { setDone(true); setTimeout(() => setDone(false), 3000); onReset(); }
-    setBusy(false);
-  };
-  return (
-    <button onClick={go} disabled={busy}
-      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border transition-colors"
-      style={{ background: done ? "rgba(34,197,94,.1)" : "rgba(255,255,255,.03)", borderColor: done ? "rgba(34,197,94,.3)" : "rgba(255,255,255,.06)", color: done ? "#22c55e" : "#52525e" }}>
-      <RotateCcw size={9} className={busy ? "animate-spin" : ""} />{done ? "Done!" : "Reset $10k"}
-    </button>
-  );
-}
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function OverviewPage() {
@@ -846,9 +826,8 @@ export default function OverviewPage() {
               <div className="flex items-center gap-2">
                 <Bell size={11} className="text-neutral-600" />
                 <span className="text-[12px] font-semibold text-white">Live Activity</span>
-                {activity.length > 0 && <span className="text-[8px] bg-blue-500/10 border border-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-mono">{activity.length}</span>}
+                {activity.length > 0 && <span className="text-[8px] bg-green-500/10 border border-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-mono">{activity.length}</span>}
               </div>
-              <ResetBtn onReset={() => { fetchData(); fetchActivity(); }} />
             </div>
             <div className="overflow-y-auto flex-1 max-h-64">
               {activity.length === 0
