@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import {
@@ -10,9 +10,12 @@ import {
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig } from "@/hooks/usePhantomAgent";
-import { useStrategyEngine } from "@/hooks/useStrategyEngine";
-import { useBinanceStream, BinanceCandle } from "@/hooks/useBinanceStream";
+import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
+import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
+import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { formatUSD } from "@/lib/utils";
+
+type StrategyMode = "momentum" | "hft";
 
 // ─── State colours ────────────────────────────────────────────────────────────
 const STATE_META: Record<AgentState, { label: string; color: string; pulse: boolean }> = {
@@ -162,67 +165,165 @@ function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades
   );
 }
 
+// ─── Candle seeder ────────────────────────────────────────────────────────────
+async function seedCandles(tf: "1m" | "15m"): Promise<BinanceCandle[]> {
+  const interval = tf === "1m" ? "1m" : "15m";
+  const bybitInterval = tf === "1m" ? "1" : "15";
+  try {
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=120`);
+    if (r.ok) {
+      const raw: unknown[][] = await r.json();
+      return raw.map(k => ({
+        timestamp: new Date(k[0] as number).toISOString(),
+        open:  parseFloat(k[1] as string), high: parseFloat(k[2] as string),
+        low:   parseFloat(k[3] as string), close: parseFloat(k[4] as string),
+        volume:parseFloat(k[5] as string), is_closed: true,
+      }));
+    }
+  } catch { /* fall through */ }
+  try {
+    const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${bybitInterval}&limit=120`);
+    if (r.ok) {
+      const json = await r.json();
+      const list: string[][] = json?.result?.list ?? [];
+      return [...list].reverse().map(k => ({
+        timestamp: new Date(parseInt(k[0])).toISOString(),
+        open: parseFloat(k[1]), high: parseFloat(k[2]),
+        low:  parseFloat(k[3]), close: parseFloat(k[4]),
+        volume: parseFloat(k[5]), is_closed: true,
+      }));
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+// ─── HFT Indicator bar ────────────────────────────────────────────────────────
+function HFTBar({ label, value, min, max, goodHigh }: { label: string; value: number | null; min: number; max: number; goodHigh: boolean }) {
+  if (value === null) return (
+    <div><div className="text-[9px] text-neutral-700 mb-0.5">{label}</div><div className="h-1.5 bg-neutral-800 rounded-full" /></div>
+  );
+  const pct = Math.min(Math.max((value - min) / (max - min) * 100, 0), 100);
+  const isGood = goodHigh ? value > 0 : value < 0;
+  return (
+    <div>
+      <div className="flex justify-between mb-0.5">
+        <span className="text-[9px] text-neutral-600">{label}</span>
+        <span className={`text-[9px] font-mono ${isGood ? "text-green-400" : value === 0 ? "text-neutral-600" : "text-red-400"}`}>{value.toFixed(3)}</span>
+      </div>
+      <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-200"
+          style={{ width: `${pct}%`, background: isGood ? "#22c55e" : "#ef4444" }} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
-  // ── Candles: seed from REST, update via WebSocket ─────────────────────
+  const [strategyMode, setStrategyMode] = useState<StrategyMode>("hft");
+
+  // ── 15m candles (Momentum strategy) ──────────────────────────────────
+  const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
+  // ── 1m candles (HFT strategy) ────────────────────────────────────────
+  const [candles1m,  setCandles1m]  = useState<BinanceCandle[]>([]);
+  const [orderBook,  setOrderBook]  = useState<BinanceOrderBook | null>(null);
+  const { push: pushTrade, get: getTrades } = useAggTradeBuffer();
+  const [aggSnap, setAggSnap] = useState<BinanceAggTrade[]>([]);
+  const aggSnapTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Seed candles on mount and on strategy switch
   const [candles, setCandles] = useState<BinanceCandle[]>([]);
-  const seededRef = useCallback(async () => {
-    // Try Binance public REST first (no auth, browser-accessible)
-    try {
-      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=120");
-      if (r.ok) {
-        const raw: unknown[][] = await r.json();
-        setCandles(raw.map(k => ({
-          timestamp: new Date(k[0] as number).toISOString(),
-          open:      parseFloat(k[1] as string),
-          high:      parseFloat(k[2] as string),
-          low:       parseFloat(k[3] as string),
-          close:     parseFloat(k[4] as string),
-          volume:    parseFloat(k[5] as string),
-          is_closed: true,
-        })));
-        return;
-      }
-    } catch { /* fall through */ }
-    // Fallback: Bybit public REST
-    try {
-      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=120");
-      if (r.ok) {
-        const json = await r.json();
-        const list: string[][] = json?.result?.list ?? [];
-        setCandles([...list].reverse().map(k => ({
-          timestamp: new Date(parseInt(k[0])).toISOString(),
-          open:      parseFloat(k[1]),
-          high:      parseFloat(k[2]),
-          low:       parseFloat(k[3]),
-          close:     parseFloat(k[4]),
-          volume:    parseFloat(k[5]),
-          is_closed: true,
-        })));
-      }
-    } catch { /* ignore */ }
+  // Seed both timeframes on mount
+  useEffect(() => {
+    seedCandles("15m").then(c => { setCandles15m(c); if (strategyMode === "momentum") setCandles(c); });
+    seedCandles("1m").then(c  => { setCandles1m(c);  if (strategyMode === "hft")      setCandles(c); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Seed on mount
-  useEffect(() => { seededRef(); }, [seededRef]);
+  // Sync active candles when mode changes
+  useEffect(() => {
+    if (strategyMode === "momentum" && candles15m.length) setCandles(candles15m);
+    if (strategyMode === "hft"      && candles1m.length)  setCandles(candles1m);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategyMode]);
 
+  // Snapshot aggTrades every 2s so HFT hook re-renders
+  useEffect(() => {
+    aggSnapTimer.current = setInterval(() => setAggSnap([...getTrades()]), 2000);
+    return () => { if (aggSnapTimer.current) clearInterval(aggSnapTimer.current); };
+  }, [getTrades]);
+
+  // Subscribe to both 15m and 1m streams
   useBinanceStream({
     symbols: ["BTC/USDT"],
     timeframe: "15m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {
-      setCandles(prev => {
-        if (!prev.length) return [c];
-        const lastMs = new Date(prev[prev.length - 1].timestamp).getTime();
-        const curMs  = new Date(c.timestamp).getTime();
-        if (lastMs === curMs) return [...prev.slice(0, -1), c];
-        if (curMs > lastMs)   return [...prev.slice(-119), c];
-        return prev;
+      setCandles15m(prev => {
+        const updated = !prev.length ? [c] : (() => {
+          const lMs = new Date(prev[prev.length-1].timestamp).getTime();
+          const cMs = new Date(c.timestamp).getTime();
+          if (lMs === cMs) return [...prev.slice(0,-1), c];
+          if (cMs > lMs)   return [...prev.slice(-119), c];
+          return prev;
+        })();
+        if (strategyMode === "momentum") setCandles(updated);
+        return updated;
       });
-    }, []),
+    }, [strategyMode]),
   });
 
-  // ── Frontend strategy engine — no backend, no auth ────────────────────
-  const strategyResult = useStrategyEngine(candles);
+  useBinanceStream({
+    symbols: ["BTC/USDT"],
+    timeframe: "1m",
+    onCandle: useCallback((_sym: string, c: BinanceCandle) => {
+      setCandles1m(prev => {
+        const updated = !prev.length ? [c] : (() => {
+          const lMs = new Date(prev[prev.length-1].timestamp).getTime();
+          const cMs = new Date(c.timestamp).getTime();
+          if (lMs === cMs) return [...prev.slice(0,-1), c];
+          if (cMs > lMs)   return [...prev.slice(-119), c];
+          return prev;
+        })();
+        if (strategyMode === "hft") setCandles(updated);
+        return updated;
+      });
+    }, [strategyMode]),
+    onOrderBook: useCallback((ob: BinanceOrderBook) => setOrderBook(ob), []),
+    onAggTrade:  useCallback((t: BinanceAggTrade) => pushTrade(t), [pushTrade]),
+  });
+
+  // ── Strategy engines ──────────────────────────────────────────────────
+  const momentumResult = useStrategyEngine(candles15m);
+  const hftResult      = useHFTScalper(candles1m, orderBook, aggSnap);
+
+  // Active result fed to agent
+  const activeResult: StrategyResult = useMemo(() => {
+    if (strategyMode === "hft") {
+      // Adapt HFTResult to StrategyResult shape
+      return {
+        bias:       hftResult.bias,
+        conditions: hftResult.conditions,
+        met_count:  hftResult.met_count,
+        total:      7,
+        all_met:    hftResult.all_met,
+        signal:     hftResult.signal ? {
+          direction:  hftResult.signal.direction,
+          entry:      hftResult.signal.entry,
+          sl:         hftResult.signal.sl,
+          tp:         hftResult.signal.tp2,
+          confidence: hftResult.signal.confidence,
+          reasoning:  hftResult.signal.reasoning,
+          timestamp:  hftResult.signal.timestamp,
+          rr:         `1 : ${(hftResult.signal.tp2 - hftResult.signal.entry) / (hftResult.signal.entry - hftResult.signal.sl) > 0 ? ((hftResult.signal.tp2 - hftResult.signal.entry) / Math.abs(hftResult.signal.entry - hftResult.signal.sl)).toFixed(1) : "1.2"}`,
+        } : null,
+        indicators: {
+          rsi: null, ema50: null, ema21: null, vwap: null,
+          atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null,
+        },
+      };
+    }
+    return momentumResult;
+  }, [strategyMode, momentumResult, hftResult]);
 
   const {
     config, updateConfig,
@@ -233,7 +334,7 @@ function AgentContent() {
     agentLog,
     walletConnected, walletAddress,
     forceScan,
-  } = usePhantomAgent(strategyResult);
+  } = usePhantomAgent(activeResult);
 
   const { connected } = useWallet();
   const meta = STATE_META[agentState];
@@ -262,12 +363,23 @@ function AgentContent() {
             Living Agent
           </h1>
           <p className="text-xs text-neutral-600 mt-0.5">
-            BTC Momentum Velocity · autonomous trading via Phantom wallet
+            {strategyMode === "hft" ? "HFT VWAP Scalper · 1m bars · OBI + TFI" : "BTC Momentum Velocity · 15m · EMA/RSI/VWAP"} · autonomous trading via Phantom
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Strategy selector */}
+          <div className="flex rounded-xl overflow-hidden border border-neutral-800 text-[11px] font-semibold">
+            {(["momentum", "hft"] as StrategyMode[]).map(m => (
+              <button key={m} onClick={() => setStrategyMode(m)}
+                className="px-4 py-2 transition-colors"
+                style={strategyMode === m
+                  ? { background: "rgba(10,132,255,0.2)", color: "#0a84ff" }
+                  : { background: "transparent", color: "#4b5563" }}>
+                {m === "hft" ? "HFT Scalper" : "Momentum 15m"}
+              </button>
+            ))}
+          </div>
           <WalletInfo />
-          {/* Custom-styled Phantom connect button */}
           <div className="phantom-btn-wrapper">
             <WalletMultiButton />
           </div>
@@ -293,7 +405,8 @@ function AgentContent() {
         {[
           ["Scans Run",    scanCount.toString()],
           ["Last Scan",    lastScan ?? "—"],
-          ["Conditions",   analysis ? `${analysis.met_count}/7` : "—"],
+          ["Strategy",     strategyMode === "hft" ? "HFT 1m" : "MV 15m"],
+          ["Conditions",   analysis ? `${analysis.met_count}/${activeResult.total ?? 7}` : "—"],
           ["Bias",         analysis?.bias?.toUpperCase() ?? "—"],
           ["Wallet",       connected ? "Connected" : "Disconnected"],
         ].map(([label, val]) => (
@@ -442,8 +555,42 @@ function AgentContent() {
           )}
         </div>
 
-        {/* Right: conditions + log */}
+        {/* Right: conditions + HFT meters + log */}
         <div className="col-span-12 lg:col-span-7 space-y-4">
+
+          {/* HFT-specific meters (only when HFT mode) */}
+          {strategyMode === "hft" && (
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Zap size={13} className="text-yellow-400" />
+                <span className="text-[13px] font-semibold text-white">Microstructure Meters</span>
+                <span className="text-[9px] text-yellow-400 ml-auto flex items-center gap-1">
+                  <span className="w-1 h-1 rounded-full bg-yellow-400 animate-pulse" />100 ms depth
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                <HFTBar label="Order Book Imbalance (OBI)" value={hftResult.indicators.obi} min={-1} max={1} goodHigh />
+                <HFTBar label="Trade Flow Imbalance (TFI)" value={hftResult.indicators.tfi} min={-1} max={1} goodHigh />
+              </div>
+              <div className="grid grid-cols-4 gap-3 mt-4">
+                {[
+                  ["Bid",         hftResult.indicators.bid?.toFixed(1) ?? "—"],
+                  ["Ask",         hftResult.indicators.ask?.toFixed(1) ?? "—"],
+                  ["Spread",      hftResult.indicators.spread_ticks != null ? `${hftResult.indicators.spread_ticks.toFixed(1)} tks` : "—"],
+                  ["Microprice",  hftResult.indicators.microprice?.toFixed(1) ?? "—"],
+                  ["VWAP 1m",     hftResult.indicators.vwap_1m?.toFixed(1) ?? "—"],
+                  ["ATR 1m",      hftResult.indicators.atr_1m?.toFixed(1) ?? "—"],
+                  ["EMA9 5m",     hftResult.indicators.ema9_5m?.toFixed(1) ?? "—"],
+                  ["EMA21 5m",    hftResult.indicators.ema21_5m?.toFixed(1) ?? "—"],
+                ].map(([l, v]) => (
+                  <div key={l}>
+                    <div className="text-[9px] text-neutral-700">{l}</div>
+                    <div className="text-[11px] font-mono text-white">{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Conditions checklist */}
           <div className="card p-4">
@@ -451,24 +598,25 @@ function AgentContent() {
               <Activity size={13} className="text-neutral-500" />
               <span className="text-[13px] font-semibold text-white">Live Strategy Conditions</span>
               <span className="text-[9px] text-green-400 ml-auto flex items-center gap-1">
-              <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live · every bar
-            </span>
+                <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />
+                live · {strategyMode === "hft" ? "1m bar" : "15m bar"}
+              </span>
             </div>
-            {candles.length >= 60 ? (
+            {candles.length >= (strategyMode === "hft" ? 30 : 60) ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between mb-2">
-                  <span className={`text-sm font-bold ${strategyResult.bias === "long" ? "text-green-400" : strategyResult.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
-                    {strategyResult.bias === "long" ? "▲ BULLISH" : strategyResult.bias === "short" ? "▼ BEARISH" : "— NEUTRAL"}
+                  <span className={`text-sm font-bold ${activeResult.bias === "long" ? "text-green-400" : activeResult.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
+                    {activeResult.bias === "long" ? "▲ BULLISH" : activeResult.bias === "short" ? "▼ BEARISH" : "— NEUTRAL"}
                   </span>
-                  <span className="text-[10px] text-neutral-500">{strategyResult.met_count}/7 conditions</span>
+                  <span className="text-[10px] text-neutral-500">{activeResult.met_count}/{activeResult.total ?? 7} conditions</span>
                 </div>
                 <div className="flex gap-0.5 h-1 mb-3">
-                  {Array.from({ length: 7 }).map((_, i) => (
+                  {Array.from({ length: activeResult.total ?? 7 }).map((_, i) => (
                     <div key={i} className="flex-1 rounded-full"
-                      style={{ background: i < strategyResult.met_count ? "#22c55e" : "#1e1e2e" }} />
+                      style={{ background: i < activeResult.met_count ? "#22c55e" : "#1e1e2e" }} />
                   ))}
                 </div>
-                {strategyResult.conditions.map((c, i) => (
+                {activeResult.conditions.map((c, i) => (
                   <div key={i} className="flex items-center gap-2">
                     {c.met ? <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" /> : <XCircle size={11} className="text-neutral-700 flex-shrink-0" />}
                     <span className={`text-[10px] flex-1 ${c.met ? "text-neutral-200" : "text-neutral-600"}`}>{c.name}</span>
@@ -479,7 +627,7 @@ function AgentContent() {
             ) : (
               <div className="text-center py-6 text-neutral-700 text-sm flex items-center justify-center gap-2">
                 <RefreshCw size={13} className="animate-spin" />
-                Loading live candles… ({candles.length}/60)
+                Loading live candles… ({candles.length}/{strategyMode === "hft" ? 30 : 60})
               </div>
             )}
           </div>

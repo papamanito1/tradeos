@@ -50,12 +50,21 @@ export interface BinanceOrderBook {
   timestamp: string;
 }
 
+export interface BinanceAggTrade {
+  symbol: string;
+  price: number;
+  quantity: number;
+  is_buyer_maker: boolean; // true = sell (seller is aggressor), false = buy
+  timestamp: number;
+}
+
 interface UseBinanceStreamOptions {
-  symbols: string[];       // ["BTC/USDT", "ETH/USDT"]
-  timeframe?: string;      // "1m" | "5m" | "15m" | "1h" | "4h" | "1d"
+  symbols: string[];
+  timeframe?: string;
   onTicker?: (ticker: BinanceTicker) => void;
   onCandle?: (symbol: string, candle: BinanceCandle) => void;
   onOrderBook?: (ob: BinanceOrderBook) => void;
+  onAggTrade?: (trade: BinanceAggTrade) => void;
 }
 
 /** "BTC/USDT" → "btcusdt" */
@@ -83,6 +92,7 @@ export function useBinanceStream({
   onTicker,
   onCandle,
   onOrderBook,
+  onAggTrade,
 }: UseBinanceStreamOptions) {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -90,13 +100,14 @@ export function useBinanceStream({
   const retryDelay = useRef(1000);
   const intentionalClose = useRef(false);
 
-  // Keep latest callbacks without reconnecting
-  const onTickerRef = useRef(onTicker);
-  const onCandleRef = useRef(onCandle);
+  const onTickerRef    = useRef(onTicker);
+  const onCandleRef    = useRef(onCandle);
   const onOrderBookRef = useRef(onOrderBook);
-  useEffect(() => { onTickerRef.current = onTicker; }, [onTicker]);
-  useEffect(() => { onCandleRef.current = onCandle; }, [onCandle]);
+  const onAggTradeRef  = useRef(onAggTrade);
+  useEffect(() => { onTickerRef.current    = onTicker;    }, [onTicker]);
+  useEffect(() => { onCandleRef.current    = onCandle;    }, [onCandle]);
   useEffect(() => { onOrderBookRef.current = onOrderBook; }, [onOrderBook]);
+  useEffect(() => { onAggTradeRef.current  = onAggTrade;  }, [onAggTrade]);
 
   const connect = useCallback(() => {
     if (typeof window === "undefined" || !symbols.length) return;
@@ -109,6 +120,7 @@ export function useBinanceStream({
       streams.push(`${b}@ticker`);
       streams.push(`${b}@kline_${tf}`);
       streams.push(`${b}@depth20@100ms`);
+      if (onAggTradeRef.current) streams.push(`${b}@aggTrade`);
     }
 
     const url = `${BINANCE_WS}?streams=${streams.join("/")}`;
@@ -175,8 +187,19 @@ export function useBinanceStream({
             });
           }
 
+          // ── Agg trades ───────────────────────────────────────────────────────
+          else if (eventType === "aggTrade") {
+            const symbol = fromBinance(data.s ?? "");
+            onAggTradeRef.current?.({
+              symbol,
+              price:           parseFloat(data.p ?? "0"),
+              quantity:        parseFloat(data.q ?? "0"),
+              is_buyer_maker:  data.m ?? false,
+              timestamp:       data.T ?? Date.now(),
+            });
+          }
+
           // ── Depth / order book ───────────────────────────────────────────────
-          // Binance @depth20 stream has NO "e" field — detect by stream name
           else if (stream.includes("@depth")) {
             const rawSym = stream.split("@")[0];   // "btcusdt"
             const symbol = fromBinance(rawSym.replace("usdt", "USDT").toUpperCase());
