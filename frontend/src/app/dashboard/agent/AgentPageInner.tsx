@@ -7,16 +7,15 @@ import {
   Bot, Power, RefreshCw, ExternalLink, Zap, Shield,
   CheckCircle2, XCircle, TrendingUp, TrendingDown,
   AlertTriangle, Activity, ChevronRight, Trash2, Copy,
-  FileText, RotateCcw, X, DollarSign, Cloud, Wifi, WifiOff,
+  FileText, RotateCcw, X, DollarSign, Server, Wifi, WifiOff,
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
-import { useAuth } from "@/context/AuthContext";
-import { useServerAgent, ServerPosition } from "@/hooks/useServerAgent";
 import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
 import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
 import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
 import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
+import { useServerAgent, ServerPosition } from "@/hooks/useServerAgent";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { formatUSD } from "@/lib/utils";
 
@@ -351,11 +350,53 @@ function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
   };
 }
 
+// ─── Server position card ─────────────────────────────────────────────────────
+function ServerPosCard({ pos, onClose }: { pos: ServerPosition; onClose: () => void }) {
+  const isLong  = pos.direction === "long";
+  const pnlClr  = pos.unrealized_pnl >= 0 ? "text-green-400" : "text-red-400";
+  const progress = pos.sl && pos.tp ? Math.min(Math.max(
+    (pos.current_price - pos.sl) / (pos.tp - pos.sl) * 100, 0), 100
+  ) : 50;
+  return (
+    <div className="rounded-xl p-3.5 space-y-2.5"
+      style={{
+        background: isLong ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
+        border: `1px solid ${isLong ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
+      }}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isLong ? "bg-green-400" : "bg-red-400"}`} />
+          <span className={`text-[11px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+            {pos.direction.toUpperCase()} — {pos.strategy_name}
+          </span>
+        </div>
+        <button onClick={onClose} className="text-[9px] text-neutral-600 hover:text-red-400 border border-neutral-800 rounded px-2 py-0.5 flex items-center gap-1">
+          <X size={8} /> Close
+        </button>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
+        <div><span className="text-neutral-600 block text-[8px]">Entry</span><span className="text-white">${pos.entry.toFixed(0)}</span></div>
+        <div><span className="text-neutral-600 block text-[8px]">Current</span><span className="text-white">${pos.current_price.toFixed(0)}</span></div>
+        <div><span className="text-neutral-600 block text-[8px]">Unrealized</span><span className={pnlClr}>{pos.unrealized_pnl >= 0 ? "+" : ""}${pos.unrealized_pnl.toFixed(2)}</span></div>
+      </div>
+      <div className="space-y-1">
+        <div className="flex justify-between text-[8px]">
+          <span className="text-red-400">SL ${pos.sl?.toFixed(0) ?? "—"}</span>
+          <span className="text-neutral-600">${pos.size_usdc} · {pos.btc_size.toFixed(5)} BTC · {pos.rr}</span>
+          <span className="text-green-400">TP ${pos.tp?.toFixed(0) ?? "—"}</span>
+        </div>
+        <div className="h-1 bg-neutral-800 rounded-full overflow-hidden">
+          <div className="h-full w-0.5 bg-white rounded-full" style={{ marginLeft: `${progress}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
-  const { token } = useAuth();
-  const server = useServerAgent(token);
   const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
+  const server = useServerAgent();
 
   // ── 15m candles (Momentum) ────────────────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
@@ -467,200 +508,156 @@ function AgentContent() {
     if (walletAddress) navigator.clipboard.writeText(walletAddress);
   }, [walletAddress]);
 
-  const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-400";
-
   return (
     <div className="p-4 space-y-5">
 
-      {/* ── SERVER 24/7 AGENT PANEL ─────────────────────────────────────── */}
-      <div className="card p-5 space-y-4"
-        style={{ border: server.online ? "1px solid rgba(16,185,129,0.25)" : "1px solid rgba(255,255,255,0.06)", boxShadow: server.online ? "0 0 24px rgba(16,185,129,0.08)" : "none" }}>
-
+      {/* ── Server Agent 24/7 Panel ───────────────────────────────────────── */}
+      <div className="card p-5 space-y-4" style={{ border: "1px solid rgba(34,197,94,0.2)", boxShadow: "0 0 24px rgba(34,197,94,0.06)" }}>
         {/* Header row */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.2)" }}>
-              <Cloud size={18} className="text-emerald-400" />
+            <div className="relative">
+              <Server size={22} className="text-green-400" />
+              {server.running && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-400 animate-ping opacity-75" />}
+              {server.running && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-400" />}
             </div>
             <div>
-              <div className="text-[14px] font-bold text-white flex items-center gap-2">
-                Server Agent — 24/7
-                {server.online
-                  ? <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"><Wifi size={9} /> ONLINE</span>
-                  : <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-500"><WifiOff size={9} /> OFFLINE</span>
-                }
-                {server.running && <span className="text-[9px] px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 animate-pulse">TRADING</span>}
+              <div className="flex items-center gap-2">
+                <span className="text-[15px] font-bold text-white">Server Agent</span>
+                {server.error ? (
+                  <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400">
+                    <WifiOff size={8} /> Offline
+                  </span>
+                ) : server.running ? (
+                  <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 animate-pulse">
+                    <Wifi size={8} /> LIVE 24/7
+                  </span>
+                ) : (
+                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-500">STOPPED</span>
+                )}
               </div>
               <p className="text-[10px] text-neutral-600 mt-0.5">
-                Runs on Railway server 24/7 · keeps trading even when your laptop is closed
+                Runs on Railway server · all 4 strategies · never stops · browser-independent
               </p>
             </div>
           </div>
-
           <div className="flex items-center gap-2">
-            <button onClick={server.refresh}
-              className="p-2 rounded-lg hover:bg-neutral-800 text-neutral-600 hover:text-white transition-colors" title="Refresh">
-              <RefreshCw size={13} />
+            <button onClick={server.refresh} className="p-2 text-neutral-600 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors">
+              <RefreshCw size={13} className={server.loading ? "animate-spin" : ""} />
             </button>
-            {server.online && (
-              <button
-                onClick={server.running ? server.stopAgent : server.startAgent}
-                className="flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-[12px] transition-all"
-                style={server.running
-                  ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
-                  : { background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981" }
-                }>
-                <Power size={13} />
-                {server.running ? "Stop Server Agent" : "Start Server Agent"}
-              </button>
-            )}
+            <button
+              onClick={() => server.running ? server.stopAgent() : server.startAgent()}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-[12px] transition-all"
+              style={server.running
+                ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
+                : { background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }
+              }>
+              <Power size={13} />
+              {server.running ? "Stop Server" : "Start Server"}
+            </button>
           </div>
         </div>
 
-        {/* Stats strip */}
-        {server.online && server.stats && (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            {[
-              ["Total P&L",    `${(server.stats.total_pnl ?? 0) >= 0 ? "+" : ""}$${(server.stats.total_pnl ?? 0).toFixed(2)}`,   pnlColor(server.stats.total_pnl ?? 0)],
-              ["Win Rate",     server.stats.total_trades > 0 ? `${server.stats.win_rate}%` : "—",   "text-blue-400"],
-              ["W / L",        `${server.stats.wins} / ${server.stats.losses}`,                      "text-neutral-300"],
-              ["Open Pos",     `${server.positions.length}`,                                          server.positions.length > 0 ? "text-green-400" : "text-neutral-500"],
-            ].map(([l, v, cls]) => (
-              <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
-                <div className={`text-[12px] font-bold font-mono ${cls}`}>{v}</div>
-              </div>
-            ))}
+        {server.error && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/5 border border-red-500/15 text-[11px] text-red-400">
+            <AlertTriangle size={12} /> Cannot reach backend: {server.error} — check Railway deployment
           </div>
         )}
 
-        {/* Open server positions */}
-        {server.online && server.positions.length > 0 && (
-          <div className="space-y-2">
-            <div className="text-[10px] text-neutral-600 mb-1">Open Positions (server)</div>
-            {server.positions.map(pos => {
-              const pnl = pos.unrealized_pnl ?? 0;
-              return (
-                <div key={pos.id} className="rounded-xl p-3 flex items-center gap-4"
-                  style={{
-                    background: pos.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
-                    border: `1px solid ${pos.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
-                  }}>
-                  <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${pos.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-[11px] font-bold ${pos.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                      {pos.direction.toUpperCase()} — {pos.strategy_name}
-                    </div>
-                    <div className="text-[9px] text-neutral-600 font-mono">
-                      Entry ${pos.entry.toFixed(0)} · SL ${pos.sl?.toFixed(0) ?? "—"} · TP ${pos.tp?.toFixed(0) ?? "—"} · ${pos.size_usdc}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className={`text-[11px] font-bold font-mono ${pnlColor(pnl)}`}>{pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}</div>
-                    <div className="text-[9px] text-neutral-600">{pos.unrealized_pct >= 0 ? "+" : ""}{(pos.unrealized_pct ?? 0).toFixed(3)}%</div>
-                  </div>
-                  <button onClick={() => server.closePosition(pos.strategy_key)}
-                    className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 rounded-lg px-2 py-1 flex-shrink-0">
-                    <X size={9} /> Close
-                  </button>
+        {!server.error && (
+          <>
+            {/* Stats row */}
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                ["Scans",       server.scanCount.toString(),   "text-white"],
+                ["Last Scan",   server.lastScan ?? "—",        "text-blue-400"],
+                ["Open Pos",    `${server.openPositions.length}`, server.openPositions.length > 0 ? "text-green-400" : "text-neutral-600"],
+                ["Total P&L",   server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—",
+                                server.stats?.total_pnl != null ? (server.stats.total_pnl >= 0 ? "text-green-400" : "text-red-400") : "text-neutral-600"],
+                ["Win Rate",    server.stats?.total_trades ? `${server.stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
+              ].map(([l, v, cls]) => (
+                <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                  <div className="text-[8px] text-neutral-600 mb-0.5">{l}</div>
+                  <div className={`text-[12px] font-bold font-mono ${cls}`}>{v}</div>
                 </div>
-              );
-            })}
-          </div>
-        )}
+              ))}
+            </div>
 
-        {/* Server config row */}
-        {server.online && server.config && (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-neutral-800">
+            {/* Open server positions */}
+            {server.openPositions.length > 0 ? (
+              <div className="space-y-2">
+                <div className="text-[10px] text-neutral-600 font-semibold">Open Positions ({server.openPositions.length})</div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                  {server.openPositions.map(p => (
+                    <ServerPosCard key={p.id} pos={p} onClose={() => server.closePosition(p.strategy_key)} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                <Server size={12} className="text-neutral-700" />
+                <span className="text-[11px] text-neutral-700">No open server positions — scanning every 20s for signals…</span>
+              </div>
+            )}
+
+            {/* Server log */}
             <div>
-              <div className="text-[9px] text-neutral-600 mb-1.5">Trade Size (USDC)</div>
-              <div className="flex gap-1">
-                {[50, 100, 250].map(s => (
-                  <button key={s} onClick={() => server.updateConfig({ size_usdc: s })}
-                    className="flex-1 py-1.5 rounded-lg text-[10px] font-bold border transition-colors"
-                    style={server.config!.size_usdc === s
-                      ? { background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.3)", color: "#10b981" }
-                      : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-                    }>${s}</button>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-neutral-600 font-semibold">Server Log</span>
+                <button onClick={server.resetAccount} className="flex items-center gap-1 text-[9px] text-neutral-700 hover:text-red-400 transition-colors">
+                  <RotateCcw size={9} /> Reset Account
+                </button>
+              </div>
+              <div className="h-36 overflow-y-auto font-mono text-[9.5px] space-y-0.5 bg-black/40 rounded-xl p-3 border border-neutral-800">
+                {server.log.length === 0 && <div className="text-neutral-700">Waiting for server log…</div>}
+                {server.log.map((line, i) => (
+                  <div key={i} className={
+                    line.includes("★") || line.includes("OPENED") ? "text-green-400" :
+                    line.includes("error") || line.includes("failed") ? "text-red-400" :
+                    line.includes("TP") ? "text-green-400" :
+                    line.includes("SL") ? "text-red-400" :
+                    "text-neutral-500"
+                  }>{line}</div>
                 ))}
               </div>
             </div>
-            <div>
-              <div className="text-[9px] text-neutral-600 mb-1">Min Confidence: <span className="text-emerald-400 font-mono">{((server.config.min_confidence ?? 0.5) * 100).toFixed(0)}%</span></div>
-              <input type="range" min={0.4} max={0.95} step={0.05}
-                value={server.config.min_confidence}
-                onChange={e => server.updateConfig({ min_confidence: Number(e.target.value) })}
-                className="w-full accent-emerald-500" />
-            </div>
-            <div>
-              <div className="text-[9px] text-neutral-600 mb-1.5">Auto-Execute</div>
-              <button onClick={() => server.updateConfig({ auto_execute: !server.config!.auto_execute })}
-                className="w-full py-1.5 rounded-lg text-[10px] font-bold border transition-colors"
-                style={server.config.auto_execute
-                  ? { background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.3)", color: "#10b981" }
-                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-                }>{server.config.auto_execute ? "ON — Auto" : "OFF — Manual"}</button>
-            </div>
-            <div>
-              <div className="text-[9px] text-neutral-600 mb-1.5">Reset Account</div>
-              <button onClick={server.resetAccount}
-                className="w-full py-1.5 rounded-lg text-[10px] font-bold border border-neutral-800 text-neutral-600 hover:text-red-400 hover:border-red-500/30 transition-colors flex items-center justify-center gap-1.5">
-                <RotateCcw size={10} /> Reset
-              </button>
-            </div>
-          </div>
-        )}
 
-        {/* Server agent log */}
-        {server.online && server.log.length > 0 && (
-          <div>
-            <div className="text-[9px] text-neutral-600 mb-1.5">Server Log (Railway)</div>
-            <div className="h-32 overflow-y-auto font-mono text-[9px] space-y-0.5 bg-black/40 rounded-xl p-3 border border-neutral-800">
-              {server.log.map((line, i) => (
-                <div key={i} className={`leading-relaxed ${
-                  line.includes("★") || line.includes("OPEN") ? "text-green-400" :
-                  line.includes("✅") ? "text-green-400" :
-                  line.includes("❌") ? "text-red-400" :
-                  line.includes("⚠") ? "text-yellow-400" :
-                  "text-neutral-500"
-                }`}>{line}</div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Server trades */}
-        {server.online && server.trades.length > 0 && (
-          <div>
-            <div className="text-[9px] text-neutral-600 mb-1.5">Closed Trades (server)</div>
-            <div className="max-h-40 overflow-y-auto space-y-1">
-              {server.trades.slice(0, 20).map(t => (
-                <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg text-[9px]" style={{ background: "rgba(255,255,255,0.02)" }}>
-                  <span className={`font-bold w-8 ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction === "long" ? "▲ L" : "▼ S"}</span>
-                  <span className="text-neutral-700 w-20">{t.strategy_name ?? "—"}</span>
-                  <span className="text-neutral-600 font-mono flex-1">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
-                  <span className={`font-mono font-bold ${pnlColor(t.pnl_usd ?? 0)}`}>{(t.pnl_usd ?? 0) >= 0 ? "+" : ""}${t.pnl_usd?.toFixed(2) ?? "0"}</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${t.exit_reason === "tp" ? "bg-green-500/10 text-green-400" : t.exit_reason === "sl" ? "bg-red-500/10 text-red-400" : "bg-neutral-800 text-neutral-500"}`}>
-                    {(t.exit_reason ?? "—").toUpperCase()}
-                  </span>
+            {/* Closed trades from server */}
+            {server.trades.length > 0 && (
+              <div>
+                <div className="text-[10px] text-neutral-600 font-semibold mb-1.5">Recent Closed Trades ({server.trades.length})</div>
+                <div className="max-h-40 overflow-y-auto space-y-1">
+                  {server.trades.slice(0, 20).map(t => {
+                    const pnl = t.pnl_usd ?? 0;
+                    return (
+                      <div key={t.id} className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg" style={{ background: "rgba(255,255,255,0.02)" }}>
+                        <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                          {t.direction === "long" ? "▲" : "▼"} {t.strategy_name}
+                        </span>
+                        <span className="text-[9px] text-neutral-600 font-mono flex-1">${t.entry?.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
+                        <span className={`text-[9px] font-mono font-bold ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                        </span>
+                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
+                          t.exit_reason === "tp" ? "bg-green-500/10 text-green-400" :
+                          t.exit_reason === "sl" ? "bg-red-500/10 text-red-400" :
+                          "bg-neutral-800 text-neutral-500"
+                        }`}>{(t.exit_reason ?? "—").toUpperCase()}</span>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {!server.online && (
-          <div className="text-[11px] text-neutral-600 text-center py-2">
-            Connecting to Railway backend… (backend may be sleeping, wait ~30s)
-          </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {/* ── BROWSER AGENT (backup — stops when laptop closes) ──────────── */}
-      <div className="flex items-center gap-3 py-2 px-4 rounded-xl border border-neutral-800 bg-neutral-900/50">
-        <Bot size={14} className="text-neutral-600" />
-        <span className="text-[11px] text-neutral-600 font-medium">Browser Agent</span>
-        <span className="text-[9px] text-neutral-700">— stops when browser closes · use Server Agent above for 24/7</span>
+      {/* ── Divider ───────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3">
+        <div className="flex-1 h-px bg-neutral-800" />
+        <span className="text-[10px] text-neutral-700 font-semibold">BROWSER-SIDE STRATEGY MONITOR</span>
+        <div className="flex-1 h-px bg-neutral-800" />
       </div>
 
       {/* Header */}

@@ -7,8 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis_client import get_redis, close_redis
-from app.api import auth, overview, strategies, positions, orders, risk, market, backtest, journal, settings as settings_router, websocket, paper as paper_router
-from app.api import agent247 as agent247_router
+from app.api import auth, overview, strategies, positions, orders, risk, market, backtest, journal, settings as settings_router, websocket, paper as paper_router, agent as agent_router
 from app.websockets.manager import redis_listener
 from app.risk.risk_engine import RiskConfig, update_risk_engine
 from app.exchange.paper_trading import PaperTradingEngine
@@ -48,7 +47,7 @@ app.include_router(journal.router)
 app.include_router(settings_router.router)
 app.include_router(websocket.router)
 app.include_router(paper_router.router)
-app.include_router(agent247_router.router)
+app.include_router(agent_router.router)
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 _background_tasks: list[asyncio.Task] = []
@@ -57,10 +56,6 @@ _background_tasks: list[asyncio.Task] = []
 @app.on_event("startup")
 async def startup():
     logger.info("TradeOS starting up...")
-
-    # Import all models so SQLAlchemy creates their tables
-    import app.models  # noqa: F401
-    from app.agent247 import models as _agent247_models  # noqa: F401
 
     # Init DB
     await init_db()
@@ -131,19 +126,13 @@ async def startup():
     except Exception as e:
         logger.warning(f"Signal/execution pipeline failed to start: {e}")
 
-    # ── Start 24/7 Living Agent worker (always on) ───────────────────────────
+    # Start 24/7 persistent trading agent
     try:
-        from app.agent247.worker import start_worker
-        from app.agent247.models import Agent247Config
-        from sqlalchemy import select
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(select(Agent247Config).where(Agent247Config.id == 1))
-            agent_cfg = result.scalar_one_or_none()
-            # Auto-start the worker (config.enabled controls whether it actually trades)
-            start_worker()
-            logger.info("24/7 Living Agent worker started (trades when enabled via /api/agent247/start)")
+        from app.agents.persistent_agent import start_agent
+        await start_agent()
+        logger.info("Persistent trading agent started — running 24/7 on server")
     except Exception as e:
-        logger.warning(f"Agent247 worker failed to start: {e}")
+        logger.warning(f"Persistent agent failed to start: {e}")
 
     logger.info("TradeOS ready")
 

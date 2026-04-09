@@ -108,12 +108,50 @@ class LiveMarketStreamAgent:
 
     async def start(self) -> None:
         self._running = True
+        # Seed historical candles first so strategies have data immediately
+        await self._seed_historical()
         if HAS_WEBSOCKETS:
             self._tasks.append(asyncio.create_task(self._ws_loop()))
         else:
             logger.warning("websockets library not available — using REST fallback")
             self._tasks.append(asyncio.create_task(self._rest_fallback_loop()))
         logger.info(f"LiveMarketStreamAgent started for {self._symbols}")
+
+    async def _seed_historical(self) -> None:
+        """Fetch historical candles from Binance REST API to warm up strategy engines."""
+        import aiohttp
+        base = "https://api.binance.com/api/v3/klines"
+        for sym in self._symbols:
+            b = _ccxt_to_binance(sym).upper()
+            for tf, limit in [("1m", 350), ("15m", 150)]:
+                try:
+                    url = f"{base}?symbol={b}&interval={tf}&limit={limit}"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                            if r.status != 200:
+                                logger.warning(f"Seed {sym} {tf} failed: HTTP {r.status}")
+                                continue
+                            rows = await r.json()
+                    candles = []
+                    for row in rows:
+                        candles.append({
+                            "timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
+                            "open":  float(row[1]),
+                            "high":  float(row[2]),
+                            "low":   float(row[3]),
+                            "close": float(row[4]),
+                            "volume":float(row[5]),
+                            "is_closed": True,
+                        })
+                    key = f"{sym}:{tf}"
+                    existing = LIVE_CANDLES.get(key, [])
+                    # Merge: seed provides the base, existing (WS) data is newer
+                    existing_ts = {c["timestamp"] for c in existing}
+                    merged = [c for c in candles if c["timestamp"] not in existing_ts] + existing
+                    LIVE_CANDLES[key] = merged[-limit:]
+                    logger.info(f"Seeded {len(LIVE_CANDLES[key])} {tf} candles for {sym}")
+                except Exception as e:
+                    logger.warning(f"Historical seed failed for {sym} {tf}: {e}")
 
     async def stop(self) -> None:
         self._running = False
@@ -176,6 +214,7 @@ class LiveMarketStreamAgent:
             b = _ccxt_to_binance(sym)
             streams.append(f"{b}@ticker")           # real-time ticker
             streams.append(f"{b}@kline_1m")         # 1m candles
+            streams.append(f"{b}@kline_15m")        # 15m candles (Momentum strategy)
             streams.append(f"{b}@depth20@100ms")    # order book 100ms
         return streams
 
@@ -224,7 +263,9 @@ class LiveMarketStreamAgent:
         k = data.get("k", {})
         raw_symbol = k.get("s", "")
         symbol = _binance_to_ccxt(raw_symbol)
-        timeframe = "1m"
+        # Determine timeframe from the kline interval field
+        interval = k.get("i", "1m")
+        timeframe = interval  # "1m" or "15m"
 
         candle = {
             "timestamp": datetime.fromtimestamp(
@@ -235,7 +276,7 @@ class LiveMarketStreamAgent:
             "low": float(k.get("l", 0)),
             "close": float(k.get("c", 0)),
             "volume": float(k.get("v", 0)),
-            "is_closed": k.get("x", False),  # True when candle finalized
+            "is_closed": k.get("x", False),
         }
 
         key = f"{symbol}:{timeframe}"
@@ -244,14 +285,14 @@ class LiveMarketStreamAgent:
 
         candles = LIVE_CANDLES[key]
         if candles and candles[-1]["timestamp"] == candle["timestamp"]:
-            # Update the current (open) candle in-place
             candles[-1] = candle
         else:
             candles.append(candle)
 
-        # Keep last 500 candles
-        if len(candles) > 500:
-            LIVE_CANDLES[key] = candles[-500:]
+        # Keep last 500 1m candles, 200 15m candles
+        limit = 200 if timeframe == "15m" else 500
+        if len(candles) > limit:
+            LIVE_CANDLES[key] = candles[-limit:]
 
         await redis_publish("market:kline", {
             "symbol": symbol,
