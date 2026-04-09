@@ -32,6 +32,14 @@ export type ConvictionGrade = "A+" | "A" | "B" | "C" | "X";
 export type MarketRegime   = "TRENDING" | "RANGING" | "VOLATILE" | "UNKNOWN";
 export type AgentDirection = "LONG" | "SHORT" | "FLAT";
 
+export interface ChatMessage {
+  id:        number;
+  role:      "agent" | "user";
+  content:   string;
+  timestamp: string;
+  type?:     "auto" | "response" | "system"; // auto = periodic thought, response = reply
+}
+
 export interface StrategyVote {
   name:     string;
   bias:     "long" | "short" | "neutral";
@@ -65,8 +73,9 @@ export interface MasterState {
   consensus_count:  number;          // 0-3 strategies aligned
   regime:           MarketRegime;
 
-  // Live commentary (last N thoughts)
-  thoughts:         string[];
+  // Live commentary & chat
+  thoughts:         string[];        // legacy — auto-thoughts as plain strings
+  chat:             ChatMessage[];   // unified chat log (auto + user + responses)
   last_update:      string;
 
   // Paper P&L tracking
@@ -294,6 +303,199 @@ function calcSizePct(conviction: number, alignedCount: number): number {
   return Math.min(Math.round(fracKelly * convScale * alignBonus * 1000) / 10, 5.0); // max 5%
 }
 
+// ─── Chat response engine ─────────────────────────────────────────────────────
+interface ResponseCtx {
+  price:          number | null;
+  direction:      AgentDirection;
+  conviction:     number;
+  grade:          ConvictionGrade;
+  regime:         MarketRegime;
+  votes:          StrategyVote[];
+  signal:         MasterSignal | null;
+  atrPct:         number | null;
+  ema50v:         number | null;
+  ema21v:         number | null;
+  orbResult:      ORBResult;
+  momentumResult: StrategyResult;
+  ticker:         BinanceTicker | null;
+  paperPos:       MasterState["paper_position"];
+  paperStats:     MasterState["paper_stats"];
+}
+
+function generateResponse(userMsg: string, ctx: ResponseCtx): string {
+  const m   = userMsg.toLowerCase().trim();
+  const p   = ctx.price;
+  const pStr = p ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
+  const dir  = ctx.direction;
+  const conv = ctx.conviction;
+  const g    = ctx.grade;
+  const sig  = ctx.signal;
+  const aligned = ctx.votes.filter(v => v.bias === dir.toLowerCase()).length;
+
+  // ── Greetings ───────────────────────────────────────────────────────────
+  if (/^(hi|hello|hey|sup|yo|gm|good morning|good afternoon|good evening|what's up|wassup)/i.test(m)) {
+    const snap = dir !== "FLAT"
+      ? `I'm watching a ${dir} setup — Grade ${g}, ${conv}/100 conviction. BTC at ${pStr}.`
+      : `No strong edge right now. BTC at ${pStr}, running flat.`;
+    return `${snap} I'm monitoring Momentum 15m, ORB-30, and HFT Order Flow in real-time. Ask me anything.`;
+  }
+
+  // ── Full analysis / what do you see ─────────────────────────────────────
+  if (/analys|assess|situation|outlook|overview|what.*see|what.*happen|current.*state|status|update me|brief|summary/i.test(m)) {
+    const mv  = ctx.votes[0]; const orb = ctx.votes[1]; const hft = ctx.votes[2];
+    const chg = ctx.ticker?.change_pct;
+    return [
+      `BTC ${pStr} ${chg != null ? `(${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% 24h)` : ""} · ${ctx.regime} regime`,
+      `Direction: ${dir} · Conviction: ${conv}/100 (Grade ${g}) · ${aligned}/3 strategies aligned`,
+      `Momentum 15m: ${mv.bias.toUpperCase()} · ${(mv.met_pct * 100).toFixed(0)}% conditions`,
+      `ORB-30: ${orb.bias.toUpperCase()} · ${(orb.met_pct * 100).toFixed(0)}% conditions`,
+      `HFT Flow: ${hft.bias.toUpperCase()}`,
+      sig ? `▶ Signal: ${sig.direction} @ ${pStr} · SL $${sig.sl.toFixed(0)} · TP $${sig.tp.toFixed(0)} · ${sig.rr} R:R · ${sig.size_pct}% size`
+          : `No active signal (need conviction ≥ 55).`,
+    ].join("\n");
+  }
+
+  // ── Long / buy ──────────────────────────────────────────────────────────
+  if (/\b(long|buy|bull|go up|pump|should i buy|go long|enter long)\b/i.test(m)) {
+    if (dir === "LONG" && conv >= 55) {
+      return sig
+        ? `Grade ${g} LONG setup confirmed. Entry $${sig.entry.toFixed(0)}, SL $${sig.sl.toFixed(0)}, TP $${sig.tp.toFixed(0)} (${sig.rr} R:R). Size: ${sig.size_pct}% of account. ${aligned}/3 strategies aligned. ${conv >= 85 ? "Maximum conviction — go full size." : conv >= 70 ? "High conviction — 75% size." : "Moderate conviction — 50% size."}`
+        : `LONG bias at ${conv}/100 but conditions not fully complete. Wait for the signal to trigger cleanly. Chasing is the #1 mistake.`;
+    }
+    if (dir === "SHORT") return `I'm SHORT biased (${conv}/100). Going long against the tape is low probability. Respect the bias — wait for a flip before buying.`;
+    return `Not enough confluence yet. Conviction ${conv}/100 — below 55 threshold. ${ctx.votes[0].bias === "long" ? "Momentum is bullish" : "Momentum is " + ctx.votes[0].bias} but we need 2+ strategies to align. Stay patient.`;
+  }
+
+  // ── Short / sell ────────────────────────────────────────────────────────
+  if (/\b(short|sell|bear|go down|dump|should i sell|go short|enter short)\b/i.test(m)) {
+    if (dir === "SHORT" && conv >= 55) {
+      return sig
+        ? `Grade ${g} SHORT setup confirmed. Entry $${sig.entry.toFixed(0)}, SL $${sig.sl.toFixed(0)}, TP $${sig.tp.toFixed(0)} (${sig.rr} R:R). Size: ${sig.size_pct}% of account. ${aligned}/3 strategies aligned.`
+        : `SHORT bias at ${conv}/100 but conditions not fully complete. Wait for the full setup. Patience is alpha.`;
+    }
+    if (dir === "LONG") return `I'm LONG biased (${conv}/100). Shorting against the tape here is low probability. Wait for the bias to flip.`;
+    return `Not enough confluence for a short. Conviction ${conv}/100 — need 55+. ${ctx.votes[0].bias === "short" ? "Momentum is bearish" : "Momentum is " + ctx.votes[0].bias} — waiting for more alignment.`;
+  }
+
+  // ── Should I trade ──────────────────────────────────────────────────────
+  if (/should i trade|should i enter|take.*trade|place.*trade|execute/i.test(m)) {
+    if (conv >= 85 && sig) return `Yes — Grade A+ (${conv}/100). ${sig.direction} @ $${sig.entry.toFixed(0)}. ${aligned}/3 aligned. Full size. This is the setup. Execute.`;
+    if (conv >= 70 && sig) return `Yes with 75% size — Grade A (${conv}/100). ${sig.direction} setup. Entry $${sig.entry.toFixed(0)}, SL $${sig.sl.toFixed(0)}, TP $${sig.tp.toFixed(0)}.`;
+    if (conv >= 55 && sig) return `Cautiously yes — Grade B (${conv}/100). 50% size. Entry $${sig.entry.toFixed(0)}. Accept you may need to scale in.`;
+    return `Not yet. Conviction ${conv}/100 — below the 55 threshold. No signal active. Wait for the setup to develop. Sitting on your hands is also a position.`;
+  }
+
+  // ── Entry price ─────────────────────────────────────────────────────────
+  if (/\b(entry|where.*enter|enter at|buy at|sell at|price.*in|level|where.*in)\b/i.test(m)) {
+    if (sig) return `Entry: $${sig.entry.toFixed(0)} — ${sig.direction === "LONG" ? "buy at market or best bid" : "sell at market or best ask"}. Risk: $${Math.abs(sig.entry - sig.sl).toFixed(0)} to stop (${((Math.abs(sig.entry - sig.sl) / sig.entry) * 100).toFixed(2)}%). ${aligned}/3 strategies confirmed.`;
+    return `No signal yet. BTC at ${pStr}. ${dir !== "FLAT" ? `Bias is ${dir} (${conv}/100) — entry will trigger when conditions complete.` : "Running flat — no entry level to give."}`;
+  }
+
+  // ── Stop loss ───────────────────────────────────────────────────────────
+  if (/\b(stop|sl|stop.?loss|where.*stop|risk.*level|stop.*where)\b/i.test(m)) {
+    if (sig) {
+      const riskPct = (Math.abs(sig.entry - sig.sl) / sig.entry * 100).toFixed(2);
+      return `Stop: $${sig.sl.toFixed(0)} — ${riskPct}% from entry. ${+riskPct > 1.5 ? "Wider stop adjusted for current volatility." : "Tight stop — clean market structure."} Rule: never move your stop against the position. Ever.`;
+    }
+    if (ctx.atrPct && p) return `No signal yet. Typical stop: 1.5× ATR from entry = ~$${(p * ctx.atrPct * 1.5).toFixed(0)} (ATR is ${(ctx.atrPct * 100).toFixed(2)}% of price).`;
+    return "No active signal. Stop placement calculated when setup triggers.";
+  }
+
+  // ── Take profit ─────────────────────────────────────────────────────────
+  if (/\b(target|tp|take.?profit|profit.*target|exit.*at|where.*exit|where.*out)\b/i.test(m)) {
+    if (sig) return `TP: $${sig.tp.toFixed(0)} — ${sig.rr} R:R. ${sig.direction === "LONG" ? `$${(sig.tp - sig.entry).toFixed(0)} above entry.` : `$${(sig.entry - sig.tp).toFixed(0)} below entry.`} Strategy: take 60% at TP, trail remaining with stop at entry (risk-free).`;
+    return "No active take-profit level. Signal triggers first, then I'll give exact levels.";
+  }
+
+  // ── Momentum strategy ────────────────────────────────────────────────────
+  if (/\b(momentum|mv15|velocity|ema50|ema21|rsi|vwap)\b/i.test(m)) {
+    const mv = ctx.votes[0]; const ms = ctx.momentumResult;
+    return `Momentum Velocity 15m: ${mv.bias.toUpperCase()}, ${(mv.met_pct * 100).toFixed(0)}% conditions met (${ms.met_count}/${ms.total ?? 7}). ${mv.signal ? `Signal fired — entry $${ms.signal?.entry.toFixed(0)}, conf ${((ms.signal?.confidence ?? 0) * 100).toFixed(0)}%.` : "No signal yet."} Strategy uses: EMA50 trend filter, RSI(14) momentum, VWAP/EMA21 pullback, volume surge + ATR volatility gate. 1:2 R:R target.`;
+  }
+
+  // ── ORB strategy ─────────────────────────────────────────────────────────
+  if (/\b(orb|breakout|opening.?range|session.*range|range.*session)\b/i.test(m)) {
+    const orb = ctx.orbResult; const ov = ctx.votes[1];
+    const hi = orb.indicators.or_high; const lo = orb.indicators.or_low;
+    return [
+      `ORB-30 Breakout: ${ov.bias.toUpperCase()} bias, ${(ov.met_pct * 100).toFixed(0)}% conditions.`,
+      hi && lo ? `OR range: $${lo.toFixed(0)} – $${hi.toFixed(0)} (${orb.indicators.or_range_pct?.toFixed(2)}% of price).` : "Opening range not established.",
+      `15m EMA20: $${orb.indicators.ema20_15m?.toFixed(0) ?? "—"}.`,
+      ov.signal ? "BREAKOUT SIGNAL ACTIVE." : "Watching for breakout.",
+      `5-year backtest: +94.3% return, 55.3% WR, 2.25:1 R:R, Sharpe 1.74.`,
+    ].join(" ");
+  }
+
+  // ── HFT / order flow ─────────────────────────────────────────────────────
+  if (/\b(hft|order.?flow|order.?book|depth|obi|tfi|microstructure|book)\b/i.test(m)) {
+    const hft = ctx.votes[2];
+    return `HFT Order Flow: ${hft.bias.toUpperCase()}. Real-time Binance depth stream. OBI threshold ±0.18, TFI threshold ±0.12. ${hft.bias !== "neutral" ? `Currently ${hft.bias === "long" ? "bid-heavy — buyers absorbing asks, bullish pressure" : "ask-heavy — sellers dominating, bearish pressure"}.` : "Book is balanced — no microstructure edge either way."} Supplementary signal — highest weight on Momentum + ORB.`;
+  }
+
+  // ── Regime ───────────────────────────────────────────────────────────────
+  if (/\b(regime|trending|ranging|volatile|market.*type|volatility)\b/i.test(m)) {
+    const desc: Record<string, string> = {
+      TRENDING: "Strong directional move — momentum has highest edge. Let winners run, trail stops.",
+      RANGING:  "Oscillating market — HFT mean-reversion favored. Take profit quickly, tighter stops.",
+      VOLATILE: "High volatility — cut size 50%, widen stops, priority is capital preservation.",
+      UNKNOWN:  "Insufficient data to classify. Treating as neutral — standard sizing, wait for clarity.",
+    };
+    return `Regime: ${ctx.regime}. ${desc[ctx.regime]} ${ctx.atrPct ? `ATR: ${(ctx.atrPct * 100).toFixed(2)}% of price.` : ""}`;
+  }
+
+  // ── Conviction / grade ───────────────────────────────────────────────────
+  if (/\b(conviction|grade|confidence|edge|signal.*strength|how strong)\b/i.test(m)) {
+    const gDesc: Record<ConvictionGrade, string> = {
+      "A+": "ULTRA HIGH (85+) — 3/3 consensus, all conditions met. Full size.",
+      "A":  "HIGH (70–84) — strong confluence. 75% size.",
+      "B":  "MODERATE (55–69) — partial setup. 50% size.",
+      "C":  "LOW (40–54) — monitor only, no entry.",
+      "X":  "NO TRADE (<40) — insufficient edge. Capital flat.",
+    };
+    return `Grade ${g}: ${gDesc[g]} Conviction: ${conv}/100. ${aligned}/3 strategies ${dir !== "FLAT" ? `aligned ${dir}` : "disagreeing (FLAT)"}. Threshold: 55+ to generate a signal.`;
+  }
+
+  // ── Risk / sizing ────────────────────────────────────────────────────────
+  if (/\b(risk|size|sizing|position.*size|kelly|how.*much|allocation|capital)\b/i.test(m)) {
+    if (sig) return `Size: ${sig.size_pct}% of account (fractional Kelly). $10K → $${(10000 * sig.size_pct / 100).toFixed(0)} per trade. Max risk per trade: 2%. Daily drawdown gate: pause at −5%. Grade ${g} = ${g === "A+" ? "100%" : g === "A" ? "75%" : g === "B" ? "50%" : "25%"} of standard allocation.`;
+    return `No signal yet. Standard sizing: 25% fractional Kelly, scaled by conviction. Max 2% risk per trade. Daily −5% gate halts trading. Right now: flat (${conv}/100 conviction — below 55 threshold).`;
+  }
+
+  // ── Paper trade stats ────────────────────────────────────────────────────
+  if (/\b(paper|pnl|p&l|profit.*loss|how.*doing|stats|portfolio|position.*open|open.*position)\b/i.test(m)) {
+    const st = ctx.paperStats; const pos = ctx.paperPos;
+    let r = `Paper stats: ${st.total_trades} trades · ${st.wins}W/${st.losses}L · ${st.win_rate.toFixed(1)}% WR · ${st.total_pnl >= 0 ? "+" : ""}$${st.total_pnl.toFixed(2)} total P&L.`;
+    if (pos?.open) r += ` Open ${pos.direction} @ $${pos.entry?.toFixed(0)}, unrealized ${(pos.pnl_usd ?? 0) >= 0 ? "+" : ""}$${(pos.pnl_usd ?? 0).toFixed(2)}.`;
+    else           r += " No open position.";
+    return r;
+  }
+
+  // ── BTC price ────────────────────────────────────────────────────────────
+  if (/\b(btc|bitcoin|price|how.*market|market.*price|how.*bitcoin)\b/i.test(m)) {
+    const chg = ctx.ticker?.change_pct;
+    return [
+      `BTC: ${pStr} ${chg != null ? `(${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% 24h)` : ""}`,
+      ctx.ema50v ? `EMA50: $${ctx.ema50v.toFixed(0)} — price ${p && p > ctx.ema50v ? "above (bullish)" : "below (bearish)"}` : "",
+      ctx.ema21v ? `EMA21: $${ctx.ema21v.toFixed(0)}` : "",
+      `Regime: ${ctx.regime}`,
+    ].filter(Boolean).join(" · ");
+  }
+
+  // ── Wait / patience ──────────────────────────────────────────────────────
+  if (/\b(wait|patient|patience|sit.*out|hold.*off|not.*trade|no.*trade)\b/i.test(m)) {
+    if (conv < 55) return `Correct call. Conviction ${conv}/100 — staying flat. The best traders sit on their hands 90% of the time. When the setup is perfect, it's obvious. This one isn't there yet.`;
+    return `If you're unsure, trust your risk limits. Grade ${g} setup at ${conv}/100. ${sig ? "Signal is active but sizing is always your call." : "Waiting for signal to fire."} Missing a trade costs nothing. Taking a bad trade costs real money.`;
+  }
+
+  // ── Default / catch-all ──────────────────────────────────────────────────
+  const defaults = [
+    `${ctx.regime} market, ${dir} bias, ${conv}/100 conviction (${g}). ${sig ? `Active ${sig.direction} signal @ $${sig.entry.toFixed(0)}.` : "No signal yet."} Ask me about specific levels, strategies, risk, or regime.`,
+    `Monitoring Momentum 15m (${ctx.votes[0].bias.toUpperCase()}), ORB-30 (${ctx.votes[1].bias.toUpperCase()}), HFT Flow (${ctx.votes[2].bias.toUpperCase()}). ${aligned}/3 aligned ${dir !== "FLAT" ? dir : "(no direction)"}. ${conv >= 55 ? `Grade ${g} setup.` : "Below signal threshold."}`,
+    `BTC ${pStr} · ${ctx.regime} · ${dir} · ${conv}/100. ${sig ? `Signal: ${sig.direction} · Entry $${sig.entry.toFixed(0)} · ${sig.rr} R:R.` : "Scanning…"} What would you like to know about the current setup?`,
+  ];
+  return defaults[Math.floor(Math.random() * defaults.length)];
+}
+
 // ─── Main hook ────────────────────────────────────────────────────────────────
 const PAPER_SIZE_USDC = 500;
 
@@ -306,6 +508,7 @@ export function useMasterAgent(
   orderBook:      BinanceOrderBook | null,
 ): MasterState {
   const [thoughts, setThoughts]         = useState<string[]>([]);
+  const [chat, setChat]                 = useState<ChatMessage[]>([]);
   const [paperPos, setPaperPos]         = useState<MasterState["paper_position"]>(null);
   const [paperStats, setPaperStats]     = useState<MasterState["paper_stats"]>({
     total_pnl: 0, wins: 0, losses: 0, win_rate: 0, total_trades: 0, best: 0, worst: 0,
@@ -313,9 +516,13 @@ export function useMasterAgent(
   const thoughtTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const paperPosRef     = useRef<MasterState["paper_position"]>(paperPos);
   const paperStatsRef   = useRef<MasterState["paper_stats"]>(paperStats);
+  const chatMsgId       = useRef(0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const coreRef         = useRef<any>(null);
 
   useEffect(() => { paperPosRef.current  = paperPos;   }, [paperPos]);
   useEffect(() => { paperStatsRef.current = paperStats; }, [paperStats]);
+  useEffect(() => { coreRef.current = core; });          // always current
 
   // ── Compute core state synchronously via useMemo ──────────────────────────
   const core = (() => {
@@ -457,6 +664,11 @@ export function useMasterAgent(
       ticker,
     }, ts);
     setThoughts(prev => [thought, ...prev].slice(0, 30));
+    // Push into chat feed as an auto-thought
+    setChat(prev => [
+      ...prev,
+      { id: ++chatMsgId.current, role: "agent" as const, content: thought.replace(/^\[\d{1,2}:\d{2}:\d{2}( [AP]M)?\] /, ""), timestamp: ts, type: "auto" as const },
+    ].slice(-80));
   }, [core, orbResult, orderBook, candles15m, ticker]);
 
   useEffect(() => {
@@ -497,10 +709,10 @@ export function useMasterAgent(
           worst:       Math.min(prev.worst, pnl_usd),
         };
       });
-      setThoughts(prev => [
-        `[${new Date().toLocaleTimeString()}] ${hitTP ? "✅ TP HIT" : "⛔ SL HIT"} — position closed @ $${exitPrice.toFixed(0)} · P&L ${pnl_usd >= 0 ? "+" : ""}$${pnl_usd.toFixed(2)}`,
-        ...prev,
-      ].slice(0, 30));
+      const closeMsg = `${hitTP ? "✅ TP HIT" : "⛔ SL HIT"} — position closed @ $${exitPrice.toFixed(0)} · P&L ${pnl_usd >= 0 ? "+" : ""}$${pnl_usd.toFixed(2)}`;
+      const closeTs  = new Date().toLocaleTimeString();
+      setThoughts(prev => [`[${closeTs}] ${closeMsg}`, ...prev].slice(0, 30));
+      setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: closeMsg, timestamp: closeTs, type: "system" as const }].slice(-80));
     } else {
       const priceDiff  = pos.direction === "LONG" ? price - pos.entry! : pos.entry! - price;
       const pnl_usd    = priceDiff * (pos.btc_qty ?? 0);
@@ -525,10 +737,10 @@ export function useMasterAgent(
       size_usdc: PAPER_SIZE_USDC,
       btc_qty:   btcQty,
     });
-    setThoughts(prev => [
-      `[${new Date().toLocaleTimeString()}] 📄 MASTER AGENT opened PAPER ${sig.direction} @ $${sig.entry.toFixed(0)} · SL $${sig.sl.toFixed(0)} · TP $${sig.tp.toFixed(0)} · ${sig.rr} R:R`,
-      ...prev,
-    ].slice(0, 30));
+    const openMsg = `📄 Paper ${sig.direction} opened @ $${sig.entry.toFixed(0)} · SL $${sig.sl.toFixed(0)} · TP $${sig.tp.toFixed(0)} · ${sig.rr} R:R`;
+    const openTs  = new Date().toLocaleTimeString();
+    setThoughts(prev => [`[${openTs}] ${openMsg}`, ...prev].slice(0, 30));
+    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: openMsg, timestamp: openTs, type: "system" as const }].slice(-80));
   }, []);
 
   const closePaperTrade = useCallback(() => {
@@ -545,17 +757,51 @@ export function useMasterAgent(
       best:         Math.max(prev.best, pnl_usd),
       worst:        Math.min(prev.worst, pnl_usd),
     }));
-    setThoughts(prev => [
-      `[${new Date().toLocaleTimeString()}] Manual close @ $${price.toFixed(0)} · P&L ${pnl_usd >= 0 ? "+" : ""}$${pnl_usd.toFixed(2)}`,
-      ...prev,
-    ].slice(0, 30));
+    const manualTs  = new Date().toLocaleTimeString();
+    const manualMsg = `Manual close @ $${price.toFixed(0)} · P&L ${pnl_usd >= 0 ? "+" : ""}$${pnl_usd.toFixed(2)}`;
+    setThoughts(prev => [`[${manualTs}] ${manualMsg}`, ...prev].slice(0, 30));
+    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: manualMsg, timestamp: manualTs, type: "system" as const }].slice(-80));
   }, [core.price]);
 
   const resetPaper = useCallback(() => {
     setPaperPos(null);
     setPaperStats({ total_pnl: 0, wins: 0, losses: 0, win_rate: 0, total_trades: 0, best: 0, worst: 0 });
-    setThoughts(prev => [`[${new Date().toLocaleTimeString()}] Paper account reset — $${PAPER_SIZE_USDC} per trade`, ...prev].slice(0, 30));
+    const resetTs = new Date().toLocaleTimeString();
+    setThoughts(prev => [`[${resetTs}] Paper account reset — $${PAPER_SIZE_USDC} per trade`, ...prev].slice(0, 30));
+    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: `Paper account reset. $${PAPER_SIZE_USDC} per trade.`, timestamp: resetTs, type: "system" as const }].slice(-80));
   }, []);
+
+  // ── Chat: sendMessage ─────────────────────────────────────────────────────
+  const sendMessage = useCallback((userMsg: string) => {
+    if (!userMsg.trim()) return;
+    const ts = new Date().toLocaleTimeString();
+    const userId = ++chatMsgId.current;
+    setChat(prev => [...prev, { id: userId, role: "user" as const, content: userMsg.trim(), timestamp: ts }]);
+
+    // Generate response after a short "thinking" delay
+    setTimeout(() => {
+      const c = coreRef.current;
+      const response = generateResponse(userMsg, {
+        price:          c.price,
+        direction:      c.direction,
+        conviction:     c.conviction,
+        grade:          c.grade,
+        regime:         c.regime,
+        votes:          c.votes,
+        signal:         c.signal,
+        atrPct:         c.atrPct,
+        ema50v:         c.ema50v,
+        ema21v:         c.ema21v,
+        orbResult,
+        momentumResult,
+        ticker,
+        paperPos:       paperPosRef.current,
+        paperStats:     paperStatsRef.current,
+      });
+      const rTs = new Date().toLocaleTimeString();
+      setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: response, timestamp: rTs, type: "response" as const }].slice(-80));
+    }, 400 + Math.random() * 300);
+  }, [orbResult, momentumResult, ticker]);
 
   return {
     direction:       core.direction,
@@ -566,6 +812,7 @@ export function useMasterAgent(
     consensus_count: core.consensusCount,
     regime:          core.regime,
     thoughts,
+    chat,
     last_update:     new Date().toLocaleTimeString(),
     paper_position:  paperPos,
     paper_stats:     paperStats,
@@ -576,9 +823,11 @@ export function useMasterAgent(
     openPaperTrade,
     closePaperTrade,
     resetPaper,
+    sendMessage,
   } as MasterState & {
     openPaperTrade:  (sig: MasterSignal) => void;
     closePaperTrade: () => void;
     resetPaper:      () => void;
+    sendMessage:     (msg: string) => void;
   };
 }

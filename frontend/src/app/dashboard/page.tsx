@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   DollarSign, TrendingUp, TrendingDown, Activity,
   Layers, BarChart2, ShieldCheck, RefreshCw, WifiOff,
   Zap, ArrowUpRight, ArrowDownRight, Bell, Bot, BookOpen,
   CheckCircle2, XCircle, Brain, Cpu, RotateCcw, X as XIcon,
-  Target, Shield, FileText,
+  Target, Shield, FileText, Send, MessageSquare,
 } from "lucide-react";
 import { overviewApi } from "@/lib/api";
 import { Overview } from "@/types";
@@ -18,7 +18,7 @@ import {
 } from "@/hooks/useBinanceStream";
 import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
-import { useMasterAgent, type MasterSignal, type ConvictionGrade } from "@/hooks/useMasterAgent";
+import { useMasterAgent, type MasterSignal, type ConvictionGrade, type ChatMessage } from "@/hooks/useMasterAgent";
 
 // ─── Chart constants ──────────────────────────────────────────────────────────
 const CW = 1000, CH = 220, PY = 14, BAR = 5;
@@ -624,6 +624,196 @@ function AgentCard({
   );
 }
 
+// ─── Master Agent Chat Interface ─────────────────────────────────────────────
+function ChatBubble({ msg }: { msg: ChatMessage }) {
+  const isUser = msg.role === "user";
+  const isAuto = msg.type === "auto";
+  const isSys  = msg.type === "system";
+
+  if (isUser) {
+    return (
+      <div className="flex items-end gap-2 justify-end">
+        <div className="max-w-[80%]">
+          <div className="rounded-2xl rounded-br-sm px-3.5 py-2.5"
+            style={{ background: "rgba(10,132,255,0.2)", border: "1px solid rgba(10,132,255,0.3)" }}>
+            <p className="text-[11px] text-white leading-relaxed">{msg.content}</p>
+          </div>
+          <div className="text-[8px] text-neutral-700 text-right mt-0.5 pr-1">{msg.timestamp}</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Agent message
+  const textCls = isSys
+    ? (msg.content.includes("✅") ? "text-green-400" : msg.content.includes("⛔") ? "text-red-400" : "text-violet-400")
+    : isAuto ? "text-neutral-500" : "text-neutral-200";
+
+  return (
+    <div className="flex items-start gap-2">
+      <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
+        style={{ background: isSys ? "rgba(139,92,246,0.12)" : isAuto ? "rgba(255,255,255,0.04)" : "rgba(10,132,255,0.12)", border: isSys ? "1px solid rgba(139,92,246,0.2)" : "1px solid rgba(255,255,255,0.08)" }}>
+        <Brain size={10} style={{ color: isSys ? "#a78bfa" : isAuto ? "#374151" : "#60aaff" }} />
+      </div>
+      <div className="max-w-[85%]">
+        <div className="rounded-2xl rounded-tl-sm px-3.5 py-2.5"
+          style={{ background: isSys ? "rgba(139,92,246,0.06)" : isAuto ? "rgba(255,255,255,0.025)" : "rgba(255,255,255,0.05)", border: isSys ? "1px solid rgba(139,92,246,0.15)" : "1px solid rgba(255,255,255,0.06)" }}>
+          <p className={`text-[11px] leading-relaxed whitespace-pre-line ${textCls}`}>{msg.content}</p>
+        </div>
+        <div className="text-[8px] text-neutral-700 mt-0.5 pl-1 flex items-center gap-1">
+          {isAuto && <span className="text-[7px] text-neutral-800 italic">auto-analysis</span>}
+          {isSys  && <span className="text-[7px] text-violet-800 italic">system</span>}
+          <span className="ml-auto">{msg.timestamp}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatInterface({
+  agent, gm, strategyResult, orbResult,
+}: {
+  agent: ReturnType<typeof useMasterAgent>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  gm: { color: string; rgb: string; bg: string; border: string; label: string; desc: string };
+  strategyResult: StrategyResult;
+  orbResult: ORBResult;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { chat, direction, conviction, regime } = agent as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sendMessage: (msg: string) => void = (agent as any).sendMessage;
+
+  const [input, setInput] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLInputElement>(null);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [chat.length]);
+
+  // Show typing indicator briefly then send
+  const handleSend = useCallback(() => {
+    if (!input.trim()) return;
+    const msg = input.trim();
+    setInput("");
+    setIsTyping(true);
+    sendMessage(msg);
+    setTimeout(() => setIsTyping(false), 900);
+    inputRef.current?.focus();
+  }, [input, sendMessage]);
+
+  const handleKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  }, [handleSend]);
+
+  const quickPrompts = useMemo(() => {
+    const base = ["What's your analysis?", "Should I trade now?", "What's the entry?"];
+    if (direction === "LONG")  base.push("Confirm the long setup");
+    if (direction === "SHORT") base.push("Confirm the short setup");
+    if (conviction >= 55)      base.push("Give me the trade levels");
+    else                        base.push("When will a signal fire?");
+    return base.slice(0, 4);
+  }, [direction, conviction]);
+
+  return (
+    <div className="col-span-12 lg:col-span-6 flex flex-col" style={{ borderRight: `1px solid rgba(${gm.rgb},0.08)` }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-3" style={{ borderBottom: `1px solid rgba(${gm.rgb},0.08)` }}>
+        <MessageSquare size={11} style={{ color: gm.color }} />
+        <span className="text-[10px] font-bold text-white">Agent Chat</span>
+        <span className="w-1.5 h-1.5 rounded-full animate-pulse ml-0.5" style={{ background: gm.color }} />
+        <span className="text-[8px]" style={{ color: gm.color }}>always listening</span>
+        <span className="ml-auto text-[8px] text-neutral-700">{regime} · {direction} · {conviction}/100</span>
+      </div>
+
+      {/* Chat messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-2.5" style={{ minHeight: 220, maxHeight: 320 }}>
+        {chat.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 py-8">
+            <div className="w-10 h-10 rounded-2xl flex items-center justify-center" style={{ background: `rgba(${gm.rgb},0.1)`, border: `1px solid rgba(${gm.rgb},0.2)` }}>
+              <Brain size={18} style={{ color: gm.color }} />
+            </div>
+            <div className="text-center">
+              <div className="text-[11px] text-neutral-400">Ask the Master Agent anything</div>
+              <div className="text-[9px] text-neutral-700 mt-0.5">Market analysis · Trade signals · Risk management</div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {chat.map((msg: ChatMessage) => <ChatBubble key={msg.id} msg={msg} />)}
+            {isTyping && (
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: "rgba(10,132,255,0.12)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <Brain size={10} className="text-blue-400" />
+                </div>
+                <div className="flex gap-1 px-3 py-2 rounded-2xl" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} className="w-1.5 h-1.5 rounded-full bg-neutral-600 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Quick prompts */}
+      <div className="flex flex-wrap gap-1 px-3 pb-2">
+        {quickPrompts.map(q => (
+          <button key={q} onClick={() => { sendMessage(q); setInput(""); setIsTyping(true); setTimeout(() => setIsTyping(false), 900); }}
+            className="text-[8px] px-2 py-1 rounded-full transition-all hover:scale-105"
+            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#6b7280" }}>
+            {q}
+          </button>
+        ))}
+      </div>
+
+      {/* Input */}
+      <div className="flex items-center gap-2 px-3 pb-3">
+        <input
+          ref={inputRef}
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder="Ask about market, signals, risk…"
+          className="flex-1 bg-transparent rounded-xl px-3 py-2 text-[11px] text-white placeholder-neutral-700 outline-none"
+          style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+        />
+        <button
+          onClick={handleSend}
+          disabled={!input.trim()}
+          className="w-8 h-8 rounded-xl flex items-center justify-center transition-all hover:scale-110 disabled:opacity-30 disabled:cursor-not-allowed"
+          style={{ background: `rgba(${gm.rgb},0.2)`, border: `1px solid rgba(${gm.rgb},0.3)` }}>
+          <Send size={12} style={{ color: gm.color }} />
+        </button>
+      </div>
+
+      {/* Strategy indicator strip */}
+      <div className="grid grid-cols-6 gap-1 px-3 pb-3" style={{ borderTop: `1px solid rgba(${gm.rgb},0.06)`, paddingTop: 8 }}>
+        {[
+          ["MV15",   strategyResult.bias !== "neutral" ? strategyResult.bias.toUpperCase() : "—",   strategyResult.bias === "long" ? "#22c55e" : strategyResult.bias === "short" ? "#ef4444" : "#374151"],
+          ["ORB",    orbResult.bias !== "neutral" ? orbResult.bias.toUpperCase() : "—",              orbResult.bias === "long" ? "#22c55e" : orbResult.bias === "short" ? "#ef4444" : "#374151"],
+          ["MV",     `${strategyResult.met_count}/${strategyResult.total ?? 7}`, "#6b7280"],
+          ["ORB",    `${orbResult.met_count}/${orbResult.total ?? 6}`, "#6b7280"],
+          ["OR Hi",  orbResult.indicators.or_high ? `$${orbResult.indicators.or_high.toFixed(0)}` : "—", "#22c55e"],
+          ["OR Lo",  orbResult.indicators.or_low  ? `$${orbResult.indicators.or_low.toFixed(0)}`  : "—", "#ef4444"],
+        ].map(([l, v, c]) => (
+          <div key={l} className="text-center rounded-lg py-1" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+            <div className="text-[7px] text-neutral-800">{l}</div>
+            <div className="text-[8px] font-mono font-bold" style={{ color: c }}>{v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Master Agent Panel ───────────────────────────────────────────────────────
 const GRADE_META: Record<ConvictionGrade, { color: string; rgb: string; bg: string; border: string; label: string; desc: string }> = {
   "A+": { color: "#22c55e", rgb: "34,197,94",   bg: "rgba(34,197,94,0.08)",  border: "rgba(34,197,94,0.25)",  label: "A+ ULTRA HIGH", desc: "Execute at full size" },
@@ -784,59 +974,13 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
           )}
         </div>
 
-        {/* CENTER: Live analyst feed */}
-        <div className="col-span-12 lg:col-span-6 p-4 flex flex-col" style={{ borderRight: `1px solid rgba(${gm.rgb},0.08)` }}>
-          <div className="flex items-center gap-2 mb-2.5">
-            <Cpu size={10} style={{ color: gm.color }} />
-            <span className="text-[10px] font-bold text-white">Live Analyst Feed</span>
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse ml-0.5" style={{ background: gm.color }} />
-            <span className="text-[8px]" style={{ color: gm.color }}>live · refreshes every 12s</span>
-            <span className="ml-auto text-[8px] text-neutral-700">Momentum · ORB-30 · HFT Flow · Risk</span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto font-mono"
-            style={{ background: "rgba(0,0,0,0.35)", borderRadius: 12, padding: "10px 14px", border: "1px solid rgba(255,255,255,0.04)", minHeight: 200 }}>
-            {thoughts.length === 0 ? (
-              <div className="flex items-center gap-2 text-[10px] text-neutral-800">
-                <RefreshCw size={10} className="animate-spin" />Initialising brain…
-              </div>
-            ) : thoughts.map((t, i) => {
-              const isStar    = t.includes("★") || t.includes("A+") || t.includes("CONSENSUS");
-              const isTP      = t.includes("✅");
-              const isSL      = t.includes("⛔");
-              const isPaper   = t.includes("📄");
-              const isWarn    = t.includes("VOLATILE") || t.includes("risk") || t.includes("Risk");
-              const cls = isStar ? "text-yellow-300" : isTP ? "text-green-400" : isSL ? "text-red-400"
-                        : isPaper ? "text-violet-400" : isWarn ? "text-orange-400"
-                        : i === 0 ? "text-neutral-200" : "text-neutral-600";
-              return (
-                <div key={i} className={`text-[9.5px] leading-relaxed py-0.5 border-b border-white/[0.02] last:border-0 ${cls} ${i === 0 ? "font-semibold" : ""}`}>
-                  {t}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Strategy indicator strip */}
-          <div className="grid grid-cols-7 gap-1.5 mt-3">
-            {[
-              ["MV15",    strategyResult.bias !== "neutral" ? strategyResult.bias.toUpperCase() : "—",
-               strategyResult.bias === "long" ? "#22c55e" : strategyResult.bias === "short" ? "#ef4444" : "#374151"],
-              ["ORB-30",  orbResult.bias !== "neutral" ? orbResult.bias.toUpperCase() : "—",
-               orbResult.bias === "long" ? "#22c55e" : orbResult.bias === "short" ? "#ef4444" : "#374151"],
-              ["MV",      `${strategyResult.met_count}/${strategyResult.total ?? 7}`, "#6b7280"],
-              ["ORB",     `${orbResult.met_count}/${orbResult.total ?? 6}`, "#6b7280"],
-              ["OR Hi",   orbResult.indicators.or_high ? `$${orbResult.indicators.or_high.toFixed(0)}` : "—", "#22c55e"],
-              ["OR Lo",   orbResult.indicators.or_low  ? `$${orbResult.indicators.or_low.toFixed(0)}`  : "—", "#ef4444"],
-              ["Session", orbResult.indicators.session_label?.slice(0, 5) ?? "—", "#4b5563"],
-            ].map(([l, v, c]) => (
-              <div key={l} className="text-center rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                <div className="text-[7px] text-neutral-800 truncate">{l}</div>
-                <div className="text-[9px] font-mono font-bold truncate" style={{ color: c }}>{v}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* CENTER: AI Chat Interface */}
+        <ChatInterface
+          agent={agent}
+          gm={gm}
+          strategyResult={strategyResult}
+          orbResult={orbResult}
+        />
 
         {/* RIGHT: Paper P&L */}
         <div className="col-span-12 lg:col-span-3 p-4 flex flex-col space-y-3">
