@@ -7,9 +7,10 @@ import {
   Bot, Power, RefreshCw, ExternalLink, Zap, Shield,
   CheckCircle2, XCircle, TrendingUp, TrendingDown,
   AlertTriangle, Activity, ChevronRight, Trash2, Copy,
+  FileText, RotateCcw, X, DollarSign,
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
-import { usePhantomAgent, AgentState, AgentConfig } from "@/hooks/usePhantomAgent";
+import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
 import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
 import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
 import { useORBStrategy } from "@/hooks/useORBStrategy";
@@ -88,7 +89,7 @@ function PendingTradeModal({
             ["Stop Loss",  trade.sl ? formatUSD(trade.sl) : "—", "text-red-400"],
             ["Take Profit",trade.tp ? formatUSD(trade.tp) : "—", "text-green-400"],
             ["Size",       formatUSD(trade.size_usdc) + " USDC",  "text-white"],
-            ["Mode",       mode === "perps" ? "Phantom Perps" : "Jupiter Spot", "text-violet-400"],
+            ["Mode",       mode === "paper" ? "Paper Trade" : mode === "perps" ? "Phantom Perps" : "Jupiter Spot", mode === "paper" ? "text-violet-400" : "text-violet-400"],
           ].map(([label, val, cls]) => (
             <div key={label} className="flex justify-between items-center py-1.5 border-b border-neutral-800">
               <span className="text-[11px] text-neutral-500">{label}</span>
@@ -109,12 +110,16 @@ function PendingTradeModal({
           <button onClick={onConfirm}
             className="flex-1 py-2.5 rounded-xl font-bold text-[13px] text-white flex items-center justify-center gap-2 transition-all"
             style={{
-              background: isLong ? "linear-gradient(135deg, #16a34a, #15803d)" : "linear-gradient(135deg, #dc2626, #b91c1c)",
-              boxShadow: isLong ? "0 4px 16px rgba(34,197,94,0.3)" : "0 4px 16px rgba(239,68,68,0.3)"
+              background: mode === "paper"
+                ? "linear-gradient(135deg, #7c3aed, #6d28d9)"
+                : isLong ? "linear-gradient(135deg, #16a34a, #15803d)" : "linear-gradient(135deg, #dc2626, #b91c1c)",
+              boxShadow: mode === "paper"
+                ? "0 4px 16px rgba(139,92,246,0.3)"
+                : isLong ? "0 4px 16px rgba(34,197,94,0.3)" : "0 4px 16px rgba(239,68,68,0.3)"
             }}>
-            <Zap size={14} />
-            {mode === "perps" ? "Open Phantom Perps" : "Execute Swap"}
-            <ExternalLink size={12} className="opacity-70" />
+            {mode === "paper" ? <FileText size={14} /> : <Zap size={14} />}
+            {mode === "paper" ? "Fill Paper Trade" : mode === "perps" ? "Open Phantom Perps" : "Execute Swap"}
+            {mode !== "paper" && <ExternalLink size={12} className="opacity-70" />}
           </button>
         </div>
       </div>
@@ -154,7 +159,15 @@ function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades
       </div>
       <div className="text-right flex-shrink-0">
         <div className="text-[10px] font-mono text-white">{formatUSD(trade.entry)}</div>
-        <div className="text-[9px] font-bold" style={{ color: statusColor }}>{trade.status.toUpperCase()}</div>
+        {trade.is_paper && trade.pnl_usd != null ? (
+          <div className={`text-[9px] font-bold ${trade.pnl_usd >= 0 ? "text-green-400" : "text-red-400"}`}>
+            {trade.pnl_usd >= 0 ? "+" : ""}${trade.pnl_usd.toFixed(2)} {trade.exit_reason?.toUpperCase()}
+          </div>
+        ) : (
+          <div className="text-[9px] font-bold" style={{ color: statusColor }}>
+            {trade.is_paper ? "📄 " : ""}{trade.status.toUpperCase()}
+          </div>
+        )}
       </div>
       {trade.tx_signature && (
         <a href={`https://solscan.io/tx/${trade.tx_signature}`} target="_blank" rel="noopener noreferrer"
@@ -219,13 +232,145 @@ function HFTBar({ label, value, min, max, goodHigh }: { label: string; value: nu
   );
 }
 
+// ─── Paper trading P&L panel ──────────────────────────────────────────────────
+function PaperPanel({
+  position, stats, trades, onClose, onReset,
+}: {
+  position: PaperPosition | null;
+  stats: PaperStats;
+  trades: ReturnType<typeof usePhantomAgent>["trades"];
+  onClose: () => void;
+  onReset: () => void;
+}) {
+  const paperTrades = trades.filter(t => t.is_paper && t.exit_price != null);
+  const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-400";
+  return (
+    <div className="card p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FileText size={13} className="text-violet-400" />
+          <span className="text-[13px] font-semibold text-white">Paper Trading</span>
+          <span className="text-[9px] bg-violet-500/10 border border-violet-500/20 text-violet-400 px-1.5 py-0.5 rounded font-mono">PAPER</span>
+        </div>
+        <button onClick={onReset} className="flex items-center gap-1.5 text-[10px] text-neutral-600 hover:text-red-400 transition-colors">
+          <RotateCcw size={11} /> Reset
+        </button>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-4 gap-2">
+        {[
+          ["Total P&L",   `${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)}`,  pnlColor(stats.total_pnl)],
+          ["Win Rate",    stats.total_trades > 0 ? `${stats.win_rate.toFixed(1)}%` : "—",        "text-blue-400"],
+          ["Wins / Loss", `${stats.wins} / ${stats.losses}`,                                     "text-neutral-300"],
+          ["Trades",      `${stats.total_trades}`,                                               "text-neutral-400"],
+        ].map(([l, v, cls]) => (
+          <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
+            <div className={`text-[12px] font-bold font-mono ${cls}`}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Open position */}
+      {position ? (
+        <div className="rounded-xl p-4 space-y-3"
+          style={{
+            background: position.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
+            border: `1px solid ${position.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
+          }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full animate-pulse ${position.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
+              <span className={`text-[11px] font-bold ${position.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                OPEN {position.direction.toUpperCase()} POSITION
+              </span>
+            </div>
+            <button onClick={onClose} className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 rounded-lg px-2 py-1">
+              <X size={9} /> Close
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
+            <div><span className="text-neutral-600 block">Entry</span><span className="text-white">${position.entry.toFixed(0)}</span></div>
+            <div><span className="text-neutral-600 block">Current</span><span className="text-white">${position.current_price.toFixed(0)}</span></div>
+            <div>
+              <span className="text-neutral-600 block">Unrealized P&L</span>
+              <span className={pnlColor(position.unrealized_pnl)}>
+                {position.unrealized_pnl >= 0 ? "+" : ""}${position.unrealized_pnl.toFixed(2)}
+                <span className="text-[9px] ml-1">({position.unrealized_pct >= 0 ? "+" : ""}{position.unrealized_pct.toFixed(3)}%)</span>
+              </span>
+            </div>
+          </div>
+
+          {/* SL/TP bar */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-[9px]">
+              <span className="text-red-400">SL ${position.sl?.toFixed(0) ?? "—"}</span>
+              <span className="text-neutral-600">size ${ position.size_usdc} · {position.btc_size.toFixed(5)} BTC</span>
+              <span className="text-green-400">TP ${position.tp?.toFixed(0) ?? "—"}</span>
+            </div>
+            {position.sl && position.tp && (() => {
+              const range = position.tp - position.sl;
+              const pct   = ((position.current_price - position.sl) / range * 100);
+              const clamped = Math.min(Math.max(pct, 0), 100);
+              return (
+                <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden relative">
+                  <div className="absolute inset-0 flex">
+                    <div className="h-full bg-red-900/50"  style={{ width: "33%" }} />
+                    <div className="h-full bg-neutral-900/30" style={{ width: "34%" }} />
+                    <div className="h-full bg-green-900/50" style={{ width: "33%" }} />
+                  </div>
+                  <div className="absolute top-0 h-full w-0.5 bg-white rounded-full transition-all duration-200"
+                    style={{ left: `${clamped}%` }} />
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+          <DollarSign size={13} className="text-neutral-700" />
+          <span className="text-[11px] text-neutral-700">No open paper position · waiting for signal…</span>
+        </div>
+      )}
+
+      {/* Closed paper trades */}
+      {paperTrades.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-[10px] text-neutral-600 mb-1.5">Closed Trades</div>
+          <div className="max-h-36 overflow-y-auto space-y-1">
+            {paperTrades.slice(0, 20).map(t => (
+              <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg" style={{ background: "rgba(255,255,255,0.02)" }}>
+                <span className={`text-[9px] font-bold w-8 ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                  {t.direction === "long" ? "▲" : "▼"} {t.direction.toUpperCase().slice(0,1)}
+                </span>
+                <span className="text-[9px] text-neutral-600 font-mono flex-1">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
+                <span className={`text-[9px] font-mono font-bold ${pnlColor(t.pnl_usd ?? 0)}`}>
+                  {(t.pnl_usd ?? 0) >= 0 ? "+" : ""}${t.pnl_usd?.toFixed(2) ?? "0"}
+                </span>
+                <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
+                  t.exit_reason === "tp" ? "bg-green-500/10 text-green-400"
+                  : t.exit_reason === "sl" ? "bg-red-500/10 text-red-400"
+                  : "bg-neutral-800 text-neutral-500"
+                }`}>{(t.exit_reason ?? "—").toUpperCase()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 function AgentContent() {
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("hft");
+  const [livePrice, setLivePrice]       = useState<number | undefined>(undefined);
 
   // ── 15m candles (Momentum strategy) ──────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
-  // ── 1m candles (HFT strategy) ────────────────────────────────────────
+  // ── 1m candles (HFT / ORB strategies) ────────────────────────────────
   const [candles1m,  setCandles1m]  = useState<BinanceCandle[]>([]);
   const [orderBook,  setOrderBook]  = useState<BinanceOrderBook | null>(null);
   const { push: pushTrade, get: getTrades } = useAggTradeBuffer();
@@ -259,6 +404,7 @@ function AgentContent() {
     symbols: ["BTC/USDT"],
     timeframe: "15m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {
+      setLivePrice(c.close);
       setCandles15m(prev => {
         const updated = !prev.length ? [c] : (() => {
           const lMs = new Date(prev[prev.length-1].timestamp).getTime();
@@ -277,6 +423,7 @@ function AgentContent() {
     symbols: ["BTC/USDT"],
     timeframe: "1m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {
+      setLivePrice(c.close);
       setCandles1m(prev => {
         const updated = !prev.length ? [c] : (() => {
           const lMs = new Date(prev[prev.length-1].timestamp).getTime();
@@ -358,7 +505,8 @@ function AgentContent() {
     agentLog,
     walletConnected, walletAddress,
     forceScan,
-  } = usePhantomAgent(activeResult);
+    paperPosition, paperStats, closePaperPosition, resetPaperAccount,
+  } = usePhantomAgent(activeResult, livePrice);
 
   const { connected } = useWallet();
   const meta = STATE_META[agentState];
@@ -439,7 +587,8 @@ function AgentContent() {
           ["Strategy",     strategyMode === "hft" ? "HFT 1m" : strategyMode === "orb" ? "ORB-30" : "MV 15m"],
           ["Conditions",   analysis ? `${analysis.met_count}/${activeResult.total ?? 7}` : "—"],
           ["Bias",         analysis?.bias?.toUpperCase() ?? "—"],
-          ["Wallet",       connected ? "Connected" : "Disconnected"],
+          ["Mode",         config.mode === "paper" ? "📄 PAPER" : config.mode === "perps" ? "🚀 PERPS" : "⚡ SPOT"],
+          ["Wallet",       config.mode === "paper" ? "Not needed" : connected ? "Connected" : "Disconnected"],
         ].map(([label, val]) => (
           <div key={label}>
             <div className="text-[9px] text-neutral-600 mb-0.5">{label}</div>
@@ -457,7 +606,7 @@ function AgentContent() {
           {/* Master ON/OFF toggle */}
           <button
             onClick={() => updateConfig({ enabled: !config.enabled })}
-            disabled={!connected && !config.enabled}
+            disabled={config.mode !== "paper" && !connected && !config.enabled}
             className="flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-[13px] transition-all disabled:opacity-40"
             style={config.enabled
               ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
@@ -469,12 +618,20 @@ function AgentContent() {
         </div>
       </div>
 
-      {!connected && (
+      {!connected && config.mode !== "paper" && (
         <div className="flex items-center gap-3 p-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5">
           <AlertTriangle size={16} className="text-yellow-400 flex-shrink-0" />
           <div className="text-[12px] text-yellow-300">
-            Connect your <strong>Phantom wallet</strong> using the button above to enable trade execution.
-            The agent will still monitor signals without a wallet connected.
+            Connect your <strong>Phantom wallet</strong> using the button above to enable live execution.
+            Switch to <strong>Paper mode</strong> to trade without a wallet.
+          </div>
+        </div>
+      )}
+      {config.mode === "paper" && (
+        <div className="flex items-center gap-3 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
+          <FileText size={14} className="text-violet-400 flex-shrink-0" />
+          <div className="text-[12px] text-violet-300">
+            <strong>Paper mode active</strong> — no wallet required. Trades are simulated at signal price with live P&L tracking.
           </div>
         </div>
       )}
@@ -492,20 +649,28 @@ function AgentContent() {
           {/* Mode */}
           <div>
             <label className="text-[10px] text-neutral-600 block mb-2">Execution Mode</label>
-            <div className="grid grid-cols-2 gap-2">
-              {(["perps", "spot"] as const).map(m => (
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                ["paper", "📄 Paper"],
+                ["perps", "🚀 Perps"],
+                ["spot",  "⚡ Spot"],
+              ] as const).map(([m, label]) => (
                 <button key={m} onClick={() => updateConfig({ mode: m })}
-                  className="py-2.5 rounded-xl text-[11px] font-bold border transition-colors"
+                  className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
                   style={config.mode === m
-                    ? { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
+                    ? m === "paper"
+                      ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
+                      : { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
                     : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
                   }>
-                  {m === "perps" ? "🚀 Phantom Perps" : "⚡ Jupiter Spot"}
+                  {label}
                 </button>
               ))}
             </div>
             <div className="text-[9px] text-neutral-700 mt-1.5">
-              {config.mode === "perps"
+              {config.mode === "paper"
+                ? "Simulated fills · live P&L tracking · no wallet needed"
+                : config.mode === "perps"
                 ? "Opens Phantom Perps — full leverage, confirm in wallet"
                 : "Executes USDC↔wBTC swap directly on Solana mainnet"}
             </div>
@@ -684,6 +849,17 @@ function AgentContent() {
                 ))}
               </div>
             </div>
+          )}
+
+          {/* Paper trading panel */}
+          {config.mode === "paper" && (
+            <PaperPanel
+              position={paperPosition}
+              stats={paperStats}
+              trades={trades}
+              onClose={closePaperPosition}
+              onReset={resetPaperAccount}
+            />
           )}
 
           {/* Conditions checklist */}
