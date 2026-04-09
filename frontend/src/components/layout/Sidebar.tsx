@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, Zap, TrendingUp, FileText, ShieldAlert,
-  BarChart2, Activity, BookOpen, Settings, LogOut, Bot,
+  LayoutDashboard, Zap, ShieldAlert,
+  BarChart2, Settings, LogOut, Bot,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Logo } from "@/components/ui/Logo";
@@ -15,10 +15,8 @@ const NAV_SECTIONS = [
     label: "Trading",
     items: [
       { label: "Overview",   href: "/dashboard",            icon: LayoutDashboard },
-      { label: "Live Agent", href: "/dashboard/agent",     icon: Bot },
+      { label: "Live Agent", href: "/dashboard/agent",      icon: Bot },
       { label: "Strategies", href: "/dashboard/strategies", icon: Zap },
-      { label: "Positions",  href: "/dashboard/positions",  icon: TrendingUp },
-      { label: "Orders",     href: "/dashboard/orders",     icon: FileText },
     ],
   },
   {
@@ -26,14 +24,7 @@ const NAV_SECTIONS = [
     items: [
       { label: "Risk Control", href: "/dashboard/risk",     icon: ShieldAlert },
       { label: "Backtest",     href: "/dashboard/backtest", icon: BarChart2 },
-    ],
-  },
-  {
-    label: "Monitor",
-    items: [
-      { label: "Market",   href: "/dashboard/market",   icon: Activity },
-      { label: "Journal",  href: "/dashboard/journal",  icon: BookOpen },
-      { label: "Settings", href: "/dashboard/settings", icon: Settings },
+      { label: "Settings",     href: "/dashboard/settings", icon: Settings },
     ],
   },
 ];

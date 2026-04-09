@@ -4,18 +4,18 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import {
   DollarSign, TrendingUp, TrendingDown, Activity,
   Layers, BarChart2, ShieldCheck, RefreshCw, WifiOff,
-  Zap, ArrowUpRight, ArrowDownRight, Bell,
-  CheckCircle2, XCircle, BookOpen,
+  Zap, ArrowUpRight, ArrowDownRight, Bell, Bot, BookOpen,
+  CheckCircle2, XCircle,
 } from "lucide-react";
 import { overviewApi } from "@/lib/api";
 import { Overview } from "@/types";
 import { KPICard } from "@/components/dashboard/KPICard";
-import { formatUSD, formatPct, pnlColor, sideColor, statusColor, timeAgo, cn } from "@/lib/utils";
+import { formatUSD, formatPct, pnlColor, cn } from "@/lib/utils";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import {
   useBinanceStream, BinanceCandle, BinanceTicker, BinanceOrderBook,
 } from "@/hooks/useBinanceStream";
-import { useStrategyEngine } from "@/hooks/useStrategyEngine";
+import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
 
 // ─── Chart constants ──────────────────────────────────────────────────────────
 const CW = 1000, CH = 220, PY = 14, BAR = 5;
@@ -209,8 +209,6 @@ function StrategyChart({
 }
 
 // ─── Analysis Panel (pure frontend, no backend) ───────────────────────────────
-import type { StrategyResult } from "@/hooks/useStrategyEngine";
-
 function AnalysisPanel({ result, candleCount }: { result: StrategyResult; candleCount: number }) {
   const { conditions, indicators, bias, met_count, total, all_met } = result;
   const biasCls = bias === "long" ? "text-green-400" : bias === "short" ? "text-red-400" : "text-neutral-500";
@@ -535,6 +533,189 @@ function ActivityRow({ ev }: { ev: ActivityEvent }) {
 }
 
 
+// ─── All Live Agents Panel ────────────────────────────────────────────────────
+function AgentCard({
+  name, timeframe, strategy, result, candleCount, ticker,
+}: {
+  name: string; timeframe: string; strategy: string;
+  result: StrategyResult; candleCount: number;
+  ticker?: BinanceTicker | null;
+}) {
+  const sig = result.signal;
+  const isReady = candleCount >= 60;
+  const isLong  = result.bias === "long";
+  const isShort = result.bias === "short";
+
+  const biasColor = isLong ? "#22c55e" : isShort ? "#ef4444" : "#4b5563";
+  const biasBg    = isLong ? "rgba(34,197,94,.07)" : isShort ? "rgba(239,68,68,.07)" : "rgba(255,255,255,.02)";
+  const biasBdr   = isLong ? "rgba(34,197,94,.18)" : isShort ? "rgba(239,68,68,.18)" : "rgba(255,255,255,.06)";
+
+  return (
+    <div className="card p-4 flex flex-col gap-3" style={{ minHeight: 210 }}>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(10,132,255,.12)", border: "1px solid rgba(10,132,255,.2)" }}>
+            <Bot size={13} style={{ color: "#60aaff" }} />
+          </div>
+          <div>
+            <div className="text-[12px] font-semibold text-white leading-none">{name}</div>
+            <div className="text-[9px] text-neutral-700 mt-0.5">{strategy} · {timeframe}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: isReady ? "#22c55e" : "#f59e0b" }} />
+          <span className="text-[9px]" style={{ color: isReady ? "#22c55e" : "#f59e0b" }}>
+            {isReady ? "SCANNING" : `${candleCount}/60`}
+          </span>
+        </div>
+      </div>
+
+      {/* Bias pill */}
+      <div className="flex items-center justify-between rounded-xl px-3 py-2"
+        style={{ background: biasBg, border: `1px solid ${biasBdr}` }}>
+        <span className="text-[11px] font-bold" style={{ color: biasColor }}>
+          {isLong ? "▲ BULLISH" : isShort ? "▼ BEARISH" : "— NEUTRAL"}
+        </span>
+        <span className="text-[10px] text-neutral-600">{result.met_count}/{result.total ?? 7} conditions</span>
+      </div>
+
+      {/* Conditions mini bar */}
+      <div className="flex gap-0.5 h-1">
+        {Array.from({ length: result.total ?? 7 }).map((_, i) => (
+          <div key={i} className="flex-1 rounded-full transition-all duration-300"
+            style={{ background: i < result.met_count ? biasColor : "#1e1e2e" }} />
+        ))}
+      </div>
+
+      {/* Signal card or waiting */}
+      {sig ? (
+        <div className="rounded-xl p-3 space-y-1.5"
+          style={{ background: sig.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)", border: `1px solid ${sig.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}` }}>
+          <div className="flex items-center justify-between">
+            <span className={`text-[10px] font-bold ${sig.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+              {sig.direction === "long" ? "▲ LONG" : "▼ SHORT"} SIGNAL
+            </span>
+            <span className="text-[9px] font-mono text-neutral-500">{(sig.confidence * 100).toFixed(0)}% conf</span>
+          </div>
+          <div className="grid grid-cols-3 gap-1 text-[9px] font-mono">
+            <div><span className="text-neutral-700">Entry</span><br /><span className="text-white">{formatUSD(sig.entry)}</span></div>
+            <div><span className="text-red-400">SL</span><br /><span className="text-red-300">{formatUSD(sig.sl)}</span></div>
+            <div><span className="text-green-400">TP</span><br /><span className="text-green-300">{formatUSD(sig.tp)}</span></div>
+          </div>
+          {sig.rr && <div className="text-[9px] text-neutral-600">R:R {sig.rr}</div>}
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-center">
+          <div>
+            <div className="text-[10px] text-neutral-700">Monitoring market…</div>
+            {ticker && <div className="text-[11px] font-mono text-neutral-500 mt-0.5">{formatUSD(ticker.last)}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AllAgentsPanel({
+  strategyResult, chartCandles, activity, btcTicker,
+}: {
+  strategyResult: StrategyResult; chartCandles: BinanceCandle[];
+  activity: ActivityEvent[]; btcTicker: BinanceTicker | null;
+}) {
+  return (
+    <div className="space-y-3">
+      {/* Section header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot size={14} className="text-blue-400" />
+          <span className="text-[13px] font-semibold text-white">All Live Agents</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+          <span className="text-[9px] text-green-400">2 agents running</span>
+        </div>
+        {btcTicker && (
+          <div className="text-[11px] font-mono text-neutral-500">
+            BTC <span className="text-white">{formatUSD(btcTicker.last)}</span>
+            <span className={`ml-1.5 ${(btcTicker.change_pct ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {(btcTicker.change_pct ?? 0) >= 0 ? "+" : ""}{(btcTicker.change_pct ?? 0).toFixed(2)}%
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Agent cards + activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+        {/* Momentum Velocity 15m agent */}
+        <AgentCard
+          name="Momentum Velocity"
+          timeframe="15m"
+          strategy="EMA50 · RSI · VWAP"
+          result={strategyResult}
+          candleCount={chartCandles.length}
+          ticker={btcTicker}
+        />
+
+        {/* HFT VWAP Scalper agent — shows live conditions using same result but labelled separately */}
+        <div className="card p-4 flex flex-col gap-3" style={{ minHeight: 210 }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.2)" }}>
+                <Zap size={13} style={{ color: "#f59e0b" }} />
+              </div>
+              <div>
+                <div className="text-[12px] font-semibold text-white leading-none">HFT VWAP Scalper</div>
+                <div className="text-[9px] text-neutral-700 mt-0.5">OBI · TFI · Microprice · 1m</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              <span className="text-[9px] text-yellow-400">LIVE AGENT</span>
+            </div>
+          </div>
+          <div className="flex-1 flex flex-col justify-center gap-2">
+            <div className="rounded-xl p-3 space-y-2" style={{ background: "rgba(245,158,11,.04)", border: "1px solid rgba(245,158,11,.12)" }}>
+              <div className="text-[10px] text-yellow-400 font-semibold">Full config on Live Agent page</div>
+              <div className="text-[9px] text-neutral-600 leading-relaxed">
+                OBI/TFI/microprice computed from live Binance depth stream.
+                Strategy runs on 1m bars with 5m EMA bias filter.
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-[9px]">
+              {[["OBI threshold","0.18"],["TFI threshold","0.12"],["Spread max","2 ticks"]].map(([l,v]) => (
+                <div key={l} className="rounded-lg p-2" style={{ background: "rgba(255,255,255,.02)", border: "1px solid rgba(255,255,255,.04)" }}>
+                  <div className="text-neutral-700 mb-0.5">{l}</div>
+                  <div className="font-mono text-neutral-300">{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Live activity feed */}
+        <div className="card overflow-hidden flex flex-col" style={{ minHeight: 210 }}>
+          <div className="flex items-center justify-between px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <div className="flex items-center gap-2">
+              <Bell size={11} className="text-neutral-600" />
+              <span className="text-[12px] font-semibold text-white">Live Activity</span>
+              {activity.length > 0 && <span className="text-[8px] bg-green-500/10 border border-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-mono">{activity.length}</span>}
+            </div>
+          </div>
+          <div className="overflow-y-auto flex-1 max-h-52">
+            {activity.length === 0
+              ? <div className="px-5 py-8 text-center">
+                  <Zap size={16} className="text-neutral-800 mx-auto mb-2" />
+                  <p className="text-[11px] text-neutral-700">Waiting for signals…</p>
+                  <p className="text-[9px] mt-0.5 text-neutral-800">Runs on every bar close</p>
+                </div>
+              : activity.map((ev, i) => <ActivityRow key={i} ev={ev} />)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function OverviewPage() {
   const [data, setData]                 = useState<Overview | null>(null);
@@ -768,78 +949,13 @@ export default function OverviewPage() {
           </div>
         </div>
 
-        {/* ── Bottom row: Positions · Orders · Activity ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-          {/* Open positions */}
-          <div className="card overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-              <span className="text-[12px] font-semibold text-white">Open Positions</span>
-              <button onClick={fetchData} className="p-1 rounded hover:bg-neutral-800 text-neutral-700 hover:text-white"><RefreshCw size={11} /></button>
-            </div>
-            {!d?.positions?.length
-              ? <p className="px-5 py-8 text-center text-[11px] text-neutral-800">No open positions</p>
-              : <table className="w-full text-[11px]">
-                  <thead><tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    {["Symbol","Side","Entry","PnL"].map((h, i) => <th key={h} className={`${i > 1 ? "text-right" : "text-left"} px-4 py-2 label`}>{h}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {d.positions.map(p => (
-                      <tr key={p.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-                        <td className="px-4 py-2 font-semibold text-white">BTC</td>
-                        <td className={cn("px-4 py-2 uppercase font-bold text-[9px]", sideColor(p.side))}>{p.side}</td>
-                        <td className="px-4 py-2 text-right font-mono text-neutral-300">{p.entry_price.toFixed(0)}</td>
-                        <td className={cn("px-4 py-2 text-right font-mono font-semibold", pnlColor(p.unrealized_pnl))}>{formatUSD(p.unrealized_pnl)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>}
-          </div>
-
-          {/* Recent orders */}
-          <div className="card overflow-hidden">
-            <div className="px-5 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-              <span className="text-[12px] font-semibold text-white">Recent Orders</span>
-            </div>
-            {!d?.recent_orders?.length
-              ? <p className="px-5 py-8 text-center text-[11px] text-neutral-800">No recent orders</p>
-              : <table className="w-full text-[11px]">
-                  <thead><tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    {["Symbol","Side","Status","Time"].map((h, i) => <th key={h} className={`${i === 3 ? "text-right" : "text-left"} px-4 py-2 label`}>{h}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {d.recent_orders.map(o => (
-                      <tr key={o.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-                        <td className="px-4 py-2 font-semibold text-white">BTC</td>
-                        <td className={cn("px-4 py-2 uppercase font-bold text-[9px]", sideColor(o.side))}>{o.side}</td>
-                        <td className={cn("px-4 py-2 uppercase font-semibold text-[9px]", statusColor(o.status))}>{o.status}</td>
-                        <td className="px-4 py-2 text-right text-[9px] text-neutral-600">{timeAgo(o.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>}
-          </div>
-
-          {/* Live activity feed */}
-          <div className="card overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-              <div className="flex items-center gap-2">
-                <Bell size={11} className="text-neutral-600" />
-                <span className="text-[12px] font-semibold text-white">Live Activity</span>
-                {activity.length > 0 && <span className="text-[8px] bg-green-500/10 border border-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-mono">{activity.length}</span>}
-              </div>
-            </div>
-            <div className="overflow-y-auto flex-1 max-h-64">
-              {activity.length === 0
-                ? <div className="px-5 py-8 text-center">
-                    <Zap size={16} className="text-neutral-800 mx-auto mb-2" />
-                    <p className="text-[11px] text-neutral-700">Waiting for signals…</p>
-                    <p className="text-[9px] mt-0.5 text-neutral-800">Runs every 60s on minute close</p>
-                  </div>
-                : activity.map((ev, i) => <ActivityRow key={i} ev={ev} />)}
-            </div>
-          </div>
-        </div>
+        {/* ── All Live Agents ── */}
+        <AllAgentsPanel
+          strategyResult={strategyResult}
+          chartCandles={chartCandles}
+          activity={activity}
+          btcTicker={btcTicker}
+        />
 
         {lastUpdate && (
           <p className="text-[9px] text-right text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</p>

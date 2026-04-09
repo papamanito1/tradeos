@@ -14,12 +14,8 @@ import { Logo } from "@/components/ui/Logo";
 const PAGE_TITLES: Record<string, string> = {
   "/dashboard":            "Overview",
   "/dashboard/strategies": "Strategies",
-  "/dashboard/positions":  "Positions",
-  "/dashboard/orders":     "Orders",
   "/dashboard/risk":       "Risk Control",
   "/dashboard/backtest":   "Backtesting",
-  "/dashboard/market":     "Market Monitor",
-  "/dashboard/journal":    "Journal & Logs",
   "/dashboard/settings":   "Settings",
   "/dashboard/agent":      "Live Agent",
 };
