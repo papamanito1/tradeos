@@ -21,7 +21,6 @@ const PAGE_TITLES: Record<string, string> = {
   "/dashboard/market":     "Market Monitor",
   "/dashboard/journal":    "Journal & Logs",
   "/dashboard/settings":   "Settings",
-  "/dashboard/trade":      "Trade BTC",
   "/dashboard/agent":      "Live Agent",
 };
 
