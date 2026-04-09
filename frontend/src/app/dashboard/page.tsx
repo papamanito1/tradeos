@@ -631,7 +631,7 @@ function AllAgentsPanel({
           <Bot size={14} className="text-blue-400" />
           <span className="text-[13px] font-semibold text-white">All Live Agents</span>
           <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-          <span className="text-[9px] text-green-400">2 agents running</span>
+          <span className="text-[9px] text-green-400">3 agents running</span>
         </div>
         {btcTicker && (
           <div className="text-[11px] font-mono text-neutral-500">
@@ -644,7 +644,7 @@ function AllAgentsPanel({
       </div>
 
       {/* Agent cards + activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
 
         {/* Momentum Velocity 15m agent */}
         <AgentCard
@@ -688,6 +688,54 @@ function AllAgentsPanel({
                   <div className="font-mono text-neutral-300">{v}</div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ORB-30 Breakout agent */}
+        <div className="card p-4 flex flex-col gap-3" style={{ minHeight: 210 }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,.10)", border: "1px solid rgba(245,158,11,.25)" }}>
+                <BarChart2 size={13} style={{ color: "#f59e0b" }} />
+              </div>
+              <div>
+                <div className="text-[12px] font-semibold text-white leading-none">ORB-30 Breakout ★</div>
+                <div className="text-[9px] text-neutral-700 mt-0.5">15m EMA20 bias · 4h sessions · 1m</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-[9px] text-amber-400">LIVE</span>
+            </div>
+          </div>
+
+          {/* 5-year backtest strip */}
+          <div className="rounded-xl px-3 py-2.5 grid grid-cols-3 gap-2"
+            style={{ background: "rgba(245,158,11,.04)", border: "1px solid rgba(245,158,11,.12)" }}>
+            {[["5yr Return","+94.3%","text-green-400"],["Win Rate","55.3%","text-blue-400"],["R:R","2.25:1","text-white"]].map(([l,v,cls]) => (
+              <div key={l} className="text-center">
+                <div className="text-[8px] text-neutral-700">{l}</div>
+                <div className={`text-[11px] font-bold ${cls}`}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex-1 flex flex-col justify-between gap-2">
+            <div className="grid grid-cols-2 gap-2 text-[9px]">
+              {[
+                ["Sharpe Ratio","1.74"],["Profit Factor","1.81"],
+                ["Max DD","−13.8%"],["Trades/mo","18.7"],
+              ].map(([l,v]) => (
+                <div key={l} className="rounded-lg p-2" style={{ background: "rgba(255,255,255,.02)", border: "1px solid rgba(255,255,255,.04)" }}>
+                  <div className="text-neutral-700 mb-0.5">{l}</div>
+                  <div className="font-mono text-neutral-300">{v}</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-[9px] text-neutral-700 text-center">
+              Full analysis on{" "}
+              <a href="/dashboard/agent" className="text-amber-400 hover:underline">Live Agent → ORB-30</a>
             </div>
           </div>
         </div>

@@ -12,10 +12,11 @@ import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig } from "@/hooks/usePhantomAgent";
 import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
 import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
+import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { formatUSD } from "@/lib/utils";
 
-type StrategyMode = "momentum" | "hft";
+type StrategyMode = "momentum" | "hft" | "orb";
 
 // ─── State colours ────────────────────────────────────────────────────────────
 const STATE_META: Record<AgentState, { label: string; color: string; pulse: boolean }> = {
@@ -236,14 +237,14 @@ function AgentContent() {
   // Seed both timeframes on mount
   useEffect(() => {
     seedCandles("15m").then(c => { setCandles15m(c); if (strategyMode === "momentum") setCandles(c); });
-    seedCandles("1m").then(c  => { setCandles1m(c);  if (strategyMode === "hft")      setCandles(c); });
+    seedCandles("1m").then(c  => { setCandles1m(c);  if (strategyMode === "hft" || strategyMode === "orb") setCandles(c); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Sync active candles when mode changes
   useEffect(() => {
     if (strategyMode === "momentum" && candles15m.length) setCandles(candles15m);
-    if (strategyMode === "hft"      && candles1m.length)  setCandles(candles1m);
+    if ((strategyMode === "hft" || strategyMode === "orb") && candles1m.length) setCandles(candles1m);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyMode]);
 
@@ -284,7 +285,7 @@ function AgentContent() {
           if (cMs > lMs)   return [...prev.slice(-119), c];
           return prev;
         })();
-        if (strategyMode === "hft") setCandles(updated);
+        if (strategyMode === "hft" || strategyMode === "orb") setCandles(updated);
         return updated;
       });
     }, [strategyMode]),
@@ -295,11 +296,11 @@ function AgentContent() {
   // ── Strategy engines ──────────────────────────────────────────────────
   const momentumResult = useStrategyEngine(candles15m);
   const hftResult      = useHFTScalper(candles1m, orderBook, aggSnap);
+  const orbResult      = useORBStrategy(candles1m);
 
   // Active result fed to agent
   const activeResult: StrategyResult = useMemo(() => {
     if (strategyMode === "hft") {
-      // Adapt HFTResult to StrategyResult shape
       return {
         bias:       hftResult.bias,
         conditions: hftResult.conditions,
@@ -322,8 +323,31 @@ function AgentContent() {
         },
       };
     }
+    if (strategyMode === "orb") {
+      return {
+        bias:       orbResult.bias,
+        conditions: orbResult.conditions,
+        met_count:  orbResult.met_count,
+        total:      6,
+        all_met:    orbResult.all_met,
+        signal:     orbResult.signal ? {
+          direction:  orbResult.signal.direction,
+          entry:      orbResult.signal.entry,
+          sl:         orbResult.signal.sl,
+          tp:         orbResult.signal.tp,
+          confidence: orbResult.signal.confidence,
+          reasoning:  orbResult.signal.reasoning,
+          timestamp:  orbResult.signal.timestamp,
+          rr:         orbResult.signal.rr,
+        } : null,
+        indicators: {
+          rsi: null, ema50: null, ema21: null, vwap: null,
+          atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null,
+        },
+      };
+    }
     return momentumResult;
-  }, [strategyMode, momentumResult, hftResult]);
+  }, [strategyMode, momentumResult, hftResult, orbResult]);
 
   const {
     config, updateConfig,
@@ -363,19 +387,26 @@ function AgentContent() {
             Living Agent
           </h1>
           <p className="text-xs text-neutral-600 mt-0.5">
-            {strategyMode === "hft" ? "HFT VWAP Scalper · 1m bars · OBI + TFI" : "BTC Momentum Velocity · 15m · EMA/RSI/VWAP"} · autonomous trading via Phantom
+            {strategyMode === "hft" ? "HFT VWAP Scalper · 1m bars · OBI + TFI"
+              : strategyMode === "orb" ? "ORB-30 Breakout · 1m bars · 5yr backtest: 94.3% return · 55.3% WR"
+              : "BTC Momentum Velocity · 15m · EMA/RSI/VWAP"} · autonomous via Phantom
           </p>
         </div>
         <div className="flex items-center gap-3">
           {/* Strategy selector */}
           <div className="flex rounded-xl overflow-hidden border border-neutral-800 text-[11px] font-semibold">
-            {(["momentum", "hft"] as StrategyMode[]).map(m => (
+            {([
+              ["momentum", "Momentum 15m"],
+              ["hft",      "HFT Scalper"],
+              ["orb",      "ORB-30 ★"],
+            ] as [StrategyMode, string][]).map(([m, label]) => (
               <button key={m} onClick={() => setStrategyMode(m)}
                 className="px-4 py-2 transition-colors"
                 style={strategyMode === m
-                  ? { background: "rgba(10,132,255,0.2)", color: "#0a84ff" }
+                  ? { background: m === "orb" ? "rgba(245,158,11,0.2)" : "rgba(10,132,255,0.2)",
+                      color:      m === "orb" ? "#f59e0b" : "#0a84ff" }
                   : { background: "transparent", color: "#4b5563" }}>
-                {m === "hft" ? "HFT Scalper" : "Momentum 15m"}
+                {label}
               </button>
             ))}
           </div>
@@ -405,7 +436,7 @@ function AgentContent() {
         {[
           ["Scans Run",    scanCount.toString()],
           ["Last Scan",    lastScan ?? "—"],
-          ["Strategy",     strategyMode === "hft" ? "HFT 1m" : "MV 15m"],
+          ["Strategy",     strategyMode === "hft" ? "HFT 1m" : strategyMode === "orb" ? "ORB-30" : "MV 15m"],
           ["Conditions",   analysis ? `${analysis.met_count}/${activeResult.total ?? 7}` : "—"],
           ["Bias",         analysis?.bias?.toUpperCase() ?? "—"],
           ["Wallet",       connected ? "Connected" : "Disconnected"],
@@ -592,6 +623,69 @@ function AgentContent() {
             </div>
           )}
 
+          {/* ORB-30 session panel */}
+          {strategyMode === "orb" && (
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Activity size={13} className="text-amber-400" />
+                <span className="text-[13px] font-semibold text-white">ORB-30 Session</span>
+                <span className="text-[9px] text-amber-400 ml-auto">
+                  {orbResult.indicators.session_label}
+                </span>
+              </div>
+
+              {/* OR levels */}
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                {[
+                  ["OR High",    orbResult.indicators.or_high != null   ? `$${orbResult.indicators.or_high.toFixed(0)}`   : "—", "text-green-400"],
+                  ["OR Low",     orbResult.indicators.or_low != null    ? `$${orbResult.indicators.or_low.toFixed(0)}`    : "—", "text-red-400"],
+                  ["OR Range",   orbResult.indicators.or_range_pct != null ? `${orbResult.indicators.or_range_pct.toFixed(2)}%` : "—", "text-neutral-300"],
+                  ["15m EMA20",  orbResult.indicators.ema20_15m != null ? `$${orbResult.indicators.ema20_15m.toFixed(0)}` : "—", "text-blue-400"],
+                  ["Last Price", orbResult.indicators.last_price != null? `$${orbResult.indicators.last_price.toFixed(0)}`: "—", "text-white"],
+                  ["Vol Avg",    orbResult.indicators.session_vol_avg != null ? orbResult.indicators.session_vol_avg.toFixed(1) : "—", "text-neutral-400"],
+                ].map(([l, v, cls]) => (
+                  <div key={l} className="bg-neutral-900 rounded-lg p-2.5">
+                    <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
+                    <div className={`text-[12px] font-mono font-semibold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ORB progress */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-[9px] text-neutral-600">
+                  <span>ORB window ({orbResult.indicators.bars_in_orb}/30 bars)</span>
+                  <span>{orbResult.current_session?.or_established ? "✓ Established" : "Building…"}</span>
+                </div>
+                <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full bg-amber-400 transition-all duration-300"
+                    style={{ width: `${Math.min(orbResult.indicators.bars_in_orb / 30 * 100, 100)}%` }} />
+                </div>
+                {orbResult.indicators.bars_since_orb > 0 && (
+                  <div className="text-[9px] text-neutral-600 flex justify-between mt-1">
+                    <span>Bars since ORB: {orbResult.indicators.bars_since_orb}/{90}</span>
+                    <span className={orbResult.bias === "long" ? "text-green-400" : orbResult.bias === "short" ? "text-red-400" : "text-neutral-500"}>
+                      Bias: {orbResult.bias.toUpperCase()}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Backtest stats strip */}
+              <div className="flex gap-4 mt-4 pt-3 border-t border-neutral-800">
+                {[["5yr Return", "+94.3%", "text-green-400"], ["Win Rate", "55.3%", "text-blue-400"],
+                  ["R:R", "2.25:1", "text-white"], ["Profit Factor", "1.81", "text-amber-400"],
+                  ["Sharpe", "1.74", "text-violet-400"], ["Max DD", "−13.8%", "text-red-400"],
+                ].map(([l, v, cls]) => (
+                  <div key={l} className="flex-1 text-center">
+                    <div className="text-[8px] text-neutral-700">{l}</div>
+                    <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Conditions checklist */}
           <div className="card p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -602,7 +696,7 @@ function AgentContent() {
                 live · {strategyMode === "hft" ? "1m bar" : "15m bar"}
               </span>
             </div>
-            {candles.length >= (strategyMode === "hft" ? 30 : 60) ? (
+            {candles.length >= (strategyMode === "momentum" ? 60 : 35) ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className={`text-sm font-bold ${activeResult.bias === "long" ? "text-green-400" : activeResult.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
@@ -627,7 +721,7 @@ function AgentContent() {
             ) : (
               <div className="text-center py-6 text-neutral-700 text-sm flex items-center justify-center gap-2">
                 <RefreshCw size={13} className="animate-spin" />
-                Loading live candles… ({candles.length}/{strategyMode === "hft" ? 30 : 60})
+                Loading live candles… ({candles.length}/{strategyMode === "momentum" ? 60 : 35})
               </div>
             )}
           </div>

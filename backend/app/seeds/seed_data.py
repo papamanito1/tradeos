@@ -49,8 +49,8 @@ async def seed():
             session.add(rs)
             print("Created default risk settings.")
 
-        # ── Keep only our two live strategies ────────────────────────────────
-        keep_names = {"BTC Momentum Velocity 15m", "HFT VWAP Scalper 1m"}
+        # ── Keep only our three live strategies ───────────────────────────────
+        keep_names = {"BTC Momentum Velocity 15m", "HFT VWAP Scalper 1m", "ORB-30 Scalper 1m"}
         all_strats = await session.execute(select(Strategy))
         for s in all_strats.scalars().all():
             if s.name not in keep_names:
@@ -136,6 +136,39 @@ async def seed():
             existing_hft.capital_allocation = 5000.0
             existing_hft.parameters = hft_params
             print(f"Updated strategy: {hft_name}")
+
+        # ── Ensure ORB-30 Scalper 1m exists and is enabled ───────────────────
+        orb_name = "ORB-30 Scalper 1m"
+        result = await session.execute(select(Strategy).where(Strategy.name == orb_name))
+        existing_orb = result.scalar_one_or_none()
+        orb_params = {
+            "orb_bars":        30,
+            "ema_period":      20,
+            "rr_target":       2.25,
+            "sl_buffer_pct":   0.0003,
+            "vol_ratio":       1.3,
+            "max_hold_bars":   90,
+            "or_range_min":    0.08,
+            "or_range_max":    3.5,
+        }
+        if not existing_orb:
+            session.add(Strategy(
+                name=orb_name,
+                strategy_type="orb_scalper",
+                symbols=["BTC/USDT"],
+                timeframe="1m",
+                parameters=orb_params,
+                capital_allocation=5000.0,
+                mode="live",
+                is_enabled=True,
+            ))
+            print(f"Created strategy: {orb_name}")
+        else:
+            existing_orb.is_enabled = True
+            existing_orb.mode = "live"
+            existing_orb.capital_allocation = 5000.0
+            existing_orb.parameters = orb_params
+            print(f"Updated strategy: {orb_name}")
 
         # ── Sample journal entries ─────────────────────────────────────────────
         result = await session.execute(select(JournalEntry).limit(1))
