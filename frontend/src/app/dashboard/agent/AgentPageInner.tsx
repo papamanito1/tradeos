@@ -1297,19 +1297,29 @@ function AgentContent() {
       {/* Trade history — server ONLY (persistent, cross-device) */}
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Zap size={13} className="text-neutral-500" />
             <span className="text-[13px] font-semibold text-white">Execution History</span>
-            {!server.loading && !server.error && (
-              <span className="text-[9px] text-emerald-400">
-                {server.trades.length} trades · server · persistent
-              </span>
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center gap-1">
+              <span className="w-1 h-1 rounded-full bg-emerald-400" />
+              Persistent · survives browser close
+            </span>
+            {server.stats && server.stats.total_trades > 0 && (
+              <div className="flex items-center gap-3 ml-2">
+                <span className={`text-[11px] font-bold font-mono ${server.stats.total_pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {server.stats.total_pnl >= 0 ? "+" : ""}${server.stats.total_pnl.toFixed(2)} all-time
+                </span>
+                <span className="text-[9px] text-neutral-600">
+                  {server.stats.wins}W / {server.stats.losses}L · {server.stats.win_rate.toFixed(1)}% WR
+                </span>
+              </div>
             )}
           </div>
           {!server.loading && !server.error && (
             <button onClick={server.resetAccount}
-              className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors">
-              <RotateCcw size={11} /> Reset Account
+              className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors ml-2"
+              title="Clears all trade history and resets P&L to zero">
+              <RotateCcw size={11} /> Reset
             </button>
           )}
         </div>
