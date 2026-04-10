@@ -522,7 +522,7 @@ function AgentContent() {
           ["Scans Run",  (server.scanCount > 0 ? server.scanCount : scanCount).toString()],
           ["Last Scan",  server.lastScan ?? lastScan ?? "—"],
           ["Firing",     firingStrategy],
-          ["Open Pos",   server.openPositions.length > 0 ? `${server.openPositions.length} active` : anyPositionOpen ? `${openPositions.length} active` : "none"],
+          ["Open Pos",   server.loading ? "…" : `${server.openPositions.length} active`],
           ["Server P&L", server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—"],
           ["Mode",       "📄 PAPER"],
         ].map(([label, val]) => (
@@ -979,23 +979,30 @@ function AgentContent() {
             </div>
           )}
 
-          {/* Paper trading panel — server data when available, browser fallback */}
+          {/* Paper trading panel — server is the ONLY source of truth */}
           {config.mode === "paper" && (
-            <PaperPanel
-              openPositions={
-                server.openPositions.length > 0
-                  ? (server.openPositions as unknown as PaperPosition[])
-                  : openPositions
-              }
-              stats={server.stats ? { ...server.stats, avg_rr: 0, best_trade: server.stats.best_trade ?? 0, worst_trade: server.stats.worst_trade ?? 0 } : paperStats}
-              trades={
-                server.trades.length > 0
-                  ? (server.trades as unknown as ReturnType<typeof usePhantomAgent>["trades"])
-                  : trades
-              }
-              onClose={key => server.running ? server.closePosition(key) : closePaperPosition(key)}
-              onReset={() => server.running ? server.resetAccount() : resetPaperAccount()}
-            />
+            server.loading ? (
+              <div className="card p-6 flex items-center justify-center gap-3 text-neutral-600">
+                <RefreshCw size={14} className="animate-spin" />
+                <span className="text-[12px]">Connecting to server agent…</span>
+              </div>
+            ) : server.error ? (
+              <div className="card p-4 flex items-center gap-3 text-red-400 text-[12px]">
+                <AlertTriangle size={14} />
+                Cannot reach server — check Railway deployment. ({server.error})
+              </div>
+            ) : (
+              <PaperPanel
+                openPositions={server.openPositions as unknown as PaperPosition[]}
+                stats={server.stats
+                  ? { ...server.stats, avg_rr: 0, best_trade: server.stats.best_trade ?? 0, worst_trade: server.stats.worst_trade ?? 0 }
+                  : { total_pnl: 0, win_rate: 0, total_trades: 0, wins: 0, losses: 0, avg_rr: 0, best_trade: 0, worst_trade: 0 }
+                }
+                trades={server.trades as unknown as ReturnType<typeof usePhantomAgent>["trades"]}
+                onClose={key => server.closePosition(key)}
+                onReset={() => server.resetAccount()}
+              />
+            )
           )}
 
           {/* Conditions checklist */}
@@ -1047,35 +1054,44 @@ function AgentContent() {
                 ? <span className="text-[9px] text-emerald-400 ml-auto flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />server log</span>
                 : <span className="text-[9px] text-neutral-700 ml-auto">browser log</span>}
             </div>
-            <AgentLog logs={server.log.length > 0 ? server.log : agentLog} />
+            <AgentLog logs={server.log} />
           </div>
         </div>
       </div>
 
-      {/* Trade history — server trades (persistent) + browser fallback */}
+      {/* Trade history — server ONLY (persistent, cross-device) */}
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Zap size={13} className="text-neutral-500" />
             <span className="text-[13px] font-semibold text-white">Execution History</span>
-            {server.trades.length > 0
-              ? <span className="text-[9px] text-emerald-400">({server.trades.length} server trades · persistent)</span>
-              : <span className="text-[9px] text-neutral-600">({trades.length} trades this session)</span>}
+            {!server.loading && !server.error && (
+              <span className="text-[9px] text-emerald-400">
+                {server.trades.length} trades · server · persistent
+              </span>
+            )}
           </div>
-          {server.trades.length === 0 && trades.length > 0 && (
-            <button onClick={clearTrades}
-              className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors">
-              <Trash2 size={11} /> Clear
-            </button>
-          )}
-          {server.trades.length > 0 && (
+          {!server.loading && !server.error && (
             <button onClick={server.resetAccount}
               className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors">
               <RotateCcw size={11} /> Reset Account
             </button>
           )}
         </div>
-        {server.trades.length > 0 ? (
+
+        {server.loading ? (
+          <div className="text-center py-8 text-neutral-700 text-sm flex items-center justify-center gap-2">
+            <RefreshCw size={13} className="animate-spin" /> Connecting to server…
+          </div>
+        ) : server.error ? (
+          <div className="flex items-center gap-2 py-6 text-red-400 text-[12px] justify-center">
+            <AlertTriangle size={13} /> Cannot reach server ({server.error})
+          </div>
+        ) : server.trades.length === 0 ? (
+          <div className="text-center py-8 text-neutral-700 text-sm">
+            No trades yet. Server agent is scanning every 20s…
+          </div>
+        ) : (
           <div>
             {server.trades.map(t => (
               <div key={t.id} className="flex items-center gap-3 py-2 border-b border-neutral-800/60">
@@ -1086,11 +1102,17 @@ function AgentContent() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className={`text-[11px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()} BTC</span>
+                    <span className={`text-[11px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                      {t.direction.toUpperCase()} BTC
+                    </span>
                     <span className="text-[9px] text-neutral-600">{t.strategy_name}</span>
-                    <span className="text-[9px] text-neutral-700">{new Date(t.closed_at ?? t.timestamp).toLocaleTimeString()}</span>
+                    <span className="text-[9px] text-neutral-700">
+                      {new Date(t.closed_at ?? t.timestamp).toLocaleTimeString()}
+                    </span>
                   </div>
-                  <div className="text-[9px] text-neutral-600 truncate font-mono">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "open"}</div>
+                  <div className="text-[9px] text-neutral-600 truncate font-mono">
+                    ${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "open"}
+                  </div>
                 </div>
                 <div className="text-right flex-shrink-0">
                   {t.pnl_usd != null && (
@@ -1105,12 +1127,6 @@ function AgentContent() {
               </div>
             ))}
           </div>
-        ) : trades.length === 0 ? (
-          <div className="text-center py-8 text-neutral-700 text-sm">
-            No trades yet. Agent is scanning every 20s…
-          </div>
-        ) : (
-          <div>{trades.map(t => <TradeRow key={t.id} trade={t} />)}</div>
         )}
       </div>
 
