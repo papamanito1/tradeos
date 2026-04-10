@@ -57,9 +57,12 @@ _background_tasks: list[asyncio.Task] = []
 async def startup():
     logger.info("TradeOS starting up...")
 
-    # Init DB
-    await init_db()
-    logger.info("Database initialized")
+    # Init DB (non-fatal — falls back to SQLite if PostgreSQL is unreachable)
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.error(f"DB init failed entirely: {e} — continuing without persistent DB")
 
     # Seed admin if missing
     try:
