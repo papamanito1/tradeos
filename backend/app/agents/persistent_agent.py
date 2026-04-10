@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 STATE_FILE = Path(os.environ.get("AGENT_STATE_FILE", "/tmp/tradeos_agent_state.json"))
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
+DEFAULT_STRATEGY_CFG = {
+    "enabled":        True,
+    "size_usdc":      100,
+    "leverage":       1,
+    "min_confidence": 0.50,
+    "min_conditions": 2,
+}
+
 DEFAULT_CONFIG = {
     "enabled":        True,   # auto-start on server boot
     "size_usdc":      100,
@@ -38,6 +46,13 @@ DEFAULT_CONFIG = {
     "mode":           "paper",
     "auto_execute":   True,
     "leverage":       1,
+    "strategy_overrides": {
+        "momentum": {**DEFAULT_STRATEGY_CFG},
+        "hft":      {**DEFAULT_STRATEGY_CFG},
+        "orb":      {**DEFAULT_STRATEGY_CFG},
+        "obi":      {**DEFAULT_STRATEGY_CFG},
+        "grid":     {**DEFAULT_STRATEGY_CFG, "leverage": 30, "min_conditions": 3},
+    },
 }
 
 STRATEGY_KEYS = ["momentum", "hft", "orb", "obi"]
@@ -866,6 +881,10 @@ class PersistentAgent:
 
         any_signal = False
         for key, result in strategies:
+            s_cfg = self._strategy_cfg(key)
+            if not s_cfg.get("enabled", True):
+                continue
+
             sig = result.get("signal")
             met = result.get("met_count", 0)
             total = result.get("total", 7)
@@ -875,20 +894,21 @@ class PersistentAgent:
 
             if sig:
                 conf = sig.get("confidence", 0)
-                cond_ok = met >= cfg.get("min_conditions", 2)
-                conf_ok = conf >= cfg.get("min_confidence", 0.50)
+                cond_ok = met >= s_cfg.get("min_conditions", 2)
+                conf_ok = conf >= s_cfg.get("min_confidence", 0.50)
                 block   = "POS OPEN" if open_pos else ("conf_fail" if not conf_ok else ("cond_fail" if not cond_ok else ""))
 
                 self._log(f"[{name}] SIGNAL {sig['direction'].upper()} · {met}/{total} conds · conf {conf*100:.0f}% · {block or 'EXECUTING'}")
 
-                if cond_ok and conf_ok and not open_pos and cfg.get("auto_execute", True):
-                    self._open_position(key, name, sig, cfg, live_price)
+                if cond_ok and conf_ok and not open_pos and s_cfg.get("auto_execute", True):
+                    self._open_position(key, name, sig, s_cfg, live_price)
                     any_signal = True
             else:
                 if self.scan_count % 5 == 0:
                     self._log(f"[{name}] {met}/{total} conds · no signal · {bias}")
 
         # ── Grid $50 strategy (multi-position) ───────────────────────────────
+        grid_cfg = self._strategy_cfg("grid")
         MAX_GRID_POSITIONS = 5
         grid_result = _run_grid(candles1m, live_price, self.grid_state)
         grid_sig    = grid_result.get("signal")
@@ -897,33 +917,32 @@ class PersistentAgent:
         cur_level   = grid_result.get("current_level", 0)
         grid_level_key = f"grid_{cur_level}"
 
-        # Count how many grid positions are currently open
-        open_grid_count = sum(1 for k, v in self.positions.items() if k.startswith("grid_") and v)
+        if grid_cfg.get("enabled", True):
+            open_grid_count = sum(1 for k, v in self.positions.items() if k.startswith("grid_") and v)
 
-        if grid_sig:
-            conf    = grid_sig.get("confidence", 0)
-            conf_ok = conf >= cfg.get("min_confidence", 0.50)
-            cond_ok = grid_met >= 3  # grid needs 3/5 conditions
-            already_open = self.positions.get(grid_level_key)
-            slot_ok = open_grid_count < MAX_GRID_POSITIONS
+            if grid_sig:
+                conf    = grid_sig.get("confidence", 0)
+                conf_ok = conf >= grid_cfg.get("min_confidence", 0.50)
+                cond_ok = grid_met >= grid_cfg.get("min_conditions", 3)
+                already_open = self.positions.get(grid_level_key)
+                slot_ok = open_grid_count < MAX_GRID_POSITIONS
 
-            block = ("POS@LEVEL" if already_open else
-                     "MAX_SLOTS" if not slot_ok else
-                     "conf_fail" if not conf_ok else
-                     "cond_fail" if not cond_ok else "")
+                block = ("POS@LEVEL" if already_open else
+                         "MAX_SLOTS" if not slot_ok else
+                         "conf_fail" if not conf_ok else
+                         "cond_fail" if not cond_ok else "")
 
-            self._log(f"[Grid $50] SIGNAL LONG · {grid_met}/5 conds · conf {conf*100:.0f}% "
-                      f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS} · {block or 'EXECUTING'}")
+                self._log(f"[Grid $50] SIGNAL LONG · {grid_met}/5 conds · conf {conf*100:.0f}% "
+                          f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS} · {block or 'EXECUTING'}")
 
-            if cond_ok and conf_ok and not already_open and slot_ok and cfg.get("auto_execute", True):
-                grid_cfg = {**cfg, "leverage": 30}
-                self._open_position(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
-                any_signal = True
-        elif self.scan_count % 5 == 0:
-            self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
-                      f"center ${grid_result.get('grid_center', 0):,} · "
-                      f"range ${grid_result.get('grid_min', 0):,}–${grid_result.get('grid_max', 0):,} · "
-                      f"slots {open_grid_count}/{MAX_GRID_POSITIONS}")
+                if cond_ok and conf_ok and not already_open and slot_ok and grid_cfg.get("auto_execute", True):
+                    self._open_position(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
+                    any_signal = True
+            elif self.scan_count % 5 == 0:
+                self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
+                          f"center ${grid_result.get('grid_center', 0):,} · "
+                          f"range ${grid_result.get('grid_min', 0):,}–${grid_result.get('grid_max', 0):,} · "
+                          f"slots {open_grid_count}/{MAX_GRID_POSITIONS}")
 
         self._save_state()           # fast file cache
         await self._save_state_db()  # durable DB persist
@@ -1056,7 +1075,31 @@ class PersistentAgent:
         self._save_state()
         self._schedule_db_save()
 
+    def _strategy_cfg(self, strategy_key: str) -> dict:
+        """Resolve effective config for a strategy: per-strategy override merged over global."""
+        overrides = self.config.get("strategy_overrides", {})
+        s_key = "grid" if strategy_key.startswith("grid_") else strategy_key
+        s_cfg = overrides.get(s_key, {})
+        return {
+            "enabled":        s_cfg.get("enabled",        self.config.get("enabled", True)),
+            "size_usdc":      s_cfg.get("size_usdc",      self.config.get("size_usdc", 100)),
+            "leverage":       s_cfg.get("leverage",       self.config.get("leverage", 1)),
+            "min_confidence": s_cfg.get("min_confidence",  self.config.get("min_confidence", 0.50)),
+            "min_conditions": s_cfg.get("min_conditions",  self.config.get("min_conditions", 2)),
+            "mode":           self.config.get("mode", "paper"),
+            "auto_execute":   self.config.get("auto_execute", True),
+        }
+
     def update_config(self, patch: dict) -> None:
+        # Handle strategy_overrides merge separately to preserve per-key data
+        if "strategy_overrides" in patch:
+            existing = self.config.get("strategy_overrides", {})
+            for strat_key, strat_patch in patch["strategy_overrides"].items():
+                if strat_key not in existing:
+                    existing[strat_key] = {**DEFAULT_STRATEGY_CFG}
+                existing[strat_key].update(strat_patch)
+            self.config["strategy_overrides"] = existing
+            patch = {k: v for k, v in patch.items() if k != "strategy_overrides"}
         self.config.update(patch)
         if patch.get("enabled") is True and not self._running:
             asyncio.create_task(self.start())

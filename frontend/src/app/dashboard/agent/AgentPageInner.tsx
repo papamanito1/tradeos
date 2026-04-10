@@ -426,6 +426,18 @@ function MiniMasterAgentChat({ masterAgent }: { masterAgent: ReturnType<typeof u
 
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 // ─── Config panel — draft state + Make Changes ────────────────────────────────
+// ─── Strategy metadata ─────────────────────────────────────────────────────
+const STRATEGIES = [
+  { key: "momentum", label: "Momentum 15m", color: "#0a84ff", icon: "📈", tf: "15m" },
+  { key: "hft",      label: "HFT Scalper",  color: "#a78bfa", icon: "⚡", tf: "1m"  },
+  { key: "orb",      label: "ORB-30",       color: "#f59e0b", icon: "🔶", tf: "1m"  },
+  { key: "obi",      label: "OBI Scalper",   color: "#10b981", icon: "📊", tf: "1m"  },
+  { key: "grid",     label: "Grid $50",      color: "#06b6d4", icon: "⊞",  tf: "cont" },
+] as const;
+
+type StratOverride = { enabled: boolean; size_usdc: number; leverage: number; min_confidence: number; min_conditions: number };
+const DEFAULT_STRAT: StratOverride = { enabled: true, size_usdc: 100, leverage: 1, min_confidence: 0.50, min_conditions: 2 };
+
 function ConfigPanel({
   serverConfig,
   onSave,
@@ -437,18 +449,25 @@ function ConfigPanel({
   const [saving, setSaving]   = useState(false);
   const [saved, setSaved]     = useState(false);
   const [dirty, setDirty]     = useState(false);
+  const [tab, setTab]         = useState<"global" | string>("global");
 
-  // Sync draft from server when config first loads (or resets)
   useEffect(() => {
-    if (serverConfig && !dirty) {
-      setDraft(serverConfig);
-    }
+    if (serverConfig && !dirty) setDraft(serverConfig);
   }, [serverConfig, dirty]);
 
   const set = <K extends keyof ServerAgentConfig>(key: K, val: ServerAgentConfig[K]) => {
     setDraft(prev => prev ? { ...prev, [key]: val } : prev);
-    setDirty(true);
-    setSaved(false);
+    setDirty(true); setSaved(false);
+  };
+
+  const setStrat = (stratKey: string, field: keyof StratOverride, val: number | boolean) => {
+    setDraft(prev => {
+      if (!prev) return prev;
+      const overrides = { ...(prev.strategy_overrides ?? {}) };
+      overrides[stratKey] = { ...DEFAULT_STRAT, ...(overrides[stratKey] ?? {}), [field]: val };
+      return { ...prev, strategy_overrides: overrides };
+    });
+    setDirty(true); setSaved(false);
   };
 
   const handleSave = async () => {
@@ -456,12 +475,9 @@ function ConfigPanel({
     setSaving(true);
     try {
       await onSave(draft);
-      setDirty(false);
-      setSaved(true);
+      setDirty(false); setSaved(true);
       setTimeout(() => setSaved(false), 2500);
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   const handleReset = () => {
@@ -478,8 +494,10 @@ function ConfigPanel({
     );
   }
 
+  const activeStrat = tab !== "global" ? (d.strategy_overrides?.[tab] ?? DEFAULT_STRAT) : null;
+
   return (
-    <div className="col-span-12 lg:col-span-5 card p-5 space-y-5">
+    <div className="col-span-12 lg:col-span-5 card p-5 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Shield size={13} className="text-neutral-500" />
@@ -492,177 +510,298 @@ function ConfigPanel({
         )}
       </div>
 
-      {/* Mode */}
-      <div>
-        <label className="text-[10px] text-neutral-600 block mb-2">Execution Mode</label>
-        <div className="grid grid-cols-3 gap-2">
-          {([
-            ["paper", "📄 Paper"],
-            ["perps", "🚀 Perps"],
-            ["spot",  "⚡ Spot"],
-          ] as const).map(([m, label]) => (
-            <button key={m} onClick={() => set("mode", m)}
-              className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
-              style={d.mode === m
-                ? m === "paper"
-                  ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
-                  : { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
-                : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-              }>
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="text-[9px] text-neutral-700 mt-1.5">
-          {d.mode === "paper"
-            ? "Simulated fills · live P&L tracking · no wallet needed"
-            : d.mode === "perps"
-            ? "Opens Phantom Perps — full leverage, confirm in wallet"
-            : "Executes USDC↔wBTC swap directly on Solana mainnet"}
-        </div>
-      </div>
-
-      {/* Size */}
-      <div>
-        <label className="text-[10px] text-neutral-600 block mb-1.5">Trade Size (USDC)</label>
-        <div className="flex gap-2">
-          <input type="number" value={d.size_usdc}
-            onChange={e => set("size_usdc", Number(e.target.value))}
-            className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-[12px] font-mono text-white outline-none focus:border-blue-500" />
-          <div className="flex gap-1">
-            {[50, 100, 250].map(s => (
-              <button key={s} onClick={() => set("size_usdc", s)}
-                className="px-2 py-2 rounded-lg text-[10px] font-bold border transition-colors"
-                style={d.size_usdc === s
-                  ? { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
-                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-                }>${s}</button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Min confidence */}
-      <div>
-        <div className="flex justify-between mb-1.5">
-          <label className="text-[10px] text-neutral-600">Min Confidence</label>
-          <span className="text-[10px] font-mono text-blue-400">{(d.min_confidence * 100).toFixed(0)}%</span>
-        </div>
-        <input type="range" min={0.4} max={0.95} step={0.05}
-          value={d.min_confidence}
-          onChange={e => set("min_confidence", Number(e.target.value))}
-          className="w-full accent-blue-500" />
-        <div className="flex justify-between text-[9px] text-neutral-700 mt-1">
-          <span>Aggressive (40%)</span><span>Conservative (95%)</span>
-        </div>
-      </div>
-
-      {/* Min conditions */}
-      <div>
-        <div className="flex justify-between mb-1.5">
-          <label className="text-[10px] text-neutral-600">Min Conditions Met</label>
-          <span className="text-[10px] font-mono text-blue-400">{d.min_conditions}+ met</span>
-        </div>
-        <input type="range" min={3} max={7} step={1}
-          value={d.min_conditions}
-          onChange={e => set("min_conditions", Number(e.target.value))}
-          className="w-full accent-blue-500" />
-        <div className="flex justify-between text-[9px] text-neutral-700 mt-1">
-          <span>Loose (3)</span><span>Strict (7)</span>
-        </div>
-      </div>
-
-      {/* Auto-execute toggle */}
-      <div className="flex items-center justify-between py-3 px-4 rounded-xl border border-neutral-800 bg-neutral-900">
-        <div>
-          <div className="text-[11px] font-semibold text-white">Auto-Execute</div>
-          <div className="text-[9px] text-neutral-600 mt-0.5">Skip confirmation modal — execute immediately</div>
-        </div>
-        <button onClick={() => set("auto_execute", !d.auto_execute)}
-          className="relative w-10 h-5 rounded-full border transition-colors flex-shrink-0"
-          style={d.auto_execute
-            ? { background: "rgba(239,68,68,0.3)", borderColor: "rgba(239,68,68,0.4)" }
-            : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)" }
-          }>
-          <span className="absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200"
-            style={{ left: d.auto_execute ? "22px" : "2px", background: d.auto_execute ? "#ef4444" : "#3d3d58" }} />
+      {/* ── Tab bar: Global + per-strategy ──────────────────────────────── */}
+      <div className="flex gap-1 overflow-x-auto pb-1 -mx-1 px-1">
+        <button onClick={() => setTab("global")}
+          className="px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all whitespace-nowrap flex-shrink-0"
+          style={tab === "global"
+            ? { background: "rgba(10,132,255,0.15)", borderColor: "rgba(10,132,255,0.4)", color: "#60aaff" }
+            : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#4b5563" }}>
+          ⚙ Global
         </button>
+        {STRATEGIES.map(s => {
+          const sOver = d.strategy_overrides?.[s.key];
+          const isEnabled = sOver?.enabled ?? true;
+          return (
+            <button key={s.key} onClick={() => setTab(s.key)}
+              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1"
+              style={tab === s.key
+                ? { background: `${s.color}18`, borderColor: `${s.color}50`, color: s.color }
+                : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: isEnabled ? "#6b7280" : "#2a2a3e" }}>
+              <span className="text-[9px]">{s.icon}</span>
+              {s.label}
+              {!isEnabled && <span className="text-[7px] text-red-500">OFF</span>}
+            </button>
+          );
+        })}
       </div>
 
-      {d.auto_execute && (
-        <div className="flex items-start gap-2 p-3 rounded-lg border border-red-500/20 bg-red-500/5">
-          <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
-          <div className="text-[10px] text-red-400/80">Auto-execute ON — agent trades automatically when signal conditions are met.</div>
+      {/* ═══════ GLOBAL TAB ═══════ */}
+      {tab === "global" && (
+        <div className="space-y-4">
+          {/* Mode */}
+          <div>
+            <label className="text-[10px] text-neutral-600 block mb-2">Execution Mode</label>
+            <div className="grid grid-cols-3 gap-2">
+              {([["paper", "📄 Paper"], ["perps", "🚀 Perps"], ["spot", "⚡ Spot"]] as const).map(([m, label]) => (
+                <button key={m} onClick={() => set("mode", m)}
+                  className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
+                  style={d.mode === m
+                    ? m === "paper"
+                      ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
+                      : { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
+                    : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[9px] text-neutral-700 mt-1.5">
+              {d.mode === "paper" ? "Simulated fills · live P&L tracking · no wallet needed"
+                : d.mode === "perps" ? "Opens Phantom Perps — full leverage, confirm in wallet"
+                : "Executes USDC↔wBTC swap directly on Solana mainnet"}
+            </div>
+          </div>
+
+          {/* Default Size */}
+          <div>
+            <label className="text-[10px] text-neutral-600 block mb-1.5">Default Trade Size (USDC)</label>
+            <div className="flex gap-2">
+              <input type="number" value={d.size_usdc}
+                onChange={e => set("size_usdc", Number(e.target.value))}
+                className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-[12px] font-mono text-white outline-none focus:border-blue-500" />
+              <div className="flex gap-1">
+                {[50, 100, 250].map(s => (
+                  <button key={s} onClick={() => set("size_usdc", s)}
+                    className="px-2 py-2 rounded-lg text-[10px] font-bold border transition-colors"
+                    style={d.size_usdc === s
+                      ? { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
+                      : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+                    }>${s}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Default Min confidence */}
+          <div>
+            <div className="flex justify-between mb-1.5">
+              <label className="text-[10px] text-neutral-600">Default Min Confidence</label>
+              <span className="text-[10px] font-mono text-blue-400">{(d.min_confidence * 100).toFixed(0)}%</span>
+            </div>
+            <input type="range" min={0.4} max={0.95} step={0.05} value={d.min_confidence}
+              onChange={e => set("min_confidence", Number(e.target.value))} className="w-full accent-blue-500" />
+            <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>Aggressive (40%)</span><span>Conservative (95%)</span></div>
+          </div>
+
+          {/* Default Min conditions */}
+          <div>
+            <div className="flex justify-between mb-1.5">
+              <label className="text-[10px] text-neutral-600">Default Min Conditions</label>
+              <span className="text-[10px] font-mono text-blue-400">{d.min_conditions}+ met</span>
+            </div>
+            <input type="range" min={2} max={7} step={1} value={d.min_conditions}
+              onChange={e => set("min_conditions", Number(e.target.value))} className="w-full accent-blue-500" />
+            <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>Loose (2)</span><span>Strict (7)</span></div>
+          </div>
+
+          {/* Auto-execute */}
+          <div className="flex items-center justify-between py-3 px-4 rounded-xl border border-neutral-800 bg-neutral-900">
+            <div>
+              <div className="text-[11px] font-semibold text-white">Auto-Execute</div>
+              <div className="text-[9px] text-neutral-600 mt-0.5">Execute immediately on signal</div>
+            </div>
+            <button onClick={() => set("auto_execute", !d.auto_execute)}
+              className="relative w-10 h-5 rounded-full border transition-colors flex-shrink-0"
+              style={d.auto_execute
+                ? { background: "rgba(239,68,68,0.3)", borderColor: "rgba(239,68,68,0.4)" }
+                : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)" }}>
+              <span className="absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200"
+                style={{ left: d.auto_execute ? "22px" : "2px", background: d.auto_execute ? "#ef4444" : "#3d3d58" }} />
+            </button>
+          </div>
+
+          {/* Default Leverage */}
+          <div>
+            <div className="flex justify-between mb-2">
+              <label className="text-[10px] text-neutral-600">Default Leverage</label>
+              <span className="text-[10px] font-mono font-bold text-orange-400">{d.leverage ?? 1}×</span>
+            </div>
+            <div className="grid grid-cols-6 gap-1.5">
+              {[1, 2, 3, 5, 10, 20].map(lev => (
+                <button key={lev} onClick={() => set("leverage", lev)}
+                  className="py-2 rounded-xl text-[11px] font-bold border transition-all"
+                  style={(d.leverage ?? 1) === lev
+                    ? lev >= 10 ? { background: "rgba(239,68,68,0.15)", borderColor: "rgba(239,68,68,0.4)", color: "#ef4444" }
+                    : lev >= 5  ? { background: "rgba(245,158,11,0.15)", borderColor: "rgba(245,158,11,0.4)", color: "#f59e0b" }
+                    :             { background: "rgba(34,197,94,0.12)", borderColor: "rgba(34,197,94,0.3)", color: "#22c55e" }
+                    : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }}>
+                  {lev}×
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Per-strategy summary */}
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-3">
+            <div className="text-[9px] text-neutral-600 mb-2 font-bold uppercase tracking-wide">Per-Strategy Overrides</div>
+            <div className="space-y-1.5">
+              {STRATEGIES.map(s => {
+                const so = d.strategy_overrides?.[s.key] ?? DEFAULT_STRAT;
+                return (
+                  <button key={s.key} onClick={() => setTab(s.key)}
+                    className="w-full flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-neutral-800 transition-colors text-left">
+                    <span className="text-[10px]">{s.icon}</span>
+                    <span className="text-[10px] font-semibold text-white flex-1">{s.label}</span>
+                    <span className={`text-[9px] font-bold ${so.enabled ? "text-green-400" : "text-red-400"}`}>{so.enabled ? "ON" : "OFF"}</span>
+                    <span className="text-[9px] text-neutral-600 font-mono">${so.size_usdc}</span>
+                    <span className="text-[9px] text-orange-400 font-mono">{so.leverage}×</span>
+                    <ChevronRight size={10} className="text-neutral-700" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Leverage */}
-      <div>
-        <div className="flex justify-between mb-2">
-          <label className="text-[10px] text-neutral-600">Leverage</label>
-          <span className="text-[10px] font-mono font-bold text-orange-400">{d.leverage ?? 1}×</span>
-        </div>
-        <div className="grid grid-cols-6 gap-1.5 mb-2">
-          {[1, 2, 3, 5, 10, 20].map(lev => (
-            <button
-              key={lev}
-              onClick={() => set("leverage", lev)}
-              className="py-2 rounded-xl text-[11px] font-bold border transition-all"
-              style={(d.leverage ?? 1) === lev
-                ? lev >= 10
-                  ? { background: "rgba(239,68,68,0.15)", borderColor: "rgba(239,68,68,0.4)", color: "#ef4444" }
-                  : lev >= 5
-                  ? { background: "rgba(245,158,11,0.15)", borderColor: "rgba(245,158,11,0.4)", color: "#f59e0b" }
-                  : { background: "rgba(34,197,94,0.12)", borderColor: "rgba(34,197,94,0.3)", color: "#22c55e" }
-                : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-              }
-            >
-              {lev}×
+      {/* ═══════ STRATEGY TAB ═══════ */}
+      {tab !== "global" && activeStrat && (() => {
+        const meta = STRATEGIES.find(s => s.key === tab)!;
+        const so = activeStrat;
+        return (
+          <div className="space-y-4">
+            {/* Strategy header */}
+            <div className="flex items-center gap-2 p-3 rounded-xl border bg-neutral-900" style={{ borderColor: `${meta.color}30` }}>
+              <span className="text-lg">{meta.icon}</span>
+              <div className="flex-1">
+                <div className="text-[12px] font-bold text-white">{meta.label}</div>
+                <div className="text-[9px] text-neutral-600">{meta.tf} timeframe</div>
+              </div>
+              <button onClick={() => setStrat(tab, "enabled", !so.enabled)}
+                className="relative w-10 h-5 rounded-full border transition-colors flex-shrink-0"
+                style={so.enabled
+                  ? { background: `${meta.color}30`, borderColor: `${meta.color}50` }
+                  : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)" }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200"
+                  style={{ left: so.enabled ? "22px" : "2px", background: so.enabled ? meta.color : "#3d3d58" }} />
+              </button>
+            </div>
+
+            {!so.enabled && (
+              <div className="flex items-center gap-2 p-3 rounded-lg border border-red-500/20 bg-red-500/5">
+                <XCircle size={12} className="text-red-400 flex-shrink-0" />
+                <span className="text-[10px] text-red-400">Strategy disabled — no trades will be taken</span>
+              </div>
+            )}
+
+            {/* Position Size */}
+            <div>
+              <label className="text-[10px] text-neutral-600 block mb-1.5">Position Size (USDC)</label>
+              <div className="flex gap-2">
+                <input type="number" value={so.size_usdc}
+                  onChange={e => setStrat(tab, "size_usdc", Number(e.target.value))}
+                  className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-[12px] font-mono text-white outline-none focus:border-blue-500" />
+                <div className="flex gap-1">
+                  {[50, 100, 250, 500].map(s => (
+                    <button key={s} onClick={() => setStrat(tab, "size_usdc", s)}
+                      className="px-2 py-2 rounded-lg text-[10px] font-bold border transition-colors"
+                      style={so.size_usdc === s
+                        ? { background: `${meta.color}18`, borderColor: `${meta.color}40`, color: meta.color }
+                        : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+                      }>${s}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Leverage */}
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-[10px] text-neutral-600">Leverage</label>
+                <span className="text-[10px] font-mono font-bold text-orange-400">{so.leverage}×</span>
+              </div>
+              <div className="grid grid-cols-7 gap-1.5">
+                {[1, 2, 3, 5, 10, 20, 30].map(lev => (
+                  <button key={lev} onClick={() => setStrat(tab, "leverage", lev)}
+                    className="py-2 rounded-xl text-[10px] font-bold border transition-all"
+                    style={so.leverage === lev
+                      ? lev >= 20 ? { background: "rgba(239,68,68,0.15)", borderColor: "rgba(239,68,68,0.4)", color: "#ef4444" }
+                      : lev >= 5  ? { background: "rgba(245,158,11,0.15)", borderColor: "rgba(245,158,11,0.4)", color: "#f59e0b" }
+                      :             { background: "rgba(34,197,94,0.12)", borderColor: "rgba(34,197,94,0.3)", color: "#22c55e" }
+                      : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }}>
+                    {lev}×
+                  </button>
+                ))}
+              </div>
+              {so.leverage >= 10 && (
+                <div className="text-[9px] text-red-400/70 mt-1.5 text-center">
+                  {so.leverage}× leverage — high risk · tight SL mandatory
+                </div>
+              )}
+            </div>
+
+            {/* Min Confidence */}
+            <div>
+              <div className="flex justify-between mb-1.5">
+                <label className="text-[10px] text-neutral-600">Min Confidence</label>
+                <span className="text-[10px] font-mono" style={{ color: meta.color }}>{(so.min_confidence * 100).toFixed(0)}%</span>
+              </div>
+              <input type="range" min={0.4} max={0.95} step={0.05} value={so.min_confidence}
+                onChange={e => setStrat(tab, "min_confidence", Number(e.target.value))}
+                className="w-full accent-blue-500" />
+              <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>40%</span><span>95%</span></div>
+            </div>
+
+            {/* Min Conditions */}
+            <div>
+              <div className="flex justify-between mb-1.5">
+                <label className="text-[10px] text-neutral-600">Min Conditions Met</label>
+                <span className="text-[10px] font-mono" style={{ color: meta.color }}>{so.min_conditions}+</span>
+              </div>
+              <input type="range" min={2} max={7} step={1} value={so.min_conditions}
+                onChange={e => setStrat(tab, "min_conditions", Number(e.target.value))}
+                className="w-full accent-blue-500" />
+              <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>Loose (2)</span><span>Strict (7)</span></div>
+            </div>
+
+            {/* Effective config summary */}
+            <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-3">
+              <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Effective Config</div>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  ["Size",       `$${so.size_usdc}`, meta.color],
+                  ["Leverage",   `${so.leverage}×`, so.leverage >= 10 ? "#ef4444" : so.leverage >= 5 ? "#f59e0b" : "#22c55e"],
+                  ["Confidence", `${(so.min_confidence * 100).toFixed(0)}%`, meta.color],
+                  ["Conditions", `${so.min_conditions}+ req`, meta.color],
+                ] as const).map(([l, v, c]) => (
+                  <div key={l} className="flex justify-between py-1">
+                    <span className="text-[9px] text-neutral-600">{l}</span>
+                    <span className="text-[10px] font-mono font-bold" style={{ color: c }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={() => setTab("global")}
+              className="w-full text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors py-1">
+              ← Back to Global Settings
             </button>
-          ))}
-        </div>
-        <div className="flex items-start gap-2 p-2.5 rounded-lg"
-          style={{
-            background: (d.leverage ?? 1) >= 10 ? "rgba(239,68,68,0.05)" : (d.leverage ?? 1) >= 5 ? "rgba(245,158,11,0.05)" : "rgba(34,197,94,0.05)",
-            border: `1px solid ${(d.leverage ?? 1) >= 10 ? "rgba(239,68,68,0.15)" : (d.leverage ?? 1) >= 5 ? "rgba(245,158,11,0.15)" : "rgba(34,197,94,0.15)"}`,
-          }}>
-          <span className="text-[9px] leading-relaxed" style={{ color: (d.leverage ?? 1) >= 10 ? "#ef4444" : (d.leverage ?? 1) >= 5 ? "#f59e0b" : "#22c55e" }}>
-            {(d.leverage ?? 1) === 1
-              ? "No leverage — safest mode, spot-equivalent sizing"
-              : (d.leverage ?? 1) <= 3
-              ? `${d.leverage}× — low risk · liquidation price far from entry`
-              : (d.leverage ?? 1) <= 5
-              ? `${d.leverage}× — moderate risk · use strict SL`
-              : (d.leverage ?? 1) <= 10
-              ? `${d.leverage}× — high risk · tight SL mandatory · small size recommended`
-              : `${d.leverage}× — extreme risk · only for scalping with hard stops`}
-          </span>
-        </div>
-        {(d.mode === "paper") && (d.leverage ?? 1) > 1 && (
-          <div className="text-[9px] text-neutral-700 mt-1.5 text-center">
-            Paper mode — leverage applied to P&L calculation only
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* ── Make Changes button ─────────────────────────────────────────── */}
       <div className="flex items-center gap-2 pt-1">
-        <button
-          onClick={handleSave}
-          disabled={saving || !dirty}
+        <button onClick={handleSave} disabled={saving || !dirty}
           className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all"
           style={dirty && !saving
             ? { background: "rgba(10,132,255,0.18)", border: "1px solid rgba(10,132,255,0.4)", color: "#60aaff" }
             : saved
             ? { background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }
-            : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "#3d3d58", cursor: "not-allowed" }
-          }>
-          {saving
-            ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
-            : saved
-            ? <><CheckCircle2 size={12} /> Applied to server</>
-            : <><Save size={12} /> Make Changes</>
-          }
+            : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "#3d3d58", cursor: "not-allowed" }}>
+          {saving ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
+            : saved ? <><CheckCircle2 size={12} /> Applied to server</>
+            : <><Save size={12} /> Make Changes</>}
         </button>
         {dirty && (
           <button onClick={handleReset}

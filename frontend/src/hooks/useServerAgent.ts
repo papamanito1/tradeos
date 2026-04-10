@@ -52,14 +52,23 @@ export interface ServerStats {
   worst_trade:  number;
 }
 
-export interface ServerAgentConfig {
+export interface StrategyOverride {
   enabled:        boolean;
   size_usdc:      number;
+  leverage:       number;
   min_confidence: number;
   min_conditions: number;
-  mode:           string;
-  auto_execute:   boolean;
-  leverage:       number;
+}
+
+export interface ServerAgentConfig {
+  enabled:             boolean;
+  size_usdc:           number;
+  min_confidence:      number;
+  min_conditions:      number;
+  mode:                string;
+  auto_execute:        boolean;
+  leverage:            number;
+  strategy_overrides?: Record<string, StrategyOverride>;
 }
 
 export interface GridStateData {

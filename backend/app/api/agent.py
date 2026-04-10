@@ -45,20 +45,34 @@ async def stop_agent():
     return {"ok": True, "message": "Agent stopped"}
 
 
-class ConfigPatch(BaseModel):
+class StrategyOverride(BaseModel):
     enabled:        Optional[bool]  = None
     size_usdc:      Optional[float] = None
+    leverage:       Optional[int]   = None
     min_confidence: Optional[float] = None
     min_conditions: Optional[int]   = None
-    mode:           Optional[str]   = None
-    auto_execute:   Optional[bool]  = None
-    leverage:       Optional[int]   = None
+
+class ConfigPatch(BaseModel):
+    enabled:             Optional[bool]  = None
+    size_usdc:           Optional[float] = None
+    min_confidence:      Optional[float] = None
+    min_conditions:      Optional[int]   = None
+    mode:                Optional[str]   = None
+    auto_execute:        Optional[bool]  = None
+    leverage:            Optional[int]   = None
+    strategy_overrides:  Optional[dict[str, StrategyOverride]] = None
 
 
 @router.post("/config")
 async def update_config(patch: ConfigPatch):
     agent = _get()
-    data  = {k: v for k, v in patch.model_dump().items() if v is not None}
+    data  = patch.model_dump(exclude_none=True)
+    # Convert StrategyOverride models to plain dicts for the agent
+    if "strategy_overrides" in data and data["strategy_overrides"]:
+        data["strategy_overrides"] = {
+            k: {fk: fv for fk, fv in v.items() if fv is not None}
+            for k, v in data["strategy_overrides"].items()
+        }
     agent.update_config(data)
     return {"ok": True, "config": agent.config}
 
