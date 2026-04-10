@@ -19,6 +19,7 @@ import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngin
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
 import { useHFTScalper, type HFTResult } from "@/hooks/useHFTScalper";
 import { useOBIScalper, type OBIResult } from "@/hooks/useOBIScalper";
+import { useGridStrategy } from "@/hooks/useGridStrategy";
 import { useServerAgent } from "@/hooks/useServerAgent";
 import { useMasterAgent, type MasterSignal, type ConvictionGrade, type ChatMessage } from "@/hooks/useMasterAgent";
 
@@ -1740,8 +1741,14 @@ export default function OverviewPage() {
   // Server agent — 24/7 backend positions, trades, stats
   const serverAgent = useServerAgent();
 
+  const gridResult      = useGridStrategy(
+    candles1m,
+    btcTicker?.last ?? (candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0),
+    serverAgent.gridState,
+  );
+
   const masterAgent = useMasterAgent(
-    strategyResult, orbResult, hftResult, obiResult,
+    strategyResult, orbResult, hftResult, obiResult, gridResult,
     chartCandles, candles1m,
     btcTicker, btcOrderBook,
     serverAgent.status,

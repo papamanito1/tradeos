@@ -16,7 +16,7 @@
  *                                   trades, logs, and all strategy conditions
  *
  *  Conviction grades (4-strategy model):
- *   A+ (85+)  → 4/4 consensus or 3/4 + strong signals  → Full size
+ *   A+ (85+)  → 5/5 consensus or 4/5 + strong signals  → Full size
  *   A  (70+)  → 3/4 consensus, conditions mostly met    → 75% size
  *   B  (55+)  → 2/4 consensus, good signal quality      → 50% size
  *   C  (40+)  → 2/4 weak or diverging                  → 25% size
@@ -28,6 +28,7 @@ import { StrategyResult } from "./useStrategyEngine";
 import { ORBResult } from "./useORBStrategy";
 import { HFTResult } from "./useHFTScalper";
 import { OBIResult } from "./useOBIScalper";
+import { GridResult } from "./useGridStrategy";
 import { BinanceCandle, BinanceTicker, BinanceOrderBook } from "./useBinanceStream";
 import { ServerStatus } from "./useServerAgent";
 
@@ -214,7 +215,7 @@ function buildThought(ctx: {
     const riskPct = ((Math.abs(signal.entry - signal.sl) / signal.entry) * 100).toFixed(2);
     const lines = [
       `${direction}  ·  ${pStr}  ·  SL $${signal.sl.toFixed(0)} (${riskPct}%)  ·  TP $${signal.tp.toFixed(0)}  ·  ${signal.rr}`,
-      `Grade ${g}  ·  ${conviction}/100  ·  ${aligned}/4 strategies aligned  ·  ${regime}`,
+      `Grade ${g}  ·  ${conviction}/100  ·  ${aligned}/5 strategies aligned  ·  ${regime}`,
     ];
     if (serverPos.length > 0)
       lines.push(`Server: ${serverPos.length} open position${serverPos.length > 1 ? "s" : ""}`);
@@ -227,7 +228,7 @@ function buildThought(ctx: {
     const signallingVotes = votes.filter(v => v.signal && v.bias === direction.toLowerCase());
     const parts = [
       `${direction} bias  ·  ${conviction}/100 (${g})  ·  ${aligned}/4 aligned  ·  BTC ${pStr}`,
-      `Need ${needed > 0 ? `+${needed} pts` : "signal trigger"}  ·  ${signallingVotes.length}/4 strategies signalling`,
+      `Need ${needed > 0 ? `+${needed} pts` : "signal trigger"}  ·  ${signallingVotes.length}/5 strategies signalling`,
     ];
     if (obi !== null) parts.push(`OBI ${obi >= 0 ? "+" : ""}${obi.toFixed(3)}  ·  RSI(15m) ${rsi15m?.toFixed(1) ?? "—"}  ·  ATR ${atrPct ? (atrPct * 100).toFixed(2) + "%" : "—"}`);
     return parts.join("\n");
@@ -273,7 +274,7 @@ function fmtSig(sig: MasterSignal, conv: number, g: ConvictionGrade, aligned: nu
   const rwdUsd   = Math.abs(sig.tp - sig.entry);
   const riskPct  = (riskUsd / sig.entry * 100).toFixed(2);
   return [
-    `${sig.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}  ·  Grade ${g}  ·  ${conv}/100  ·  ${aligned}/4 strategies`,
+    `${sig.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}  ·  Grade ${g}  ·  ${conv}/100  ·  ${aligned}/5 strategies`,
     `Entry  $${sig.entry.toFixed(0)}`,
     `SL     $${sig.sl.toFixed(0)}  (−${riskPct}% / −$${riskUsd.toFixed(0)})`,
     `TP     $${sig.tp.toFixed(0)}  (+$${rwdUsd.toFixed(0)})`,
@@ -406,9 +407,9 @@ function generateResponse(userMsg: string, ctx: ResponseCtx): string {
     const sizePct = sig?.size_pct ?? calcSizePct(conv, aligned);
     return [
       `Position sizing (fractional Kelly, 4-strategy blend)`,
-      `Conviction: ${conv}/100 (${g})  ·  ${aligned}/4 strategies aligned`,
+      `Conviction: ${conv}/100 (${g})  ·  ${aligned}/5 strategies aligned`,
       `Recommended size: ${sizePct}% of account`,
-      `Logic: ${g === "A+" ? "Full Kelly — maximum edge, 4-way confluence" : g === "A" ? "75% Kelly — strong edge, 3-way confluence" : g === "B" ? "50% Kelly — moderate edge, 2-way consensus" : "25% Kelly or less — edge insufficient for large size"}`,
+      `Logic: ${g === "A+" ? "Full Kelly — maximum edge, 5-way confluence" : g === "A" ? "75% Kelly — strong edge, 4-way confluence" : g === "B" ? "50% Kelly — moderate edge, 3-way consensus" : "25% Kelly or less — edge insufficient for large size"}`,
       conv < 55 ? `Not yet trading — need ${55 - conv} more conviction pts` : `✓ Trade criteria met`,
     ].join("\n");
   }
@@ -447,7 +448,7 @@ function generateResponse(userMsg: string, ctx: ResponseCtx): string {
   );
   return [
     `NO SIGNAL  ·  BTC ${pStr}  ·  Conviction ${conv}/100 (${g})`,
-    `Need +${needed} pts to trigger. ${aligned}/4 strategies aligned (${dir}).`,
+    `Need +${needed} pts to trigger. ${aligned}/5 strategies aligned (${dir}).`,
     `Strategy votes:`,
     ...voteLines,
     ctx.atrPct ? `ATR: ${(ctx.atrPct * 100).toFixed(2)}%  ·  Regime: ${regime}` : `Regime: ${regime}`,
@@ -460,6 +461,7 @@ export function useMasterAgent(
   orbResult:      ORBResult,
   hftResult:      HFTResult,
   obiResult:      OBIResult,
+  gridResult:     GridResult,
   candles15m:     BinanceCandle[],
   candles1m:      BinanceCandle[],
   ticker:         BinanceTicker | null,
@@ -539,9 +541,18 @@ export function useMasterAgent(
         timeframe: "1m",
         reasoning: obiResult.signal?.reasoning,
       },
+      {
+        name: "Grid $50",
+        bias: gridResult.bias === "stopped" || gridResult.bias === "paused" ? "neutral" : gridResult.bias,
+        signal: !!gridResult.signal,
+        conf: gridResult.signal?.confidence ?? (gridResult.metCount / (gridResult.total ?? 5)) * 0.60,
+        met_pct: gridResult.metCount / (gridResult.total ?? 5),
+        timeframe: "continuous",
+        reasoning: gridResult.signal?.reasoning,
+      },
     ];
 
-    // Consensus direction — need ≥2/4 strategies aligned
+    // Consensus direction — need ≥2/5 strategies aligned
     const longCount  = votes.filter(v => v.bias === "long").length;
     const shortCount = votes.filter(v => v.bias === "short").length;
     let direction: AgentDirection = "FLAT";
@@ -565,6 +576,7 @@ export function useMasterAgent(
         orbResult.signal?.direction === dir       ? orbResult.signal      : null,
         hftResult.signal?.direction === dir       ? { ...hftResult.signal, sl: hftResult.signal.sl, tp: hftResult.signal.tp1 } : null,
         obiResult.signal?.direction === dir       ? obiResult.signal      : null,
+        gridResult.signal?.direction === dir      ? gridResult.signal     : null,
       ].filter(Boolean) as Array<{ direction: string; entry: number; sl: number; tp: number; confidence: number; reasoning?: string }>;
 
       // Best signal = highest confidence among aligned ones
@@ -597,7 +609,7 @@ export function useMasterAgent(
         sl:    Math.round(sl * 100) / 100,
         tp:    Math.round(tp * 100) / 100,
         rr, size_pct: sizePct, conviction, grade: g,
-        reasoning: `${consensusCount}/4 strategies aligned (${signallingNames || direction}) · regime: ${regime}`,
+        reasoning: `${consensusCount}/5 strategies aligned (${signallingNames || direction}) · regime: ${regime}`,
         timestamp: new Date().toISOString(),
       };
     }

@@ -61,6 +61,14 @@ export interface ServerAgentConfig {
   auto_execute:   boolean;
 }
 
+export interface GridStateData {
+  center?:       number;
+  last_price?:   number;
+  daily_pnl?:    number;
+  daily_trades?: number;
+  last_reset?:   string;
+}
+
 export interface ServerStatus {
   running:         boolean;
   config:          ServerAgentConfig;
@@ -71,6 +79,8 @@ export interface ServerStatus {
   trades:          ServerTrade[];
   stats:           ServerStats;
   log:             string[];
+  grid_state?:     GridStateData;
+  grid_positions?: ServerPosition[];
 }
 
 async function apiFetch(path: string, opts?: RequestInit) {
@@ -155,14 +165,16 @@ export function useServerAgent() {
     startAgent, stopAgent,
     updateConfig, resetAccount, closePosition, forceScan,
     // Convenience shortcuts
-    running:        status?.running        ?? false,
-    config:         status?.config         ?? null,
-    openPositions:  status?.open_positions ?? [],
-    trades:         status?.trades         ?? [],
-    stats:          status?.stats          ?? null,
-    log:            status?.log            ?? [],
-    scanCount:      status?.scan_count     ?? 0,
-    lastScan:       status?.last_scan      ?? null,
-    livePrice:      status?.live_price     ?? 0,
+    running:        status?.running         ?? false,
+    config:         status?.config          ?? null,
+    openPositions:  status?.open_positions  ?? [],
+    trades:         status?.trades          ?? [],
+    stats:          status?.stats           ?? null,
+    log:            status?.log             ?? [],
+    scanCount:      status?.scan_count      ?? 0,
+    lastScan:       status?.last_scan       ?? null,
+    livePrice:      status?.live_price      ?? 0,
+    gridState:      status?.grid_state      ?? null,
+    gridPositions:  status?.grid_positions  ?? [],
   };
 }

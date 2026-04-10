@@ -447,6 +447,122 @@ def _run_orb(candles1m: list[dict]) -> dict:
     return {"bias": bias, "signal": signal, "met_count": long_met if bias == "long" else short_met, "total": 4, "name": "ORB-30"}
 
 
+GRID_SIZE = 50.0  # $50 arithmetic grid
+
+
+def _run_grid(candles1m: list, live_price: float, grid_state: dict) -> dict:
+    """
+    $50 BTC Arithmetic Grid Strategy.
+    Buys on every $50 price drop, sells (via TP) on every $50 rise.
+    Returns the next actionable signal if a new grid level was crossed downward.
+    grid_state is mutated in-place so state persists between scans.
+    """
+    name = "Grid $50"
+    null = {"signal": None, "met_count": 0, "total": 5, "bias": "neutral", "name": name,
+            "grid_center": 0, "grid_min": 0, "grid_max": 0,
+            "current_level": 0, "daily_pnl": 0.0, "daily_trades": 0}
+
+    if live_price <= 0:
+        return null
+
+    MAX_LEVELS      = 20    # 20 levels each side → $1,000 range each way
+    MAX_CONCURRENT  = 5     # max open grid positions at once
+    DAILY_LOSS_LIM  = -300  # stop for the day if down more than $300
+    DAILY_PROF_LIM  = 1000  # pause if up more than $1,000 today
+
+    # ── Initialise grid centre on first call ──────────────────────────────────
+    if not grid_state.get("center"):
+        center = round(live_price / GRID_SIZE) * GRID_SIZE
+        grid_state.update({
+            "center":        center,
+            "last_price":    live_price,
+            "daily_pnl":     0.0,
+            "daily_trades":  0,
+            "last_reset":    datetime.now(timezone.utc).isoformat(),
+        })
+
+    center      = grid_state["center"]
+    last_price  = grid_state.get("last_price", live_price)
+    daily_pnl   = grid_state.get("daily_pnl",  0.0)
+    daily_trades= grid_state.get("daily_trades", 0)
+
+    grid_min = center - MAX_LEVELS * GRID_SIZE   # e.g. 72000 - 1000 = 71000
+    grid_max = center + MAX_LEVELS * GRID_SIZE   # e.g. 72000 + 1000 = 73000
+
+    # Reset daily state at UTC midnight
+    last_reset = grid_state.get("last_reset", "")
+    today_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if last_reset[:10] != today_str:
+        grid_state["daily_pnl"]    = 0.0
+        grid_state["daily_trades"] = 0
+        grid_state["last_reset"]   = datetime.now(timezone.utc).isoformat()
+        daily_pnl    = 0.0
+        daily_trades = 0
+
+    # ── Conditions ────────────────────────────────────────────────────────────
+    in_range  = grid_min <= live_price <= grid_max
+    pnl_ok    = DAILY_LOSS_LIM < daily_pnl < DAILY_PROF_LIM
+    has_data  = len(candles1m) >= 5
+
+    # Detect $50 level crossing (downward → BUY trigger)
+    cur_floor  = math.floor(live_price  / GRID_SIZE) * GRID_SIZE
+    last_floor = math.floor(last_price  / GRID_SIZE) * GRID_SIZE
+    crossed_down = cur_floor < last_floor   # dropped into a new lower $50 bucket
+
+    # Volume sanity check
+    vol_ok = False
+    if has_data:
+        vols = [c["volume"] for c in candles1m[-5:]]
+        vol_ok = sum(vols) > 0
+
+    conditions = {
+        "in_range":     in_range,
+        "pnl_ok":       pnl_ok,
+        "crossed_down": crossed_down,
+        "has_data":     has_data,
+        "volume":       vol_ok,
+    }
+    met = sum(conditions.values())
+
+    # Always update last_price for next scan
+    grid_state["last_price"] = live_price
+
+    bias    = "long" if in_range and pnl_ok else ("stopped" if not in_range else "paused")
+    signal  = None
+
+    if in_range and pnl_ok and crossed_down and has_data:
+        entry  = live_price                        # market entry at crossing price
+        tp     = cur_floor + GRID_SIZE             # collect profit $50 higher
+        sl     = cur_floor - GRID_SIZE             # stop 1 grid below (−$50)
+        # Confidence: higher when price is deep inside the range and vol is good
+        depth  = (live_price - grid_min) / (grid_max - grid_min)  # 0..1
+        conf   = round(max(0.60, min(0.78 + (vol_ok * 0.05) - abs(depth - 0.5) * 0.1, 0.85)), 3)
+        signal = {
+            "direction":  "long",
+            "entry":      round(entry, 2),
+            "tp":         round(tp,    2),
+            "sl":         round(sl,    2),
+            "confidence": conf,
+            "rr":         "1:1.0",   # $50 profit / $50 risk per level
+            "reasoning":  (f"Grid $50: price crossed ${cur_floor:,.0f}→${cur_floor+GRID_SIZE:,.0f} "
+                           f"· center ${center:,.0f} · {MAX_CONCURRENT} slots"),
+        }
+
+    return {
+        "signal":        signal,
+        "met_count":     met,
+        "total":         5,
+        "bias":          bias,
+        "name":          name,
+        "grid_center":   center,
+        "grid_min":      grid_min,
+        "grid_max":      grid_max,
+        "current_level": int(cur_floor),
+        "daily_pnl":     round(daily_pnl, 2),
+        "daily_trades":  daily_trades,
+    }
+
+
 # ── Persistent Agent ──────────────────────────────────────────────────────────
 
 class PersistentAgent:
@@ -460,12 +576,13 @@ class PersistentAgent:
     def __init__(self):
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self.config: dict    = {}
-        self.positions: dict = {}   # key → PaperPosition | None
-        self.trades: list    = []   # closed/confirmed trades
-        self.stats:  dict    = {}
-        self.log:    list    = []   # last 200 lines
-        self.scan_count      = 0
+        self.config: dict      = {}
+        self.positions: dict   = {}   # key → PaperPosition | None
+        self.trades: list      = []   # closed/confirmed trades
+        self.stats:  dict      = {}
+        self.log:    list      = []   # last 200 lines
+        self.grid_state: dict  = {}   # Grid $50 strategy persistent state
+        self.scan_count        = 0
         self.last_scan: Optional[str] = None
         self._load_state()
 
@@ -473,20 +590,22 @@ class PersistentAgent:
 
     def _state_dict(self) -> dict:
         return {
-            "config":    self.config,
-            "positions": self.positions,
-            "trades":    self.trades[-200:],
-            "stats":     self.stats,
-            "log":       self.log[-100:],
-            "saved_at":  datetime.now(timezone.utc).isoformat(),
+            "config":     self.config,
+            "positions":  self.positions,
+            "trades":     self.trades[-200:],
+            "stats":      self.stats,
+            "log":        self.log[-100:],
+            "grid_state": self.grid_state,
+            "saved_at":   datetime.now(timezone.utc).isoformat(),
         }
 
     def _apply_state(self, data: dict) -> None:
-        self.config    = data.get("config",    DEFAULT_CONFIG.copy())
-        self.positions = data.get("positions", {})
-        self.trades    = data.get("trades",    [])[-200:]
-        self.stats     = data.get("stats",     self._empty_stats())
-        self.log       = data.get("log",       [])[-100:]
+        self.config     = data.get("config",     DEFAULT_CONFIG.copy())
+        self.positions  = data.get("positions",  {})
+        self.trades     = data.get("trades",     [])[-200:]
+        self.stats      = data.get("stats",      self._empty_stats())
+        self.log        = data.get("log",        [])[-100:]
+        self.grid_state = data.get("grid_state", {})
 
     # ── File fallback (local dev / fast cache) ────────────────────────────────
 
@@ -740,6 +859,42 @@ class PersistentAgent:
                 if self.scan_count % 5 == 0:
                     self._log(f"[{name}] {met}/{total} conds · no signal · {bias}")
 
+        # ── Grid $50 strategy (multi-position) ───────────────────────────────
+        MAX_GRID_POSITIONS = 5
+        grid_result = _run_grid(candles1m, live_price, self.grid_state)
+        grid_sig    = grid_result.get("signal")
+        grid_met    = grid_result.get("met_count", 0)
+        grid_bias   = grid_result.get("bias", "neutral")
+        cur_level   = grid_result.get("current_level", 0)
+        grid_level_key = f"grid_{cur_level}"
+
+        # Count how many grid positions are currently open
+        open_grid_count = sum(1 for k, v in self.positions.items() if k.startswith("grid_") and v)
+
+        if grid_sig:
+            conf    = grid_sig.get("confidence", 0)
+            conf_ok = conf >= cfg.get("min_confidence", 0.50)
+            cond_ok = grid_met >= 3  # grid needs 3/5 conditions
+            already_open = self.positions.get(grid_level_key)
+            slot_ok = open_grid_count < MAX_GRID_POSITIONS
+
+            block = ("POS@LEVEL" if already_open else
+                     "MAX_SLOTS" if not slot_ok else
+                     "conf_fail" if not conf_ok else
+                     "cond_fail" if not cond_ok else "")
+
+            self._log(f"[Grid $50] SIGNAL LONG · {grid_met}/5 conds · conf {conf*100:.0f}% "
+                      f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS} · {block or 'EXECUTING'}")
+
+            if cond_ok and conf_ok and not already_open and slot_ok and cfg.get("auto_execute", True):
+                self._open_position(grid_level_key, "Grid $50", grid_sig, cfg, live_price)
+                any_signal = True
+        elif self.scan_count % 5 == 0:
+            self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
+                      f"center ${grid_result.get('grid_center', 0):,} · "
+                      f"range ${grid_result.get('grid_min', 0):,}–${grid_result.get('grid_max', 0):,} · "
+                      f"slots {open_grid_count}/{MAX_GRID_POSITIONS}")
+
         self._save_state()           # fast file cache
         await self._save_state_db()  # durable DB persist
 
@@ -772,7 +927,12 @@ class PersistentAgent:
         self._log(f"★ [{name}] OPENED {sig['direction'].upper()} @ ${entry:.0f} · SL ${sig['sl']:.0f} · TP ${sig['tp']:.0f} · conf {sig['confidence']*100:.0f}%")
 
     # Max hold time in minutes per strategy before auto-close at market
-    MAX_HOLD_MINUTES = {"momentum": 240, "hft": 45, "orb": 180, "obi": 15}
+    MAX_HOLD_MINUTES = {"momentum": 240, "hft": 45, "orb": 180, "obi": 15, "grid": 120}
+
+    def _max_hold_for_key(self, key: str) -> int:
+        if key.startswith("grid_"):
+            return self.MAX_HOLD_MINUTES["grid"]
+        return self.MAX_HOLD_MINUTES.get(key, 120)
 
     def _update_positions(self, price: float) -> None:
         now_utc = datetime.now(timezone.utc)
@@ -793,7 +953,7 @@ class PersistentAgent:
             try:
                 opened_at = datetime.fromisoformat(pos["timestamp"].replace("Z", "+00:00"))
                 held_min  = (now_utc - opened_at).total_seconds() / 60
-                max_hold  = self.MAX_HOLD_MINUTES.get(key, 120)
+                max_hold  = self._max_hold_for_key(key)
                 timed_out = held_min > max_hold
             except Exception:
                 pass
@@ -850,12 +1010,13 @@ class PersistentAgent:
         return True
 
     def reset(self) -> None:
-        self.positions = {}
-        self.trades    = []
-        self.stats     = self._empty_stats()
-        self.log       = []
+        self.positions  = {}
+        self.trades     = []
+        self.stats      = self._empty_stats()
+        self.log        = []
+        self.grid_state = {}   # reset grid centre so it re-anchors on next scan
         self.scan_count = 0
-        self._log("Paper account reset — all positions cleared")
+        self._log("Paper account reset — all positions cleared + grid re-anchored")
         self._save_state()
         self._schedule_db_save()
 
@@ -874,6 +1035,7 @@ class PersistentAgent:
         from app.agents.live_market_stream import LIVE_PRICES
         price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0)
         open_positions = [p for p in self.positions.values() if p]
+        open_grid      = [p for k, p in self.positions.items() if k.startswith("grid_") and p]
         return {
             "running":        self._running,
             "config":         self.config,
@@ -884,6 +1046,8 @@ class PersistentAgent:
             "trades":         self.trades[:50],
             "stats":          self.stats,
             "log":            self.log[:100],
+            "grid_state":     self.grid_state,
+            "grid_positions": open_grid,
         }
 
 

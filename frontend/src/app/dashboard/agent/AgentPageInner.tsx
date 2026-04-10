@@ -15,6 +15,7 @@ import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
 import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
 import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
+import { useGridStrategy, GridResult } from "@/hooks/useGridStrategy";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { useServerAgent } from "@/hooks/useServerAgent";
 import { formatUSD } from "@/lib/utils";
@@ -421,11 +422,16 @@ function AgentContent() {
     onAggTrade:  useCallback((t: BinanceAggTrade) => pushTrade(t), [pushTrade]),
   });
 
-  // ── All 4 strategy engines run in parallel always ─────────────────────
+  // ── All 5 strategy engines run in parallel always ─────────────────────
   const momentumResult = useStrategyEngine(candles15m);
   const hftResult      = useHFTScalper(candles1m, orderBook, aggSnap);
   const orbResult      = useORBStrategy(candles1m);
   const obiResult      = useOBIScalper(candles1m, orderBook);
+  const gridResult     = useGridStrategy(
+    candles1m,
+    candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0,
+    server.gridState,
+  );
 
   // ── Strategy slots for the multi-agent hook ──────────────────────────
   const strategies = useMemo(() => [
@@ -998,6 +1004,107 @@ function AgentContent() {
                 ].map(([l, v, cls]) => (
                   <div key={l} className="flex-1 text-center">
                     <div className="text-[8px] text-neutral-700">{l}</div>
+                    <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Grid $50 Strategy panel */}
+          {(
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="text-cyan-400 flex-shrink-0">
+                  <rect x="0.5" y="0.5" width="12" height="12" rx="1.5" stroke="currentColor" strokeWidth="1"/>
+                  <line x1="0.5" y1="4.5"  x2="12.5" y2="4.5"  stroke="currentColor" strokeWidth="0.8"/>
+                  <line x1="0.5" y1="8.5"  x2="12.5" y2="8.5"  stroke="currentColor" strokeWidth="0.8"/>
+                  <line x1="4.5" y1="0.5"  x2="4.5"  y2="12.5" stroke="currentColor" strokeWidth="0.8"/>
+                  <line x1="8.5" y1="0.5"  x2="8.5"  y2="12.5" stroke="currentColor" strokeWidth="0.8"/>
+                </svg>
+                <span className="text-[13px] font-semibold text-white">Grid $50</span>
+                <span className="text-[9px] text-neutral-600 ml-1">Arithmetic Perp Grid</span>
+                {gridResult.signal ? (
+                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/25 text-cyan-400 ml-auto animate-pulse font-bold">
+                    ⚡ BUY LEVEL HIT
+                  </span>
+                ) : (
+                  <span className={`text-[8px] ml-auto ${gridResult.bias === "stopped" ? "text-red-500" : gridResult.bias === "paused" ? "text-yellow-500" : "text-neutral-600"}`}>
+                    {gridResult.bias === "stopped" ? "⛔ OUT OF RANGE" : gridResult.bias === "paused" ? "⏸ PAUSED" : "scanning every 20s"}
+                  </span>
+                )}
+              </div>
+
+              {/* Grid visualizer — mini ladder */}
+              <div className="mb-4 bg-neutral-900 rounded-xl p-3 border border-neutral-800">
+                <div className="flex justify-between text-[8px] text-neutral-600 mb-2">
+                  <span>Grid Centre <span className="text-cyan-400 font-mono">${gridResult.gridCenter.toLocaleString()}</span></span>
+                  <span>Range <span className="font-mono">${gridResult.gridMin.toLocaleString()}–${gridResult.gridMax.toLocaleString()}</span></span>
+                </div>
+                {/* Levels ladder (closest 7) */}
+                <div className="space-y-0.5">
+                  {gridResult.levels.slice(-7).reverse().map((lvl) => {
+                    const isCurrent = lvl.price === gridResult.currentLevel;
+                    const isAbove   = lvl.price > gridResult.currentPrice;
+                    return (
+                      <div key={lvl.price}
+                        className={`flex items-center gap-2 px-2 py-1 rounded text-[9px] font-mono transition-colors ${
+                          isCurrent ? "bg-cyan-500/20 border border-cyan-500/40 text-cyan-300" :
+                          isAbove   ? "bg-green-500/5  border border-green-500/10  text-green-500" :
+                                      "bg-neutral-800/60 border border-neutral-700/40 text-neutral-500"
+                        }`}>
+                        <span className="w-3">{isAbove ? "↑" : "↓"}</span>
+                        <span className="flex-1">${lvl.price.toLocaleString()}</span>
+                        <span className={`text-[8px] ${isAbove ? "text-green-600" : "text-neutral-600"}`}>
+                          {isAbove ? "SELL" : "BUY"}
+                        </span>
+                        {isCurrent && <span className="text-[8px] text-cyan-400 font-bold">← now</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between text-[8px] text-neutral-700 mt-2">
+                  <span>Next buy in <span className="text-cyan-400 font-mono">${gridResult.distToNextBuy.toFixed(0)}</span></span>
+                  <span>Next sell in <span className="text-green-400 font-mono">${gridResult.distToNextSell.toFixed(0)}</span></span>
+                </div>
+              </div>
+
+              {/* Stats row */}
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                {[
+                  ["Grid Size",  "$50",                         "text-cyan-400"],
+                  ["TP / SL",    "+$50 / −$50",                "text-white"],
+                  ["Max Slots",  "5 concurrent",               "text-violet-400"],
+                  ["Daily P&L",  `${gridResult.dailyPnl >= 0 ? "+" : ""}$${gridResult.dailyPnl.toFixed(0)}`, gridResult.dailyPnl >= 0 ? "text-green-400" : "text-red-400"],
+                ].map(([l, v, cls]) => (
+                  <div key={l} className="bg-neutral-900 rounded-lg p-2">
+                    <div className="text-[8px] text-neutral-600">{l}</div>
+                    <div className={`text-[10px] font-mono font-semibold ${cls}`}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Conditions checklist */}
+              <div className="space-y-1.5">
+                {gridResult.conditions.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    {c.met
+                      ? <CheckCircle2 size={10} className="text-cyan-400 flex-shrink-0" />
+                      : <XCircle     size={10} className="text-neutral-700 flex-shrink-0" />}
+                    <span className={`text-[9px] flex-1 ${c.met ? "text-neutral-300" : "text-neutral-600"}`}>{c.label}</span>
+                    <span className={`text-[9px] font-mono ${c.met ? "text-cyan-400" : "text-neutral-700"}`}>{c.value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Strategy spec footer */}
+              <div className="flex gap-3 mt-3 pt-3 border-t border-neutral-800">
+                {[["Spacing", "$50", "text-cyan-400"], ["Leverage", "3–5×", "text-white"],
+                  ["R:R", "1:1", "text-neutral-300"], ["Timeframe", "continuous", "text-blue-400"],
+                  ["Max Hold", "2 hr", "text-neutral-400"], ["Bias", "Long", "text-green-400"],
+                ].map(([l, v, cls]) => (
+                  <div key={l} className="flex-1 text-center">
+                    <div className="text-[7px] text-neutral-700">{l}</div>
                     <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
                   </div>
                 ))}
