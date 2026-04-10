@@ -31,6 +31,7 @@ export interface ServerPosition {
   unrealized_pct: number;
   btc_size:       number;
   is_paper:       boolean;
+  leverage?:      number;
 }
 
 export interface ServerTrade extends ServerPosition {
