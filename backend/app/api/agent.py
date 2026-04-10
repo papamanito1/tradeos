@@ -52,6 +52,7 @@ class ConfigPatch(BaseModel):
     min_conditions: Optional[int]   = None
     mode:           Optional[str]   = None
     auto_execute:   Optional[bool]  = None
+    leverage:       Optional[int]   = None
 
 
 @router.post("/config")

@@ -597,6 +597,55 @@ function ConfigPanel({
         </div>
       )}
 
+      {/* Leverage */}
+      <div>
+        <div className="flex justify-between mb-2">
+          <label className="text-[10px] text-neutral-600">Leverage</label>
+          <span className="text-[10px] font-mono font-bold text-orange-400">{d.leverage ?? 1}×</span>
+        </div>
+        <div className="grid grid-cols-6 gap-1.5 mb-2">
+          {[1, 2, 3, 5, 10, 20].map(lev => (
+            <button
+              key={lev}
+              onClick={() => set("leverage", lev)}
+              className="py-2 rounded-xl text-[11px] font-bold border transition-all"
+              style={(d.leverage ?? 1) === lev
+                ? lev >= 10
+                  ? { background: "rgba(239,68,68,0.15)", borderColor: "rgba(239,68,68,0.4)", color: "#ef4444" }
+                  : lev >= 5
+                  ? { background: "rgba(245,158,11,0.15)", borderColor: "rgba(245,158,11,0.4)", color: "#f59e0b" }
+                  : { background: "rgba(34,197,94,0.12)", borderColor: "rgba(34,197,94,0.3)", color: "#22c55e" }
+                : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+              }
+            >
+              {lev}×
+            </button>
+          ))}
+        </div>
+        <div className="flex items-start gap-2 p-2.5 rounded-lg"
+          style={{
+            background: (d.leverage ?? 1) >= 10 ? "rgba(239,68,68,0.05)" : (d.leverage ?? 1) >= 5 ? "rgba(245,158,11,0.05)" : "rgba(34,197,94,0.05)",
+            border: `1px solid ${(d.leverage ?? 1) >= 10 ? "rgba(239,68,68,0.15)" : (d.leverage ?? 1) >= 5 ? "rgba(245,158,11,0.15)" : "rgba(34,197,94,0.15)"}`,
+          }}>
+          <span className="text-[9px] leading-relaxed" style={{ color: (d.leverage ?? 1) >= 10 ? "#ef4444" : (d.leverage ?? 1) >= 5 ? "#f59e0b" : "#22c55e" }}>
+            {(d.leverage ?? 1) === 1
+              ? "No leverage — safest mode, spot-equivalent sizing"
+              : (d.leverage ?? 1) <= 3
+              ? `${d.leverage}× — low risk · liquidation price far from entry`
+              : (d.leverage ?? 1) <= 5
+              ? `${d.leverage}× — moderate risk · use strict SL`
+              : (d.leverage ?? 1) <= 10
+              ? `${d.leverage}× — high risk · tight SL mandatory · small size recommended`
+              : `${d.leverage}× — extreme risk · only for scalping with hard stops`}
+          </span>
+        </div>
+        {(d.mode === "paper") && (d.leverage ?? 1) > 1 && (
+          <div className="text-[9px] text-neutral-700 mt-1.5 text-center">
+            Paper mode — leverage applied to P&L calculation only
+          </div>
+        )}
+      </div>
+
       {/* ── Make Changes button ─────────────────────────────────────────── */}
       <div className="flex items-center gap-2 pt-1">
         <button

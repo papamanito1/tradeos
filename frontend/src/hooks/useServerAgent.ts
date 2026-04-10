@@ -59,6 +59,7 @@ export interface ServerAgentConfig {
   min_conditions: number;
   mode:           string;
   auto_execute:   boolean;
+  leverage:       number;
 }
 
 export interface GridStateData {

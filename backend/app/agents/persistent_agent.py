@@ -37,6 +37,7 @@ DEFAULT_CONFIG = {
     "min_conditions": 2,
     "mode":           "paper",
     "auto_execute":   True,
+    "leverage":       1,
 }
 
 STRATEGY_KEYS = ["momentum", "hft", "orb", "obi"]
@@ -600,7 +601,8 @@ class PersistentAgent:
         }
 
     def _apply_state(self, data: dict) -> None:
-        self.config     = data.get("config",     DEFAULT_CONFIG.copy())
+        loaded_cfg      = data.get("config", {})
+        self.config     = {**DEFAULT_CONFIG.copy(), **loaded_cfg}   # merge so new keys always exist
         self.positions  = data.get("positions",  {})
         self.trades     = data.get("trades",     [])[-500:]   # keep up to 500 trades in memory
         self.log        = data.get("log",        [])[-100:]
@@ -925,7 +927,8 @@ class PersistentAgent:
 
     def _open_position(self, key: str, name: str, sig: dict, cfg: dict, price: float) -> None:
         entry    = sig["entry"] if sig["entry"] > 0 else price
-        btc_size = cfg["size_usdc"] / entry if entry > 0 else 0
+        leverage = max(1, int(cfg.get("leverage", 1)))
+        btc_size = (cfg["size_usdc"] * leverage) / entry if entry > 0 else 0
 
         pos = {
             "id":             f"{key}-{int(time.time()*1000)}",
@@ -936,6 +939,7 @@ class PersistentAgent:
             "sl":             sig["sl"],
             "tp":             sig["tp"],
             "size_usdc":      cfg["size_usdc"],
+            "leverage":       leverage,
             "confidence":     sig["confidence"],
             "reasoning":      sig.get("reasoning", ""),
             "rr":             sig.get("rr", "1:2"),
@@ -947,7 +951,8 @@ class PersistentAgent:
             "is_paper":       cfg.get("mode", "paper") == "paper",
         }
         self.positions[key] = pos
-        self._log(f"★ [{name}] OPENED {sig['direction'].upper()} @ ${entry:.0f} · SL ${sig['sl']:.0f} · TP ${sig['tp']:.0f} · conf {sig['confidence']*100:.0f}%")
+        lev_str = f" · {leverage}×" if leverage > 1 else ""
+        self._log(f"★ [{name}] OPENED {sig['direction'].upper()} @ ${entry:.0f} · SL ${sig['sl']:.0f} · TP ${sig['tp']:.0f} · conf {sig['confidence']*100:.0f}%{lev_str}")
 
     # Max hold time in minutes per strategy before auto-close at market
     MAX_HOLD_MINUTES = {"momentum": 240, "hft": 45, "orb": 180, "obi": 15, "grid": 120}
