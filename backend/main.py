@@ -157,9 +157,12 @@ async def shutdown():
 
 @app.get("/health")
 async def health():
+    import os
     return {
         "status": "ok",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "mode": settings.trading_mode,
         "bingx_configured": bool(settings.bingx_api_key),
+        "bingx_key_env": bool(os.environ.get("BINGX_API_KEY")),
+        "bingx_secret_env": bool(os.environ.get("BINGX_API_SECRET")),
     }
