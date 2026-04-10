@@ -1,25 +1,29 @@
 "use client";
 
 /**
- * useMasterAgent — 4-Strategy Confluence Brain v2
- * ─────────────────────────────────────────────────
- * Aggregates ALL 4 live strategy signals + server-side agent data.
- * Models a senior hedge fund analyst with full market context access:
+ * useMasterAgent — 5-Strategy Self-Learning Brain v3
+ * ────────────────────────────────────────────────────
+ * Aggregates ALL 5 live strategy signals + server-side agent data.
+ * Self-improves each session by reading its own trade history.
  *
- *  Layer 1 — Strategy Consensus   : 5 strategies vote (need ≥2/5 aligned)
- *  Layer 2 — Conviction Scoring   : Weighted 0-100, 4-strategy Kelly sizing
- *  Layer 3 — Market Regime        : Trending / Ranging / Volatile / Unknown
- *  Layer 4 — Kelly Position Size  : Fractional Kelly scaled by conviction
- *  Layer 5 — Risk Protocol        : Multi-timeframe gates, ATR volatility filter
- *  Layer 6 — Commentary Engine    : Bloomberg-style live narrative, 30s rotation
- *  Layer 7 — Site Intelligence    : Full access to server agent P&L, positions,
- *                                   trades, logs, and all strategy conditions
+ *  Layer 1 — Strategy Consensus       : 5 strategies vote (need ≥2/5 aligned)
+ *  Layer 2 — Adaptive Strategy Weights: Per-strategy trust scores from live win rate,
+ *                                        loss cooldown (45 min penalty after SL),
+ *                                        streak detection (hot/cold adjustment)
+ *  Layer 3 — Regime↔Strategy Matching : Each strategy has an optimal market regime;
+ *                                        boost or penalize based on current regime
+ *  Layer 4 — Time-of-Day Intelligence : Session-aware conviction scaling
+ *                                        (NY-London overlap = peak, Asia off-peak = reduced)
+ *  Layer 5 — Confluence Quality Score : Conviction = f(weight, win rate, regime fit)
+ *  Layer 6 — Fractional Kelly Sizing  : Dynamic position size from conviction + streak
+ *  Layer 7 — Smart Chat Memory        : Answers live questions about per-strategy perf,
+ *                                        session timing, streaks, trust scores, P&L
  *
- *  Conviction grades (4-strategy model):
- *   A+ (85+)  → 5/5 consensus or 4/5 + strong signals  → Full size
- *   A  (70+)  → 3/4 consensus, conditions mostly met    → 75% size
- *   B  (55+)  → 2/4 consensus, good signal quality      → 50% size
- *   C  (40+)  → 2/4 weak or diverging                  → 25% size
+ *  Conviction grades (5-strategy model):
+ *   A+ (85+)  → 5/5 consensus or 4/5 weighted strongly → Full size
+ *   A  (70+)  → 3/5 aligned, high trust strategies      → 75% size
+ *   B  (55+)  → 2/5 aligned, regime fits                → 50% size
+ *   C  (40+)  → 2/5 weak or off-regime                  → 25% size
  *   X  (<40)  → No trade — wait for confluence
  */
 
@@ -45,13 +49,32 @@ export interface ChatMessage {
   type?:     "auto" | "response" | "system";
 }
 
+export interface StrategyPerfData {
+  winRate:       number;    // 0–1, from trade history
+  streak:        number;    // +N = win streak, -N = loss streak
+  totalTrades:   number;
+  totalPnl:      number;
+  msSinceLastSL: number;    // Infinity if no SL yet this session
+  trustScore:    number;    // 0.3–2.0, adaptive weight
+  label:         "HOT" | "COLD" | "NORMAL";
+  regimeFit:     number;    // 0.7–1.5 based on current regime
+}
+
+export interface SessionInfo {
+  label:      string;   // "NY-London Overlap (peak)" etc.
+  multiplier: number;   // 0.75–1.15 applied to conviction
+  hour:       number;   // UTC hour
+  peak:       boolean;  // true during high-liquidity windows
+}
+
 export interface StrategyVote {
-  name:     string;
-  bias:     "long" | "short" | "neutral";
-  signal:   boolean;
-  conf:     number;
-  met_pct:  number;
+  name:      string;
+  bias:      "long" | "short" | "neutral";
+  signal:    boolean;
+  conf:      number;
+  met_pct:   number;
   timeframe: string;
+  weight:    number;    // adaptive trust weight (new)
   reasoning?: string;
 }
 
@@ -78,6 +101,8 @@ export interface MasterState {
   regime:           MarketRegime;
   thoughts:         string[];
   chat:             ChatMessage[];
+  strategyPerf:     Record<string, StrategyPerfData>;
+  sessionInfo:      SessionInfo;
   last_update:      string;
   // paper_position is always null — server agent handles all paper trading now.
   // Keep the full union type so legacy UI code (?.open etc.) still compiles.
@@ -131,6 +156,94 @@ function grade(conviction: number): ConvictionGrade {
   return "X";
 }
 
+// ─── Regime ↔ Strategy optimal-fit weights ────────────────────────────────────
+const REGIME_WEIGHTS: Record<string, Record<string, number>> = {
+  TRENDING:  { "Momentum 15m": 1.40, "ORB-30": 1.25, "HFT Scalper": 1.10, "OBI Scalper": 0.90, "Grid $50": 0.65 },
+  RANGING:   { "Momentum 15m": 0.70, "ORB-30": 0.80, "HFT Scalper": 1.10, "OBI Scalper": 1.30, "Grid $50": 1.50 },
+  VOLATILE:  { "Momentum 15m": 0.80, "ORB-30": 0.75, "HFT Scalper": 1.30, "OBI Scalper": 1.35, "Grid $50": 0.70 },
+  UNKNOWN:   { "Momentum 15m": 1.00, "ORB-30": 1.00, "HFT Scalper": 1.00, "OBI Scalper": 1.00, "Grid $50": 1.00 },
+};
+
+// ─── Session intelligence ─────────────────────────────────────────────────────
+function getSessionInfo(): SessionInfo {
+  const h = new Date().getUTCHours();
+  if (h >= 2  && h < 6)  return { label: "Asia Off-Peak — low liquidity, reduced sizing",  multiplier: 0.75, hour: h, peak: false };
+  if (h >= 6  && h < 9)  return { label: "Asia-London Overlap — building momentum",         multiplier: 0.90, hour: h, peak: false };
+  if (h >= 9  && h < 13) return { label: "London Session — institutional flow",              multiplier: 1.05, hour: h, peak: true  };
+  if (h >= 13 && h < 17) return { label: "NY-London Overlap — peak volatility & volume",    multiplier: 1.15, hour: h, peak: true  };
+  if (h >= 17 && h < 21) return { label: "NY Session — directional moves, good for trends", multiplier: 1.00, hour: h, peak: true  };
+  return                         { label: "US Close / Asia Open — mixed signals, caution",   multiplier: 0.95, hour: h, peak: false };
+}
+
+// ─── Per-strategy performance from trade history ──────────────────────────────
+function computeStrategyPerf(
+  trades: Array<{ strategy_key?: string; strategy_name?: string; exit_reason?: string; pnl_usd?: number; closed_at?: string }>,
+  regime: MarketRegime,
+): Record<string, StrategyPerfData> {
+  // Normalize key: "grid_84000" → "Grid $50", "momentum" → "Momentum 15m", etc.
+  const keyToName = (k: string, n?: string): string => {
+    if (k?.startsWith("grid_") || n === "Grid $50") return "Grid $50";
+    const map: Record<string, string> = {
+      momentum: "Momentum 15m", hft: "HFT Scalper", orb: "ORB-30", obi: "OBI Scalper"
+    };
+    return map[k?.toLowerCase()] ?? n ?? k;
+  };
+
+  const byStrategy: Record<string, typeof trades> = {};
+  for (const t of trades) {
+    const name = keyToName(t.strategy_key ?? "", t.strategy_name);
+    if (!byStrategy[name]) byStrategy[name] = [];
+    byStrategy[name].push(t);
+  }
+
+  const allNames = ["Momentum 15m", "HFT Scalper", "ORB-30", "OBI Scalper", "Grid $50"];
+  const result: Record<string, StrategyPerfData> = {};
+
+  for (const name of allNames) {
+    const stratTrades = (byStrategy[name] || []).sort((a, b) =>
+      new Date(b.closed_at ?? 0).getTime() - new Date(a.closed_at ?? 0).getTime()
+    );
+    const wins   = stratTrades.filter(t => t.exit_reason === "tp" || (t.pnl_usd ?? 0) > 0).length;
+    const losses = stratTrades.filter(t => t.exit_reason === "sl" || (t.pnl_usd ?? 0) < 0).length;
+    const total  = wins + losses;
+    const winRate = total >= 3 ? wins / total : 0.52; // need ≥3 trades for meaningful rate
+
+    // Streak: consecutive wins(+) or losses(-) from most recent trade
+    let streak = 0;
+    for (const t of stratTrades) {
+      const isWin = t.exit_reason === "tp" || (t.pnl_usd ?? 0) > 0;
+      if (streak === 0) { streak = isWin ? 1 : -1; }
+      else if (streak > 0 && isWin)  { streak++; }
+      else if (streak < 0 && !isWin) { streak--; }
+      else break;
+    }
+
+    // Time since last SL hit
+    const lastSL = stratTrades.find(t => t.exit_reason === "sl");
+    const msSinceLastSL = lastSL?.closed_at
+      ? Date.now() - new Date(lastSL.closed_at).getTime()
+      : Infinity;
+
+    const totalPnl = stratTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
+
+    // ── Composite trust score ──────────────────────────────────────────────
+    // Win-rate multiplier: 50% WR → 1.0×, 75% → 1.25×, 25% → 0.75×
+    const wrMult    = 0.5 + winRate;
+    // Loss cooldown: 45-min penalty after an SL
+    const cooldown  = msSinceLastSL < 45 * 60 * 1000 ? 0.70 : 1.0;
+    // Streak multiplier: +3 wins → 1.25×, -2 losses → 0.80×
+    const streakMult = streak >= 3 ? 1.25 : streak >= 2 ? 1.10 : streak <= -3 ? 0.70 : streak <= -2 ? 0.82 : 1.0;
+    // Regime fit
+    const regimeFit = (REGIME_WEIGHTS[regime] ?? REGIME_WEIGHTS.UNKNOWN)[name] ?? 1.0;
+
+    const trustScore = Math.max(0.30, Math.min(2.0, wrMult * cooldown * streakMult * regimeFit));
+    const label: StrategyPerfData["label"] = streak >= 2 ? "HOT" : streak <= -2 ? "COLD" : "NORMAL";
+
+    result[name] = { winRate, streak, totalTrades: total, totalPnl, msSinceLastSL, trustScore, label, regimeFit };
+  }
+  return result;
+}
+
 // ─── Market regime detector ───────────────────────────────────────────────────
 function detectRegime(candles: BinanceCandle[]): MarketRegime {
   if (candles.length < 30) return "UNKNOWN";
@@ -144,105 +257,136 @@ function detectRegime(candles: BinanceCandle[]): MarketRegime {
   return "UNKNOWN";
 }
 
-// ─── Conviction calculator (4-strategy model) ─────────────────────────────────
+// ─── Conviction calculator (adaptive weighted, session-aware) ─────────────────
 function calcConviction(
   votes:     StrategyVote[],
   direction: AgentDirection,
   atrPct:    number | null,
+  session:   SessionInfo,
 ): number {
   if (direction === "FLAT") return 0;
-  const dir = direction.toLowerCase();
+  const dir     = direction.toLowerCase();
   const aligned = votes.filter(v => v.bias === dir);
-  const n = aligned.length;
+  const n       = aligned.length;
   if (n === 0) return 0;
 
-  // Alignment multiplier: rewards strong consensus
-  const alignMult = n === 4 ? 2.0 : n === 3 ? 1.4 : n === 2 ? 1.0 : 0.5;
+  // Weighted alignment score — strategies with higher trust count more
+  const totalWeight   = aligned.reduce((s, v) => s + (v.weight ?? 1), 0);
+  const maxWeight     = votes.reduce((s, v) => s + (v.weight ?? 1), 0);
+  const weightedAlign = maxWeight > 0 ? totalWeight / maxWeight : 0; // 0–1
 
-  // Quality score: avg conditions met × avg signal confidence
-  const avgMet  = aligned.reduce((s, v) => s + v.met_pct, 0) / n;
+  // Raw count alignment multiplier
+  const alignMult = n >= 4 ? 2.0 : n === 3 ? 1.5 : n === 2 ? 1.0 : 0.5;
+
+  // Quality score weighted by trust
+  const avgMet  = aligned.reduce((s, v) => s + v.met_pct * (v.weight ?? 1), 0) / Math.max(totalWeight, 0.01);
   const signals = aligned.filter(v => v.signal);
   const avgConf = signals.length
-    ? signals.reduce((s, v) => s + v.conf, 0) / signals.length
+    ? signals.reduce((s, v) => s + v.conf * (v.weight ?? 1), 0) / signals.reduce((s, v) => s + (v.weight ?? 1), 0)
     : avgMet * 0.7;
 
-  // Signal bonus: extra weight when strategies actually fire signals
-  const signalBonus = signals.length / 4;
+  // Signal quality bonus
+  const signalBonus = signals.length / 5;
 
-  // Volatility discount: reduce size in high-vol environments
+  // Volatility discount
   const volDiscount = atrPct != null && atrPct > 0.018 ? 0.82 : 1.0;
 
-  const raw = 30 * alignMult * (0.35 + avgMet * 0.35 + avgConf * 0.30 + signalBonus * 0.15) * volDiscount;
+  // Session multiplier (time-of-day intelligence)
+  const sessionMult = session.multiplier;
+
+  const raw = 30 * alignMult * weightedAlign
+    * (0.35 + avgMet * 0.30 + avgConf * 0.25 + signalBonus * 0.10)
+    * volDiscount * sessionMult;
   return Math.min(Math.round(raw), 100);
 }
 
-// ─── Kelly position sizing (4-strategy blend) ──────────────────────────────
-// Blended Kelly from all 4 strategy backtests:
-//   Momentum 15m: 55% WR, 2.0 R:R → Kelly = 32.5%
-//   HFT Scalper:  52% WR, 1.5 R:R → Kelly = 18.7%
-//   ORB-30:       55% WR, 2.2 R:R → Kelly = 35.0%
-//   OBI Scalper:  53% WR, 2.0 R:R → Kelly = 24.5%
-// Blended ≈ 27.7%  →  25% fractional = 6.9%  →  cap at 5%
-function calcSizePct(conviction: number, alignedCount: number): number {
-  const fracKelly = 0.277 * 0.25;
-  const convScale = conviction / 100;
+// ─── Kelly position sizing (5-strategy blend, streak-adjusted) ────────────────
+function calcSizePct(conviction: number, alignedCount: number, hotStreak: boolean, coldStreak: boolean): number {
+  const fracKelly  = 0.277 * 0.25;  // 25% fractional Kelly
+  const convScale  = conviction / 100;
   const alignBonus = alignedCount >= 4 ? 1.4 : alignedCount === 3 ? 1.15 : 1.0;
-  return Math.min(Math.round(fracKelly * convScale * alignBonus * 1000) / 10, 5.0);
+  const streakAdj  = hotStreak ? 1.25 : coldStreak ? 0.70 : 1.0;
+  return Math.min(Math.round(fracKelly * convScale * alignBonus * streakAdj * 1000) / 10, 5.0);
 }
 
-// ─── Commentary builder ───────────────────────────────────────────────────────
+// ─── Commentary builder (self-learning narrative) ─────────────────────────────
 function buildThought(ctx: {
-  price: number | null;
-  atrPct: number | null;
-  votes: StrategyVote[];
-  regime: MarketRegime;
-  direction: AgentDirection;
-  conviction: number;
-  grade: ConvictionGrade;
-  signal?: MasterSignal | null;
-  serverData: ServerStatus | null;
-  obi: number | null;
-  rsi15m: number | null;
+  price:        number | null;
+  atrPct:       number | null;
+  votes:        StrategyVote[];
+  regime:       MarketRegime;
+  direction:    AgentDirection;
+  conviction:   number;
+  grade:        ConvictionGrade;
+  signal?:      MasterSignal | null;
+  serverData:   ServerStatus | null;
+  obi:          number | null;
+  rsi15m:       number | null;
+  strategyPerf: Record<string, StrategyPerfData>;
+  sessionInfo:  SessionInfo;
 }, ts: string): string {
-  const { price, direction, conviction, grade: g, signal, votes, regime, serverData, obi, rsi15m, atrPct } = ctx;
-  const pStr = price ? `$${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
+  const { price, direction, conviction, grade: g, signal, votes, regime, serverData, obi, rsi15m, atrPct, strategyPerf, sessionInfo } = ctx;
+  const pStr    = price ? `$${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
   const aligned = votes.filter(v => v.bias === direction.toLowerCase()).length;
-  const serverPos = serverData?.open_positions ?? [];
+  const serverPos   = serverData?.open_positions ?? [];
   const serverStats = serverData?.stats;
 
-  // Active signal → always show the trade card
+  // Hot/Cold strategy labels
+  const hotStrats  = Object.entries(strategyPerf).filter(([, p]) => p.label === "HOT").map(([n]) => n);
+  const coldStrats = Object.entries(strategyPerf).filter(([, p]) => p.label === "COLD").map(([n]) => n);
+  const streakNote = hotStrats.length
+    ? `🔥 ${hotStrats.map(n => n.split(" ")[0]).join("+")} HOT`
+    : coldStrats.length
+    ? `❄ ${coldStrats.map(n => n.split(" ")[0]).join("+")} COLD`
+    : "";
+
+  // Best trust score this session
+  const topStrategy = Object.entries(strategyPerf)
+    .sort(([, a], [, b]) => b.trustScore - a.trustScore)[0];
+  const trustNote = topStrategy
+    ? `Highest trust: ${topStrategy[0].split(" ")[0]} (${(topStrategy[1].trustScore * 100).toFixed(0)}% weight)`
+    : "";
+
+  // Session note
+  const sessionNote = !sessionInfo.peak ? `⏰ ${sessionInfo.label}` : "";
+
+  // Active signal → trade card
   if (signal && direction !== "FLAT" && conviction >= 55) {
     const riskPct = ((Math.abs(signal.entry - signal.sl) / signal.entry) * 100).toFixed(2);
     const lines = [
       `${direction}  ·  ${pStr}  ·  SL $${signal.sl.toFixed(0)} (${riskPct}%)  ·  TP $${signal.tp.toFixed(0)}  ·  ${signal.rr}`,
       `Grade ${g}  ·  ${conviction}/100  ·  ${aligned}/5 strategies aligned  ·  ${regime}`,
-    ];
-    if (serverPos.length > 0)
-      lines.push(`Server: ${serverPos.length} open position${serverPos.length > 1 ? "s" : ""}`);
+      [streakNote, trustNote].filter(Boolean).join("  ·  "),
+      serverPos.length > 0 ? `Server: ${serverPos.length} open position${serverPos.length > 1 ? "s" : ""}` : "",
+    ].filter(Boolean);
     return lines.join("\n");
   }
 
-  // Bias but no signal yet
+  // Bias but no signal
   if (direction !== "FLAT") {
     const needed = Math.max(0, 55 - conviction);
     const signallingVotes = votes.filter(v => v.signal && v.bias === direction.toLowerCase());
     const parts = [
-      `${direction} bias  ·  ${conviction}/100 (${g})  ·  ${aligned}/4 aligned  ·  BTC ${pStr}`,
+      `${direction} bias  ·  ${conviction}/100 (${g})  ·  ${aligned}/5 aligned  ·  BTC ${pStr}`,
       `Need ${needed > 0 ? `+${needed} pts` : "signal trigger"}  ·  ${signallingVotes.length}/5 strategies signalling`,
+      [streakNote, trustNote, sessionNote].filter(Boolean).join("  ·  "),
     ];
     if (obi !== null) parts.push(`OBI ${obi >= 0 ? "+" : ""}${obi.toFixed(3)}  ·  RSI(15m) ${rsi15m?.toFixed(1) ?? "—"}  ·  ATR ${atrPct ? (atrPct * 100).toFixed(2) + "%" : "—"}`);
-    return parts.join("\n");
+    return parts.filter(Boolean).join("\n");
   }
 
-  // Flat — describe what we're watching
+  // Flat
   const mostVoted = votes.reduce((acc: Record<string, number>, v) => {
     acc[v.bias] = (acc[v.bias] || 0) + 1; return acc;
   }, {});
-  const dominant = Object.entries(mostVoted).sort((a, b) => b[1] - a[1])[0];
-  const serverStat = serverStats ? `Server: ${serverStats.total_trades} trades · P&L ${serverStats.total_pnl >= 0 ? "+" : ""}$${serverStats.total_pnl.toFixed(2)}` : "";
+  const dominant  = Object.entries(mostVoted).sort((a, b) => b[1] - a[1])[0];
+  const serverStat = serverStats
+    ? `Server: ${serverStats.total_trades} trades · P&L ${serverStats.total_pnl >= 0 ? "+" : ""}$${serverStats.total_pnl.toFixed(2)}`
+    : "";
   return [
-    `FLAT  ·  No edge  ·  ${conviction}/100  ·  ${dominant ? `${dominant[1]}/4 leaning ${dominant[0].toUpperCase()}` : "strategies diverging"}`,
+    `FLAT  ·  No edge  ·  ${conviction}/100  ·  ${dominant ? `${dominant[1]}/5 leaning ${dominant[0].toUpperCase()}` : "strategies diverging"}`,
     `Regime: ${regime}  ·  BTC ${pStr}${obi !== null ? `  ·  OBI ${obi >= 0 ? "+" : ""}${obi.toFixed(3)}` : ""}`,
+    [streakNote, trustNote, sessionNote].filter(Boolean).join("  ·  "),
     serverStat,
   ].filter(Boolean).join("\n");
 }
@@ -267,6 +411,8 @@ interface ResponseCtx {
   obiResult:      OBIResult;
   ticker:         BinanceTicker | null;
   serverData:     ServerStatus | null;
+  strategyPerf:   Record<string, StrategyPerfData>;
+  sessionInfo:    SessionInfo;
 }
 
 function fmtSig(sig: MasterSignal, conv: number, g: ConvictionGrade, aligned: number): string {
@@ -402,29 +548,72 @@ function generateResponse(userMsg: string, ctx: ResponseCtx): string {
     ].filter(Boolean).join("\n");
   }
 
+  // ── Strategy performance / trust / which is best ─────────────────────────
+  if (/trust|best strategy|which strategy|win rate.*strat|strat.*win|hot|cold|streak|performing|learn/i.test(m)) {
+    const { strategyPerf, sessionInfo: si } = ctx;
+    const sorted = Object.entries(strategyPerf).sort(([, a], [, b]) => b.trustScore - a.trustScore);
+    const lines = [
+      `Strategy Trust Scores (self-learned from ${stats?.total_trades ?? 0} trades)`,
+      ...sorted.map(([name, p]) => {
+        const wr   = p.totalTrades >= 3 ? `${(p.winRate * 100).toFixed(0)}% WR` : "new";
+        const str  = p.streak > 0 ? `+${p.streak}🔥` : p.streak < 0 ? `${p.streak}❄` : "flat";
+        const cool = p.msSinceLastSL < 45 * 60 * 1000 ? " [COOLING 45m]" : "";
+        const fit  = `${p.regimeFit >= 1.2 ? "✓ regime fit" : p.regimeFit <= 0.8 ? "✗ off-regime" : "~ ok"}`;
+        return `  ${name.padEnd(15)} trust ${(p.trustScore * 100).toFixed(0)}%  ${wr}  streak ${str}  ${fit}${cool}`;
+      }),
+      ``,
+      `Session: ${si.label}  (${si.multiplier >= 1 ? "+" : ""}${((si.multiplier - 1) * 100).toFixed(0)}% conviction)`,
+      `Regime: ${regime} — optimal: ${Object.entries(REGIME_WEIGHTS[regime] ?? {}).sort(([, a], [, b]) => b - a)[0]?.[0] ?? "—"}`,
+    ];
+    return lines.join("\n");
+  }
+
+  // ── Session / time of day ─────────────────────────────────────────────────
+  if (/session|time|when.*trade|best.*time|liquidity|hour|utc/i.test(m)) {
+    const si = ctx.sessionInfo;
+    return [
+      `Current session: ${si.label}`,
+      `UTC hour: ${si.hour}:00  ·  Liquidity multiplier: ${si.multiplier >= 1 ? "+" : ""}${((si.multiplier - 1) * 100).toFixed(0)}%`,
+      si.peak
+        ? `✓ Peak hours — full conviction active`
+        : `⏰ Off-peak — conviction reduced ${((1 - si.multiplier) * 100).toFixed(0)}%, Grid/OBI preferred`,
+      `Best trading windows (UTC): 09:00-17:00 (London/NY), 21:00-00:00 (Asia open)`,
+    ].join("\n");
+  }
+
   // ── Risk / sizing ──────────────────────────────────────────────────────────
   if (/risk|size|kelly|how much|position size|capital/i.test(m)) {
-    const sizePct = sig?.size_pct ?? calcSizePct(conv, aligned);
+    const { strategyPerf: sp } = ctx;
+    const hotStreak  = Object.values(sp).some(p => p.streak >= 2);
+    const coldStreak = Object.values(sp).some(p => p.streak <= -2);
+    const sizePct    = sig?.size_pct ?? calcSizePct(conv, aligned, hotStreak, coldStreak);
     return [
-      `Position sizing (fractional Kelly, 4-strategy blend)`,
+      `Position sizing (fractional Kelly, 5-strategy blend)`,
       `Conviction: ${conv}/100 (${g})  ·  ${aligned}/5 strategies aligned`,
       `Recommended size: ${sizePct}% of account`,
+      hotStreak  ? `🔥 Hot streak detected — +25% size boost applied` : "",
+      coldStreak ? `❄ Cold streak detected — -30% size reduction applied` : "",
       `Logic: ${g === "A+" ? "Full Kelly — maximum edge, 5-way confluence" : g === "A" ? "75% Kelly — strong edge, 4-way confluence" : g === "B" ? "50% Kelly — moderate edge, 3-way consensus" : "25% Kelly or less — edge insufficient for large size"}`,
       conv < 55 ? `Not yet trading — need ${55 - conv} more conviction pts` : `✓ Trade criteria met`,
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
 
   // ── Full status dump ──────────────────────────────────────────────────────
   if (/status|everything|full|overview|all strategies|summary/i.test(m)) {
-    const voteLines = votes.map(v =>
-      `  ${v.name.padEnd(14)} ${v.bias.toUpperCase().padEnd(7)} ${v.signal ? "✓ SIGNAL" : `${(v.met_pct * 100).toFixed(0)}% conds`}`
-    );
+    const { strategyPerf: sp, sessionInfo: si } = ctx;
+    const voteLines = votes.map(v => {
+      const perf = sp[v.name];
+      const wr   = perf && perf.totalTrades >= 3 ? ` ${(perf.winRate * 100).toFixed(0)}%WR` : "";
+      const lbl  = perf?.label === "HOT" ? "🔥" : perf?.label === "COLD" ? "❄" : "";
+      return `  ${(v.name + lbl).padEnd(17)} ${v.bias.toUpperCase().padEnd(7)} ${v.signal ? "✓ SIGNAL" : `${(v.met_pct * 100).toFixed(0)}% conds`}${wr}`;
+    });
     const serverLine = stats
       ? `\nServer: ${stats.total_trades} trades · ${stats.win_rate.toFixed(1)}% WR · P&L ${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)} · ${positions.length} open`
       : "";
     const s = sigBlock();
     return (s ? s + "\n\n" : "") + [
       `BTC ${pStr}  ·  ${regime}  ·  ${conv}/100 (${g})`,
+      `Session: ${si.label}`,
       `Strategy votes:`,
       ...voteLines,
       serverLine,
@@ -484,6 +673,15 @@ export function useMasterAgent(
   const core = (() => {
     const price = ticker?.last ?? candles15m[candles15m.length - 1]?.close ?? null;
 
+    // Session intelligence (time-of-day)
+    const sessionInfo = getSessionInfo();
+
+    // Market regime
+    const regime = detectRegime(candles15m);
+
+    // Self-learning: compute per-strategy performance from trade history
+    const strategyPerf = computeStrategyPerf(serverData?.trades ?? [], regime);
+
     // Order book imbalance
     let obi: number | null = null;
     if (orderBook && orderBook.bids.length > 0 && orderBook.asks.length > 0) {
@@ -492,7 +690,6 @@ export function useMasterAgent(
       const tot = bidVol + askVol;
       obi = tot > 0 ? (bidVol - askVol) / tot : 0;
     }
-    // Use OBI from obiResult if available
     if (obiResult.obi_indicators.obi !== null) obi = obiResult.obi_indicators.obi;
 
     // Technical indicators
@@ -503,7 +700,7 @@ export function useMasterAgent(
     const atrVal   = atr(candles15m.slice(-20));
     const atrPct   = price && !isNaN(atrVal) ? atrVal / price : null;
 
-    // Strategy votes — all 4
+    // Strategy votes — all 5, with adaptive trust weights
     const votes: StrategyVote[] = [
       {
         name: "Momentum 15m",
@@ -512,6 +709,7 @@ export function useMasterAgent(
         conf: momentumResult.signal?.confidence ?? (momentumResult.met_count / (momentumResult.total ?? 7)) * 0.65,
         met_pct: momentumResult.met_count / (momentumResult.total ?? 7),
         timeframe: "15m",
+        weight: strategyPerf["Momentum 15m"]?.trustScore ?? 1.0,
         reasoning: momentumResult.signal?.reasoning,
       },
       {
@@ -521,6 +719,7 @@ export function useMasterAgent(
         conf: orbResult.signal?.confidence ?? (orbResult.met_count / (orbResult.total ?? 4)) * 0.60,
         met_pct: orbResult.met_count / (orbResult.total ?? 4),
         timeframe: "1m",
+        weight: strategyPerf["ORB-30"]?.trustScore ?? 1.0,
         reasoning: orbResult.signal?.reasoning,
       },
       {
@@ -530,6 +729,7 @@ export function useMasterAgent(
         conf: hftResult.signal?.confidence ?? (hftResult.met_count / (hftResult.total ?? 7)) * 0.60,
         met_pct: hftResult.met_count / (hftResult.total ?? 7),
         timeframe: "1m",
+        weight: strategyPerf["HFT Scalper"]?.trustScore ?? 1.0,
         reasoning: hftResult.signal?.reasoning,
       },
       {
@@ -539,6 +739,7 @@ export function useMasterAgent(
         conf: obiResult.signal?.confidence ?? (obiResult.met_count / (obiResult.total ?? 3)) * 0.55,
         met_pct: obiResult.met_count / (obiResult.total ?? 3),
         timeframe: "1m",
+        weight: strategyPerf["OBI Scalper"]?.trustScore ?? 1.0,
         reasoning: obiResult.signal?.reasoning,
       },
       {
@@ -548,6 +749,7 @@ export function useMasterAgent(
         conf: gridResult.signal?.confidence ?? (gridResult.metCount / (gridResult.total ?? 5)) * 0.60,
         met_pct: gridResult.metCount / (gridResult.total ?? 5),
         timeframe: "continuous",
+        weight: strategyPerf["Grid $50"]?.trustScore ?? 1.0,
         reasoning: gridResult.signal?.reasoning,
       },
     ];
@@ -562,10 +764,12 @@ export function useMasterAgent(
     else if (shortCount === 1 && longCount === 0)         direction = "SHORT";
 
     const consensusCount = direction === "LONG" ? longCount : direction === "SHORT" ? shortCount : 0;
-    const regime         = detectRegime(candles15m);
-    const conviction     = calcConviction(votes, direction, atrPct);
-    const g              = grade(conviction);
-    const sizePct        = calcSizePct(conviction, consensusCount);
+    // Streak-based sizing adjustments
+    const hotStreak  = Object.values(strategyPerf).some(p => p.streak >= 2);
+    const coldStreak = Object.values(strategyPerf).some(p => p.streak <= -2);
+    const conviction = calcConviction(votes, direction, atrPct, sessionInfo);
+    const g          = grade(conviction);
+    const sizePct    = calcSizePct(conviction, consensusCount, hotStreak, coldStreak);
 
     // Master signal — pick best aligned signal from all 4
     let signal: MasterSignal | null = null;
@@ -614,11 +818,11 @@ export function useMasterAgent(
       };
     }
 
-    return { votes, direction, consensusCount, conviction, grade: g, signal, regime, price, atrPct, ema50v, ema21v, rsi15m, obi };
+    return { votes, direction, consensusCount, conviction, grade: g, signal, regime, price, atrPct, ema50v, ema21v, rsi15m, obi, strategyPerf, sessionInfo };
   })();
 
   // Always keep core ref up to date
-  useEffect(() => { coreRef.current = { ...core, momentumResult, orbResult, hftResult, obiResult, ticker, serverData }; });
+  useEffect(() => { coreRef.current = { ...core, momentumResult, orbResult, hftResult, obiResult, ticker, serverData, strategyPerf: core.strategyPerf, sessionInfo: core.sessionInfo }; });
 
   // ── Commentary — refreshes every 30s or on conviction change ─────────────
   const generateThought = useCallback(() => {
@@ -629,6 +833,8 @@ export function useMasterAgent(
       conviction: core.conviction, grade: core.grade,
       signal: core.signal, serverData,
       obi: core.obi, rsi15m: core.rsi15m,
+      strategyPerf: core.strategyPerf,
+      sessionInfo:  core.sessionInfo,
     }, ts);
     setThoughts(prev => [thought, ...prev].slice(0, 30));
     setChat(prev => [
@@ -666,12 +872,14 @@ export function useMasterAgent(
         rsi15m:    c.rsi15m,
         ema50v:    c.ema50v,
         ema21v:    c.ema21v,
-        momentumResult: c.momentumResult ?? momentumResult,
-        orbResult:      c.orbResult      ?? orbResult,
-        hftResult:      c.hftResult      ?? hftResult,
-        obiResult:      c.obiResult      ?? obiResult,
-        ticker:         c.ticker         ?? ticker,
-        serverData:     c.serverData     ?? serverData,
+        momentumResult:  c.momentumResult  ?? momentumResult,
+        orbResult:       c.orbResult       ?? orbResult,
+        hftResult:       c.hftResult       ?? hftResult,
+        obiResult:       c.obiResult       ?? obiResult,
+        ticker:          c.ticker          ?? ticker,
+        serverData:      c.serverData      ?? serverData,
+        strategyPerf:    c.strategyPerf    ?? core.strategyPerf,
+        sessionInfo:     c.sessionInfo     ?? core.sessionInfo,
       });
       const rTs = new Date().toLocaleTimeString();
       setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: response, timestamp: rTs, type: "response" as const }].slice(-80));
@@ -693,6 +901,8 @@ export function useMasterAgent(
     regime:          core.regime,
     thoughts,
     chat,
+    strategyPerf:    core.strategyPerf,
+    sessionInfo:     core.sessionInfo,
     last_update:     new Date().toLocaleTimeString(),
     paper_position:  null,
     paper_stats: {

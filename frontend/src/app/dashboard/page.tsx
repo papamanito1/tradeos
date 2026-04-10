@@ -845,7 +845,8 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
   orbResult: ORBResult;
 }) {
   const { direction, conviction, grade, signal, votes, consensus_count, regime, thoughts,
-          paper_position, paper_stats, last_price, price_24h } = agent;
+          paper_position, paper_stats, last_price, price_24h,
+          strategyPerf, sessionInfo } = agent as ReturnType<typeof useMasterAgent>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { openPaperTrade, closePaperTrade, resetPaper } = agent as any;
 
@@ -881,7 +882,7 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
                 {gm.label}
               </span>
             </div>
-            <div className="text-[9px] text-neutral-600 mt-0.5">{gm.desc} · Momentum × ORB-30 × HFT Flow</div>
+            <div className="text-[9px] text-neutral-600 mt-0.5">{gm.desc} · Self-learning · 5 strategies · {sessionInfo?.label?.split("—")[0]?.trim() ?? "Scanning"}</div>
           </div>
         </div>
 
@@ -891,8 +892,9 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
             ["DIRECTION", direction === "LONG" ? "▲ LONG" : direction === "SHORT" ? "▼ SHORT" : "— FLAT",
               isLong ? "text-green-400" : isShort ? "text-red-400" : "text-neutral-600"],
             ["CONVICTION", `${conviction}/100`, "text-white"],
-            ["CONSENSUS",  `${consensus_count}/3`, "text-white"],
+            ["CONSENSUS",  `${consensus_count}/5`, "text-white"],
             ["REGIME",     regime, regime === "TRENDING" ? "text-blue-400" : regime === "VOLATILE" ? "text-red-400" : regime === "RANGING" ? "text-yellow-400" : "text-neutral-600"],
+            ["SESSION",    sessionInfo?.peak ? "PEAK" : "OFF-PEAK", sessionInfo?.peak ? "text-green-400" : "text-yellow-500"],
           ].map(([l, v, cls]) => (
             <div key={l} className="text-center">
               <div className="text-[7px] font-bold text-neutral-700 tracking-widest mb-0.5">{l}</div>
@@ -931,22 +933,42 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
             </div>
           </div>
 
-          {/* Strategy votes */}
+          {/* Session label */}
+          {sessionInfo && (
+            <div className="rounded-xl px-2.5 py-1.5 flex items-center gap-2"
+              style={{ background: sessionInfo.peak ? "rgba(34,197,94,0.05)" : "rgba(251,191,36,0.05)", border: `1px solid ${sessionInfo.peak ? "rgba(34,197,94,0.15)" : "rgba(251,191,36,0.15)"}` }}>
+              <span className={`text-[8px] ${sessionInfo.peak ? "text-green-400" : "text-yellow-400"}`}>
+                {sessionInfo.peak ? "⚡" : "⏰"}
+              </span>
+              <span className="text-[8px] text-neutral-500 truncate flex-1">{sessionInfo.label}</span>
+              <span className={`text-[8px] font-mono font-bold ${sessionInfo.multiplier >= 1 ? "text-green-400" : "text-yellow-500"}`}>
+                {sessionInfo.multiplier >= 1 ? "+" : ""}{((sessionInfo.multiplier - 1) * 100).toFixed(0)}%
+              </span>
+            </div>
+          )}
+
+          {/* Strategy votes with trust scores */}
           <div className="space-y-1.5 flex-1">
-            <div className="text-[8px] text-neutral-700 uppercase tracking-widest">Strategy Votes</div>
+            <div className="text-[8px] text-neutral-700 uppercase tracking-widest">Strategy Votes · Trust</div>
             {votes.map(v => {
               const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
-              const vc = v.bias === "long" ? "#22c55e" : v.bias === "short" ? "#ef4444" : "#374151";
+              const vc   = v.bias === "long" ? "#22c55e" : v.bias === "short" ? "#ef4444" : "#374151";
+              const perf = strategyPerf?.[v.name];
+              const lbl  = perf?.label === "HOT" ? "🔥" : perf?.label === "COLD" ? "❄" : "";
+              const trust = v.weight ?? 1.0;
+              const cooldown = perf && perf.msSinceLastSL < 45 * 60 * 1000;
               return (
-                <div key={v.name} className="rounded-xl px-3 py-2.5 flex items-center gap-2"
+                <div key={v.name} className="rounded-xl px-3 py-2 flex items-center gap-2"
                   style={{ background: aligned ? `rgba(${gm.rgb},0.08)` : "rgba(255,255,255,0.025)", border: `1px solid ${aligned ? `rgba(${gm.rgb},0.2)` : "rgba(255,255,255,0.05)"}` }}>
                   <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: vc }} />
-                  <span className="text-[9px] text-neutral-500 flex-1 truncate">{v.name}</span>
+                  <span className="text-[8px] text-neutral-500 flex-1 truncate">{v.name}{lbl}</span>
+                  {cooldown && <span className="text-[7px] text-yellow-600">~cool</span>}
+                  <span className="text-[7px] font-mono text-neutral-600">{(trust * 100).toFixed(0)}%</span>
                   <span className="text-[9px] font-bold" style={{ color: vc }}>
                     {v.bias === "long" ? "▲" : v.bias === "short" ? "▼" : "—"}
                   </span>
-                  <div className="h-1 w-10 bg-neutral-900 rounded-full overflow-hidden ml-1">
-                    <div className="h-full rounded-full" style={{ width: `${v.met_pct * 100}%`, background: vc }} />
+                  <div className="h-1 w-8 bg-neutral-900 rounded-full overflow-hidden ml-1">
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(trust * 50, 100)}%`, background: trust >= 1.2 ? "#22c55e" : trust <= 0.8 ? "#ef4444" : vc }} />
                   </div>
                 </div>
               );
