@@ -10,7 +10,7 @@ import {
   FileText, RotateCcw, X, DollarSign, Save, Loader2,
   Brain, MessageSquare, Send, ArrowUpRight, ArrowDownRight, Square,
 } from "lucide-react";
-import { useMasterAgent } from "@/hooks/useMasterAgent";
+import type { useMasterAgent } from "@/hooks/useMasterAgent";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
 import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
@@ -755,21 +755,6 @@ function AgentContent() {
     candles1m,
     candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0,
     server.gridState,
-  );
-
-  // ── Master agent (for mini chat + signal data) ────────────────────────
-  const lastClose = candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0;
-  const agentTicker: import("@/hooks/useBinanceStream").BinanceTicker | null = lastClose > 0 ? {
-    symbol: "BTC/USDT", last: lastClose, bid: lastClose, ask: lastClose,
-    open_24h: lastClose, high_24h: lastClose, low_24h: lastClose,
-    volume: 0, quote_volume: 0, change_pct: 0, updated_ms: Date.now(),
-  } : null;
-  const masterAgent = useMasterAgent(
-    momentumResult, orbResult, hftResult, obiResult, gridResult,
-    candles15m, candles1m,
-    agentTicker,
-    orderBook,
-    server.status,
   );
 
   // ── Strategy slots for the multi-agent hook ──────────────────────────
@@ -1522,58 +1507,51 @@ function AgentContent() {
         )}
       </div>
 
-      {/* ── Signal Timeline + Mini Chat ── */}
-      <div className="grid grid-cols-2 gap-3">
-
-        {/* Signal Timeline */}
-        <div className="card overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-            <div className="flex items-center gap-2">
-              <Activity size={12} className="text-blue-400" />
-              <span className="text-[12px] font-bold text-white">Signal Timeline</span>
-              <span className="text-[8px] text-neutral-600">Today</span>
-            </div>
-            <span className="text-[8px] text-neutral-700">{server.trades.length} trades</span>
+      {/* ── Signal Timeline ── */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <div className="flex items-center gap-2">
+            <Activity size={12} className="text-blue-400" />
+            <span className="text-[12px] font-bold text-white">Signal Timeline</span>
+            <span className="text-[8px] text-neutral-600">Today</span>
           </div>
-          <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
-            {server.trades.length === 0 ? (
-              <div className="text-center py-8 text-[10px] text-neutral-700">No signals yet — scanning every 20s</div>
-            ) : (
-              server.trades.slice(0, 20).map((t, i) => {
-                const pnl = t.pnl_usd ?? 0;
-                const isWin = pnl > 0;
-                const time = new Date(t.closed_at ?? t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-                return (
-                  <div key={i} className="flex items-center gap-2.5 py-1.5 border-b border-neutral-800/40 last:border-0">
-                    <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
-                      {t.direction === "long"
-                        ? <ArrowUpRight size={10} className="text-green-400" />
-                        : <ArrowDownRight size={10} className="text-red-400" />}
+          <span className="text-[8px] text-neutral-700">{server.trades.length} trades</span>
+        </div>
+        <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
+          {server.trades.length === 0 ? (
+            <div className="text-center py-8 text-[10px] text-neutral-700">No signals yet — scanning every 20s</div>
+          ) : (
+            server.trades.slice(0, 20).map((t, i) => {
+              const pnl = t.pnl_usd ?? 0;
+              const isWin = pnl > 0;
+              const time = new Date(t.closed_at ?? t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+              return (
+                <div key={i} className="flex items-center gap-2.5 py-1.5 border-b border-neutral-800/40 last:border-0">
+                  <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
+                    {t.direction === "long"
+                      ? <ArrowUpRight size={10} className="text-green-400" />
+                      : <ArrowDownRight size={10} className="text-red-400" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()}</span>
+                      <span className="text-[8px] text-neutral-700 truncate">{t.strategy_name}</span>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()}</span>
-                        <span className="text-[8px] text-neutral-700 truncate">{t.strategy_name}</span>
-                      </div>
-                      <div className="text-[8px] text-neutral-700 font-mono">{time} · ${t.entry.toFixed(0)}</div>
+                    <div className="text-[8px] text-neutral-700 font-mono">{time} · ${t.entry.toFixed(0)}</div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className={`text-[9px] font-bold font-mono ${isWin ? "text-green-400" : "text-red-400"}`}>
+                      {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
                     </div>
-                    <div className="text-right flex-shrink-0">
-                      <div className={`text-[9px] font-bold font-mono ${isWin ? "text-green-400" : "text-red-400"}`}>
-                        {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
-                      </div>
-                      <div className={`text-[8px] font-bold ${t.exit_reason === "tp" ? "text-green-400/70" : t.exit_reason === "sl" ? "text-red-400/70" : "text-neutral-600"}`}>
-                        {(t.exit_reason ?? "—").toUpperCase()}
-                      </div>
+                    <div className={`text-[8px] font-bold ${t.exit_reason === "tp" ? "text-green-400/70" : t.exit_reason === "sl" ? "text-red-400/70" : "text-neutral-600"}`}>
+                      {(t.exit_reason ?? "—").toUpperCase()}
                     </div>
                   </div>
-                );
-              })
-            )}
-          </div>
+                </div>
+              );
+            })
+          )}
         </div>
-
-        {/* Mini Master Agent Chat */}
-        <MiniMasterAgentChat masterAgent={masterAgent} />
       </div>
 
       {/* Info footer */}
