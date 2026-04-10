@@ -20,7 +20,6 @@ import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
 import { useGridStrategy, GridResult } from "@/hooks/useGridStrategy";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { useServerAgent, type ServerAgentConfig } from "@/hooks/useServerAgent";
-import { useSharedServerAgent } from "@/context/ServerAgentContext";
 import { formatUSD } from "@/lib/utils";
 
 
@@ -681,7 +680,7 @@ function AgentContent() {
   const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
 
   // ── 24/7 backend agent — source of truth for positions/P&L/trades/log ──
-  const server = useSharedServerAgent();
+  const server = useServerAgent();
 
   // ── 15m candles (Momentum) ────────────────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
