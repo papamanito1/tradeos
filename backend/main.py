@@ -138,8 +138,10 @@ async def startup():
     try:
         from app.agents.live_market_stream import create_live_stream_agent
         live_stream = create_live_stream_agent()
-        await live_stream.start()
+        await asyncio.wait_for(live_stream.start(), timeout=10)
         logger.info("Live market stream agent started (Binance public WS)")
+    except asyncio.TimeoutError:
+        logger.warning("Live stream agent start timed out — skipping")
     except Exception as e:
         logger.warning(f"Live stream agent failed to start: {e}")
 
@@ -153,16 +155,20 @@ async def startup():
         exec_agent = ExecutionAgent(exchange=paper_engine, mode="paper")
         signal_agent = SignalAgent(execution_agent=exec_agent)
 
-        await signal_agent.start()
+        await asyncio.wait_for(signal_agent.start(), timeout=10)
         logger.info("Signal agent started — strategies will run every 60 s")
+    except asyncio.TimeoutError:
+        logger.warning("Signal agent start timed out — skipping")
     except Exception as e:
         logger.warning(f"Signal/execution pipeline failed to start: {e}")
 
     # Start 24/7 persistent trading agent
     try:
         from app.agents.persistent_agent import start_agent
-        await start_agent()
+        await asyncio.wait_for(start_agent(), timeout=15)
         logger.info("Persistent trading agent started — running 24/7 on server")
+    except asyncio.TimeoutError:
+        logger.warning("Persistent agent start timed out — skipping")
     except Exception as e:
         logger.warning(f"Persistent agent failed to start: {e}")
 
