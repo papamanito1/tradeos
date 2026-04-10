@@ -17,7 +17,7 @@ import {
 } from "@/hooks/useBinanceStream";
 import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
-import { useHFTScalper, useAggTradeBuffer, type HFTResult } from "@/hooks/useHFTScalper";
+import { useHFTScalper, type HFTResult } from "@/hooks/useHFTScalper";
 import { useOBIScalper, type OBIResult } from "@/hooks/useOBIScalper";
 import { useServerAgent } from "@/hooks/useServerAgent";
 import { useMasterAgent, type MasterSignal, type ConvictionGrade, type ChatMessage } from "@/hooks/useMasterAgent";
@@ -1734,8 +1734,7 @@ export default function OverviewPage() {
   // ── Frontend strategy engines ─────────────────────────────────────────────
   const strategyResult  = useStrategyEngine(chartCandles);
   const orbResult       = useORBStrategy(candles1m);
-  const aggTrades       = useAggTradeBuffer();
-  const hftResult       = useHFTScalper(candles1m, btcOrderBook, aggTrades);
+  const hftResult       = useHFTScalper(candles1m, btcOrderBook, []); // aggTrades not subscribed on overview
   const obiResult       = useOBIScalper(candles1m, btcOrderBook);
 
   // Server agent — 24/7 backend positions, trades, stats

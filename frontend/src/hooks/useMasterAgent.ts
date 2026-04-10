@@ -78,7 +78,13 @@ export interface MasterState {
   thoughts:         string[];
   chat:             ChatMessage[];
   last_update:      string;
-  paper_position:   null; // deprecated — now via server
+  // paper_position is always null — server agent handles all paper trading now.
+  // Keep the full union type so legacy UI code (?.open etc.) still compiles.
+  paper_position: {
+    open: boolean; direction?: AgentDirection; entry?: number; sl?: number;
+    tp?: number; current?: number; pnl_usd?: number; pnl_pct?: number;
+    size_usdc?: number; btc_qty?: number;
+  } | null;
   paper_stats: {
     total_pnl: number; wins: number; losses: number;
     win_rate: number;  total_trades: number; best: number; worst: number;
