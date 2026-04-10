@@ -108,50 +108,138 @@ class LiveMarketStreamAgent:
 
     async def start(self) -> None:
         self._running = True
-        # Seed historical candles first so strategies have data immediately
+        # Seed historical candles + current price immediately via REST
         await self._seed_historical()
+        # Always run a REST price-refresh loop (every 5 s) as the primary price feed.
+        # WebSocket is layered on top for sub-second updates when available.
+        self._tasks.append(asyncio.create_task(self._rest_price_loop()))
         if HAS_WEBSOCKETS:
             self._tasks.append(asyncio.create_task(self._ws_loop()))
         else:
-            logger.warning("websockets library not available — using REST fallback")
+            logger.warning("websockets library not available — using REST fallback for candles too")
             self._tasks.append(asyncio.create_task(self._rest_fallback_loop()))
         logger.info(f"LiveMarketStreamAgent started for {self._symbols}")
 
     async def _seed_historical(self) -> None:
-        """Fetch historical candles from Binance REST API to warm up strategy engines."""
+        """Fetch historical candles + current ticker from Binance REST to warm up immediately."""
         import aiohttp
-        base = "https://api.binance.com/api/v3/klines"
-        for sym in self._symbols:
-            b = _ccxt_to_binance(sym).upper()
-            for tf, limit in [("1m", 350), ("15m", 150)]:
+        async with aiohttp.ClientSession() as session:
+            for sym in self._symbols:
+                b = _ccxt_to_binance(sym).upper()
+
+                # ── Seed current ticker price first ───────────────────────────
                 try:
-                    url = f"{base}?symbol={b}&interval={tf}&limit={limit}"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={b}"
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                        if r.status == 200:
+                            t = await r.json()
+                            ticker = {
+                                "symbol":       sym,
+                                "last":         float(t.get("lastPrice", 0)),
+                                "bid":          float(t.get("bidPrice", 0)),
+                                "ask":          float(t.get("askPrice", 0)),
+                                "volume":       float(t.get("volume", 0)),
+                                "quote_volume": float(t.get("quoteVolume", 0)),
+                                "change_pct":   float(t.get("priceChangePercent", 0)),
+                                "high_24h":     float(t.get("highPrice", 0)),
+                                "low_24h":      float(t.get("lowPrice", 0)),
+                                "open_24h":     float(t.get("openPrice", 0)),
+                                "updated_at":   datetime.now(timezone.utc).isoformat(),
+                                "updated_ms":   int(time.time() * 1000),
+                            }
+                            LIVE_PRICES[sym] = ticker
+                            logger.info(f"Seeded ticker {sym} @ ${ticker['last']:,.0f}")
+                except Exception as e:
+                    logger.warning(f"Ticker seed failed for {sym}: {e}")
+
+                # ── Seed historical candles ───────────────────────────────────
+                for tf, limit in [("1m", 350), ("15m", 150)]:
+                    try:
+                        url = f"https://api.binance.com/api/v3/klines?symbol={b}&interval={tf}&limit={limit}"
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
                             if r.status != 200:
                                 logger.warning(f"Seed {sym} {tf} failed: HTTP {r.status}")
                                 continue
                             rows = await r.json()
-                    candles = []
-                    for row in rows:
-                        candles.append({
-                            "timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
-                            "open":  float(row[1]),
-                            "high":  float(row[2]),
-                            "low":   float(row[3]),
-                            "close": float(row[4]),
-                            "volume":float(row[5]),
-                            "is_closed": True,
-                        })
-                    key = f"{sym}:{tf}"
-                    existing = LIVE_CANDLES.get(key, [])
-                    # Merge: seed provides the base, existing (WS) data is newer
-                    existing_ts = {c["timestamp"] for c in existing}
-                    merged = [c for c in candles if c["timestamp"] not in existing_ts] + existing
-                    LIVE_CANDLES[key] = merged[-limit:]
-                    logger.info(f"Seeded {len(LIVE_CANDLES[key])} {tf} candles for {sym}")
-                except Exception as e:
-                    logger.warning(f"Historical seed failed for {sym} {tf}: {e}")
+                        candles = []
+                        for row in rows:
+                            candles.append({
+                                "timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
+                                "open":      float(row[1]),
+                                "high":      float(row[2]),
+                                "low":       float(row[3]),
+                                "close":     float(row[4]),
+                                "volume":    float(row[5]),
+                                "is_closed": True,
+                            })
+                        key = f"{sym}:{tf}"
+                        existing = LIVE_CANDLES.get(key, [])
+                        existing_ts = {c["timestamp"] for c in existing}
+                        merged = [c for c in candles if c["timestamp"] not in existing_ts] + existing
+                        LIVE_CANDLES[key] = merged[-limit:]
+                        logger.info(f"Seeded {len(LIVE_CANDLES[key])} {tf} candles for {sym}")
+                    except Exception as e:
+                        logger.warning(f"Historical seed failed for {sym} {tf}: {e}")
+
+    async def _rest_price_loop(self) -> None:
+        """
+        Poll Binance REST ticker every 5 seconds as a reliable price feed.
+        This ensures LIVE_PRICES is always populated even if WebSocket is blocked.
+        Also refreshes the latest 1m candle so strategies have fresh OHLCV data.
+        """
+        import aiohttp
+        logger.info("REST price polling loop started (5 s interval)")
+        while self._running:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    for sym in self._symbols:
+                        b = _ccxt_to_binance(sym).upper()
+                        # Ticker
+                        try:
+                            url = f"https://api.binance.com/api/v3/ticker/price?symbol={b}"
+                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                                if r.status == 200:
+                                    data = await r.json()
+                                    price = float(data.get("price", 0))
+                                    if price > 0:
+                                        existing = LIVE_PRICES.get(sym, {})
+                                        LIVE_PRICES[sym] = {
+                                            **existing,
+                                            "symbol":     sym,
+                                            "last":       price,
+                                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                                            "updated_ms": int(time.time() * 1000),
+                                        }
+                        except Exception:
+                            pass
+
+                        # Refresh last 2 1m candles
+                        try:
+                            url = f"https://api.binance.com/api/v3/klines?symbol={b}&interval=1m&limit=3"
+                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                                if r.status == 200:
+                                    rows = await r.json()
+                                    key = f"{sym}:1m"
+                                    candles = LIVE_CANDLES.get(key, [])
+                                    for row in rows:
+                                        c = {
+                                            "timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
+                                            "open": float(row[1]), "high": float(row[2]),
+                                            "low":  float(row[3]), "close": float(row[4]),
+                                            "volume": float(row[5]), "is_closed": True,
+                                        }
+                                        if candles and candles[-1]["timestamp"] == c["timestamp"]:
+                                            candles[-1] = c
+                                        else:
+                                            candles.append(c)
+                                    LIVE_CANDLES[key] = candles[-500:]
+                        except Exception:
+                            pass
+
+            except Exception as e:
+                logger.debug(f"REST price loop error: {e}")
+
+            await asyncio.sleep(5)
 
     async def stop(self) -> None:
         self._running = False

@@ -652,9 +652,13 @@ class PersistentAgent:
                 f"OB={ob_bids} levels · price=${live_price:,.0f}"
             )
 
-        # Guard: no price → skip scan but still update positions if we have data
+        # If ticker hasn't arrived yet, fall back to last candle close price
+        if live_price <= 0 and candles1m:
+            live_price = candles1m[-1]["close"]
+            if self.scan_count % 5 == 1:
+                self._log(f"⚠ Ticker not yet available — using last candle close ${live_price:,.0f}")
         if live_price <= 0:
-            self._log("⚠ No live price yet — waiting for market stream")
+            self._log("⚠ No price data at all — skipping scan")
             return
 
         # Update open position P&L
