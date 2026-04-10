@@ -475,42 +475,111 @@ class PersistentAgent:
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
+    def _state_dict(self) -> dict:
+        return {
+            "config":    self.config,
+            "positions": self.positions,
+            "trades":    self.trades[-200:],
+            "stats":     self.stats,
+            "log":       self.log[-100:],
+            "saved_at":  datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _apply_state(self, data: dict) -> None:
+        self.config    = data.get("config",    DEFAULT_CONFIG.copy())
+        self.positions = data.get("positions", {})
+        self.trades    = data.get("trades",    [])[-200:]
+        self.stats     = data.get("stats",     self._empty_stats())
+        self.log       = data.get("log",       [])[-100:]
+
+    # ── File fallback (local dev / fast cache) ────────────────────────────────
+
     def _load_state(self) -> None:
+        """Load from JSON file — fallback when DB is unavailable."""
         try:
             if STATE_FILE.exists():
                 data = json.loads(STATE_FILE.read_text())
-                self.config    = data.get("config",    DEFAULT_CONFIG.copy())
-                self.positions = data.get("positions", {})
-                self.trades    = data.get("trades",    [])[-100:]
-                self.stats     = data.get("stats",     self._empty_stats())
-                self.log       = data.get("log",       [])[-50:]
-                logger.info(f"Agent state loaded: {len(self.trades)} trades, {sum(1 for p in self.positions.values() if p)} open pos")
+                self._apply_state(data)
+                logger.info(f"Agent state loaded from file: {len(self.trades)} trades")
             else:
-                self.config    = DEFAULT_CONFIG.copy()
-                self.positions = {}
-                self.trades    = []
-                self.stats     = self._empty_stats()
-                self.log       = []
+                self._apply_state({})
         except Exception as e:
-            logger.warning(f"Failed to load agent state: {e}")
-            self.config    = DEFAULT_CONFIG.copy()
-            self.positions = {}
-            self.trades    = []
-            self.stats     = self._empty_stats()
-            self.log       = []
+            logger.warning(f"File state load failed: {e}")
+            self._apply_state({})
 
     def _save_state(self) -> None:
+        """Save to JSON file — fast sync cache."""
         try:
-            STATE_FILE.write_text(json.dumps({
-                "config":    self.config,
-                "positions": self.positions,
-                "trades":    self.trades[-100:],
-                "stats":     self.stats,
-                "log":       self.log[-50:],
-                "saved_at":  datetime.now(timezone.utc).isoformat(),
-            }, indent=2))
+            STATE_FILE.write_text(json.dumps(self._state_dict(), indent=2))
         except Exception as e:
-            logger.debug(f"State save failed: {e}")
+            logger.debug(f"File state save failed: {e}")
+
+    # ── Database persistence (survives Railway restarts / redeploys) ──────────
+
+    _DB_DDL = """
+        CREATE TABLE IF NOT EXISTS agent_state (
+            id         INTEGER PRIMARY KEY,
+            state      TEXT    NOT NULL,
+            updated_at TEXT
+        )
+    """
+
+    async def _load_state_db(self) -> bool:
+        """Load state from PostgreSQL/SQLite. Returns True if state was found."""
+        try:
+            from sqlalchemy import text as sa_text
+            from app.core.database import engine
+            async with engine.begin() as conn:
+                await conn.execute(sa_text(self._DB_DDL))
+            async with engine.connect() as conn:
+                result = await conn.execute(sa_text(
+                    "SELECT state FROM agent_state WHERE id = 1"
+                ))
+                row = result.fetchone()
+                if row and row[0]:
+                    data = json.loads(row[0])
+                    self._apply_state(data)
+                    n_open = sum(1 for p in self.positions.values() if p)
+                    logger.info(
+                        f"[Agent] DB state loaded — {len(self.trades)} trades, "
+                        f"{n_open} open position(s)"
+                    )
+                    return True
+        except Exception as e:
+            logger.warning(f"DB state load failed: {e}")
+        return False
+
+    async def _save_state_db(self) -> None:
+        """Persist state to PostgreSQL/SQLite — survives server restarts."""
+        try:
+            from sqlalchemy import text as sa_text
+            from app.core.database import engine
+            from app.core.config import settings
+            payload = json.dumps(self._state_dict())
+            ts      = datetime.now(timezone.utc).isoformat()
+            async with engine.begin() as conn:
+                await conn.execute(sa_text(self._DB_DDL))
+                if settings.database_url.startswith("sqlite"):
+                    await conn.execute(sa_text(
+                        "INSERT OR REPLACE INTO agent_state (id, state, updated_at) "
+                        "VALUES (1, :s, :t)"
+                    ), {"s": payload, "t": ts})
+                else:
+                    await conn.execute(sa_text(
+                        "INSERT INTO agent_state (id, state, updated_at) VALUES (1, :s, :t) "
+                        "ON CONFLICT (id) DO UPDATE SET state = :s, updated_at = :t"
+                    ), {"s": payload, "t": ts})
+        except Exception as e:
+            logger.debug(f"DB state save failed: {e}")
+
+    def _schedule_db_save(self) -> None:
+        """Fire-and-forget DB save from a sync context."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self._save_state_db())
+        except Exception:
+            pass
 
     def _empty_stats(self) -> dict:
         return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
@@ -529,6 +598,10 @@ class PersistentAgent:
     async def start(self) -> None:
         if self._running:
             return
+        # Load from DB first (persistent) — overrides the file loaded in __init__
+        loaded_from_db = await self._load_state_db()
+        if not loaded_from_db:
+            self._load_state()  # file fallback (local dev)
         self._running = True
         self._task = asyncio.create_task(self._loop())
         self._log("Agent STARTED — all 4 strategies scanning every 20s (server-side, 24/7)")
@@ -541,6 +614,7 @@ class PersistentAgent:
             self._task = None
         self._log("Agent STOPPED")
         self._save_state()
+        await self._save_state_db()
 
     async def _loop(self) -> None:
         while self._running:
@@ -603,7 +677,8 @@ class PersistentAgent:
             else:
                 self._log(f"[{name}] {met}/{total} conds · no signal · {bias} · {'POS OPEN' if open_pos else 'flat'}")
 
-        self._save_state()
+        self._save_state()           # fast file cache
+        await self._save_state_db()  # durable DB persist
 
     # ── Position management ───────────────────────────────────────────────────
 
@@ -694,6 +769,7 @@ class PersistentAgent:
             return False
         self._close_position(key, pos["current_price"], "manual")
         self._save_state()
+        self._schedule_db_save()
         return True
 
     def reset(self) -> None:
@@ -704,6 +780,7 @@ class PersistentAgent:
         self.scan_count = 0
         self._log("Paper account reset — all positions cleared")
         self._save_state()
+        self._schedule_db_save()
 
     def update_config(self, patch: dict) -> None:
         self.config.update(patch)
@@ -712,6 +789,7 @@ class PersistentAgent:
         elif patch.get("enabled") is False and self._running:
             asyncio.create_task(self.stop())
         self._save_state()
+        self._schedule_db_save()
 
     # ── State snapshot for API ────────────────────────────────────────────────
 
