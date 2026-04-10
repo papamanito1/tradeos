@@ -76,6 +76,36 @@ async def close_position(strategy_key: str):
     return {"ok": True, "closed": strategy_key}
 
 
+@router.get("/net-test")
+async def network_test():
+    """
+    Test outbound HTTP from Railway — call this endpoint to see which price
+    sources are reachable. Visit: <your-railway-url>/api/agent/net-test
+    """
+    import httpx, time
+    results = {}
+    sources = {
+        "coingecko":    "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+        "blockchain":   "https://blockchain.info/ticker",
+        "kraken":       "https://api.kraken.com/0/public/Ticker?pair=XBTUSD",
+        "bybit":        "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT",
+        "binance_us":   "https://api.binance.us/api/v3/ticker/price?symbol=BTCUSDT",
+        "binance":      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+    }
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        for name, url in sources.items():
+            t0 = time.time()
+            try:
+                r = await client.get(url)
+                ms = int((time.time() - t0) * 1000)
+                results[name] = {"ok": r.status_code == 200, "status": r.status_code, "ms": ms}
+            except Exception as e:
+                ms = int((time.time() - t0) * 1000)
+                results[name] = {"ok": False, "error": f"{type(e).__name__}: {e}", "ms": ms}
+    working = [k for k, v in results.items() if v["ok"]]
+    return {"working": working, "all": results}
+
+
 @router.get("/debug")
 async def debug_agent():
     """Detailed diagnostic — shows market data availability and strategy state."""

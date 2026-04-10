@@ -451,47 +451,25 @@ class LiveMarketStreamAgent:
 
     async def _rest_fallback_loop(self) -> None:
         """
-        When WebSockets are unavailable, poll Binance REST at 1-second intervals.
-        Still uses real public endpoints — no API key required.
+        When WebSockets are unavailable, poll using the multi-source httpx helper.
         """
-        logger.info("REST fallback market data loop started")
-        try:
-            import ccxt.async_support as ccxt
-            exchange = ccxt.binance({"enableRateLimit": True})
-        except ImportError:
-            logger.error("CCXT not available — market data unavailable")
-            return
-
+        logger.info("REST fallback market data loop started (httpx multi-source)")
         while self._running:
             for symbol in self._symbols:
-                try:
-                    raw = await exchange.fetch_ticker(symbol)
+                price = await self._fetch_price(symbol)
+                if price > 0:
+                    existing = LIVE_PRICES.get(symbol, {})
                     ticker = {
-                        "symbol": symbol,
-                        "last": raw.get("last", 0),
-                        "bid": raw.get("bid", 0),
-                        "ask": raw.get("ask", 0),
-                        "volume": raw.get("baseVolume", 0),
-                        "quote_volume": raw.get("quoteVolume", 0),
-                        "change_pct": raw.get("percentage", 0),
-                        "high_24h": raw.get("high", 0),
-                        "low_24h": raw.get("low", 0),
-                        "open_24h": raw.get("open", 0),
+                        **existing,
+                        "symbol": symbol, "last": price,
+                        "bid": price, "ask": price,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                         "updated_ms": int(time.time() * 1000),
                     }
                     LIVE_PRICES[symbol] = ticker
                     await redis_set(f"market:ticker:{symbol}", ticker, ex=10)
                     await redis_publish("market:ticker", ticker)
-                except Exception as e:
-                    logger.debug(f"REST ticker error {symbol}: {e}")
-
-            await asyncio.sleep(1)
-
-        try:
-            await exchange.close()
-        except Exception:
-            pass
+            await asyncio.sleep(5)
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────

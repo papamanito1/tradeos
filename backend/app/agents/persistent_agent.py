@@ -631,6 +631,37 @@ class PersistentAgent:
 
     # ── Scan ──────────────────────────────────────────────────────────────────
 
+    # ── Direct price fetch (bypasses market stream) ───────────────────────────
+    async def _direct_price(self) -> float:
+        """Fetch BTC price directly — multi-source, no market stream dependency."""
+        import httpx
+        sources = [
+            ("CoinGecko",    "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+             lambda d: float(d["bitcoin"]["usd"])),
+            ("Kraken",       "https://api.kraken.com/0/public/Ticker?pair=XBTUSD",
+             lambda d: float(list(d["result"].values())[0]["c"][0])),
+            ("Bybit",        "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT",
+             lambda d: float(d["result"]["list"][0]["lastPrice"])),
+            ("blockchain",   "https://blockchain.info/ticker",
+             lambda d: float(d["USD"]["last"])),
+            ("BinanceUS",    "https://api.binance.us/api/v3/ticker/price?symbol=BTCUSDT",
+             lambda d: float(d["price"])),
+            ("Binance",      "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+             lambda d: float(d["price"])),
+        ]
+        async with httpx.AsyncClient(timeout=7.0, follow_redirects=True) as client:
+            for name, url, parse in sources:
+                try:
+                    r = await client.get(url)
+                    if r.status_code == 200:
+                        price = parse(r.json())
+                        if price > 0:
+                            logger.info(f"[DirectPrice] {name} → ${price:,.2f}")
+                            return price
+                except Exception as e:
+                    logger.warning(f"[DirectPrice] {name} failed: {type(e).__name__}: {e}")
+        return 0.0
+
     async def _scan(self) -> None:
         from app.agents.live_market_stream import LIVE_CANDLES, LIVE_PRICES, LIVE_ORDERBOOK
 
@@ -644,6 +675,26 @@ class PersistentAgent:
         price_data = LIVE_PRICES.get("BTC/USDT", {})
         live_price = price_data.get("last", 0.0)
 
+        # If market stream hasn't populated price yet, fall back through candles then direct fetch
+        if live_price <= 0 and candles1m:
+            live_price = candles1m[-1]["close"]
+            if self.scan_count % 5 == 1:
+                self._log(f"⚠ Ticker missing — using last 1m candle close ${live_price:,.0f}")
+
+        if live_price <= 0:
+            # Last resort: hit a public API directly
+            if self.scan_count % 3 == 1:   # throttle to every 3rd scan (~30s)
+                self._log("⚠ Stream empty — fetching price directly…")
+                live_price = await self._direct_price()
+                if live_price > 0:
+                    # Seed the market stream cache so future scans are fast
+                    LIVE_PRICES["BTC/USDT"] = {"last": live_price, "bid": live_price, "ask": live_price}
+                    self._log(f"✓ Direct fetch OK → ${live_price:,.0f}")
+
+        if live_price <= 0:
+            self._log("⚠ No price data from any source — skipping scan")
+            return
+
         # Diagnostic log every 10 scans
         if self.scan_count % 10 == 1:
             ob_bids = len(orderbook.get("bids", [])) if orderbook else 0
@@ -651,15 +702,6 @@ class PersistentAgent:
                 f"DATA: 1m={len(candles1m)} bars · 15m={len(candles15m)} bars · "
                 f"OB={ob_bids} levels · price=${live_price:,.0f}"
             )
-
-        # If ticker hasn't arrived yet, fall back to last candle close price
-        if live_price <= 0 and candles1m:
-            live_price = candles1m[-1]["close"]
-            if self.scan_count % 5 == 1:
-                self._log(f"⚠ Ticker not yet available — using last candle close ${live_price:,.0f}")
-        if live_price <= 0:
-            self._log("⚠ No price data at all — skipping scan")
-            return
 
         # Update open position P&L
         self._update_positions(live_price)
