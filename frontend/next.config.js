@@ -8,8 +8,16 @@ const nextConfig = {
     NEXT_PUBLIC_WS_URL:  process.env.NEXT_PUBLIC_WS_URL  || "ws://localhost:8000",
   },
 
-  // Allow Vercel to inline env vars at build time
-  experimental: {},
+  generateBuildId: async () => `build-${Date.now()}`,
+
+  headers: async () => [
+    {
+      source: "/(.*)",
+      headers: [
+        { key: "Cache-Control", value: "no-store, must-revalidate" },
+      ],
+    },
+  ],
 };
 
 module.exports = nextConfig;
