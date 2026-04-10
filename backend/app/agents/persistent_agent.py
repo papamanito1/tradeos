@@ -157,6 +157,9 @@ def _run_momentum(candles15m: list[dict]) -> dict:
     body_ratio = body / bar_range if bar_range > 0 else 0
     ema50_slope = (ema50[i] - ema50[i - 5]) / ema50[i - 5]
 
+    # EMA21 slope for extra trend confirmation
+    ema21_slope = (ema21[i] - ema21[i - 3]) / ema21[i - 3] if ema21[i - 3] > 0 else 0
+
     long_conds = [
         ema50_slope > 0.0001,
         cur["close"] > ema50[i],
@@ -167,31 +170,31 @@ def _run_momentum(candles15m: list[dict]) -> dict:
         0.0003 <= atr_pct <= 0.040,
     ]
     short_conds = [
-        ema50_slope < -0.0001,
+        ema50_slope < -0.0003,                       # stricter: need clear downtrend
         cur["close"] < ema50[i],
-        rsi_a[i] <= 50,
+        rsi_a[i] <= 45,                              # stricter: need proper bearish RSI
         cur["close"] < cur["open"],
-        abs(cur["high"] - ema21[i]) <= 2.5 * atr_a[i] or abs(cur["high"] - vwap_a[i]) <= 2.5 * atr_a[i],
-        vol_ratio >= 0.7,
-        0.0003 <= atr_pct <= 0.040,
+        abs(cur["high"] - ema21[i]) <= 2.0 * atr_a[i] or abs(cur["high"] - vwap_a[i]) <= 2.0 * atr_a[i],
+        vol_ratio >= 0.8,                            # stricter: need stronger volume confirmation
+        ema21_slope < -0.0001,                       # EMA21 also declining
     ]
 
     long_met  = sum(1 for c in long_conds if c)
     short_met = sum(1 for c in short_conds if c)
     is_long_bias  = ema50_slope > 0
-    is_short_bias = ema50_slope < 0
+    is_short_bias = ema50_slope < -0.0002
     bias = "long" if long_met >= 3 else "short" if short_met >= 3 else "neutral"
     met_count = long_met if is_long_bias else short_met
 
     full_long  = long_met  >= 4 and is_long_bias
-    full_short = short_met >= 4 and is_short_bias
+    full_short = short_met >= 5 and is_short_bias    # stricter: need 5/7 for shorts
     signal = None
 
     if full_long or full_short:
         d      = "long" if full_long else "short"
         entry  = cur["close"]
-        sl_d   = 1.5 * atr_a[i]
-        tp_d   = 3.0 * atr_a[i]
+        sl_d   = 2.0 * atr_a[i] if d == "long" else 2.5 * atr_a[i]   # wider SL for shorts
+        tp_d   = 3.5 * atr_a[i] if d == "long" else 4.0 * atr_a[i]   # higher R:R target
         sl     = entry - sl_d if d == "long" else entry + sl_d
         tp     = entry + tp_d if d == "long" else entry - tp_d
         mc     = long_met if d == "long" else short_met
@@ -204,14 +207,15 @@ def _run_momentum(candles15m: list[dict]) -> dict:
         raw     = 0.25 * vol_s + 0.25 * rsi_s + 0.20 * slope_s + 0.15 * body_s + 0.15 * cond_s
         conf    = max(0.52, min(raw, 0.99))
 
+        rr_ratio = round(tp_d / sl_d, 1)
         signal = {
             "direction": d,
             "entry": round(entry, 2),
             "sl":    round(sl, 2),
             "tp":    round(tp, 2),
             "confidence": round(conf, 3),
-            "rr": "1:2.0",
-            "reasoning": f"Momentum [{mc}/7] {d.upper()}: slope {ema50_slope * 100:.3f}%, RSI {rsi_a[i]:.1f}, vol {vol_ratio:.1f}×",
+            "rr": f"1:{rr_ratio}",
+            "reasoning": f"Momentum [{mc}/7] {d.upper()}: slope {ema50_slope * 100:.3f}%, RSI {rsi_a[i]:.1f}, vol {vol_ratio:.1f}×, SL ${sl_d:.0f}",
         }
 
     return {"bias": bias, "signal": signal, "met_count": met_count, "total": 7, "name": "Momentum 15m"}
