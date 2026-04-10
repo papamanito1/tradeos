@@ -1,31 +1,35 @@
 "use client";
 
 /**
- * useMasterAgent — Multi-Strategy Confluence Brain
- * ──────────────────────────────────────────────────
- * The "Master Agent" aggregates signals from all three strategies
- * (Momentum Velocity, HFT VWAP Scalper, ORB-30 Breakout) and applies
- * a multi-layer intelligence engine modeled on top hedge fund methodology:
+ * useMasterAgent — 4-Strategy Confluence Brain v2
+ * ─────────────────────────────────────────────────
+ * Aggregates ALL 4 live strategy signals + server-side agent data.
+ * Models a senior hedge fund analyst with full market context access:
  *
- *  Layer 1 — Strategy Consensus   : How many strategies agree on direction?
- *  Layer 2 — Conviction Scoring   : Weighted score 0-100 based on signal quality
+ *  Layer 1 — Strategy Consensus   : 4 strategies vote (need ≥2/4 aligned)
+ *  Layer 2 — Conviction Scoring   : Weighted 0-100, 4-strategy Kelly sizing
  *  Layer 3 — Market Regime        : Trending / Ranging / Volatile / Unknown
- *  Layer 4 — Kelly Position Size  : Fractional Kelly based on strategy backtests
- *  Layer 5 — Risk Protocol        : Never trade against consensus; max DD gates
- *  Layer 6 — Commentary Engine    : Real-time analyst narrative (Bloomberg-style)
+ *  Layer 4 — Kelly Position Size  : Fractional Kelly scaled by conviction
+ *  Layer 5 — Risk Protocol        : Multi-timeframe gates, ATR volatility filter
+ *  Layer 6 — Commentary Engine    : Bloomberg-style live narrative, 30s rotation
+ *  Layer 7 — Site Intelligence    : Full access to server agent P&L, positions,
+ *                                   trades, logs, and all strategy conditions
  *
- *  Conviction grades:
- *   A+ (85+)  → 3/3 consensus, high conditions, strong signals → Full size
- *   A  (70+)  → 2/3 consensus, most conditions met             → 75% size
- *   B  (55+)  → 2/3 weak or 3/3 soft                          → 50% size
- *   C  (40+)  → Monitor only, reduce size                      → 25% size
- *   X  (<40)  → No trade — insufficient edge
+ *  Conviction grades (4-strategy model):
+ *   A+ (85+)  → 4/4 consensus or 3/4 + strong signals  → Full size
+ *   A  (70+)  → 3/4 consensus, conditions mostly met    → 75% size
+ *   B  (55+)  → 2/4 consensus, good signal quality      → 50% size
+ *   C  (40+)  → 2/4 weak or diverging                  → 25% size
+ *   X  (<40)  → No trade — wait for confluence
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { StrategyResult } from "./useStrategyEngine";
 import { ORBResult } from "./useORBStrategy";
+import { HFTResult } from "./useHFTScalper";
+import { OBIResult } from "./useOBIScalper";
 import { BinanceCandle, BinanceTicker, BinanceOrderBook } from "./useBinanceStream";
+import { ServerStatus } from "./useServerAgent";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export type ConvictionGrade = "A+" | "A" | "B" | "C" | "X";
@@ -37,7 +41,7 @@ export interface ChatMessage {
   role:      "agent" | "user";
   content:   string;
   timestamp: string;
-  type?:     "auto" | "response" | "system"; // auto = periodic thought, response = reply
+  type?:     "auto" | "response" | "system";
 }
 
 export interface StrategyVote {
@@ -45,7 +49,9 @@ export interface StrategyVote {
   bias:     "long" | "short" | "neutral";
   signal:   boolean;
   conf:     number;
-  met_pct:  number;  // conditions met %
+  met_pct:  number;
+  timeframe: string;
+  reasoning?: string;
 }
 
 export interface MasterSignal {
@@ -53,68 +59,35 @@ export interface MasterSignal {
   entry:      number;
   sl:         number;
   tp:         number;
-  size_pct:   number;   // recommended % of account
+  size_pct:   number;
   rr:         string;
-  conviction: number;   // 0-100
+  conviction: number;
   grade:      ConvictionGrade;
   reasoning:  string;
   timestamp:  string;
 }
 
 export interface MasterState {
-  // Core decision
   direction:        AgentDirection;
-  conviction:       number;          // 0–100
+  conviction:       number;
   grade:            ConvictionGrade;
   signal:           MasterSignal | null;
-
-  // Strategy votes
   votes:            StrategyVote[];
-  consensus_count:  number;          // 0-3 strategies aligned
+  consensus_count:  number;
   regime:           MarketRegime;
-
-  // Live commentary & chat
-  thoughts:         string[];        // legacy — auto-thoughts as plain strings
-  chat:             ChatMessage[];   // unified chat log (auto + user + responses)
+  thoughts:         string[];
+  chat:             ChatMessage[];
   last_update:      string;
-
-  // Paper P&L tracking
-  paper_position: {
-    open:       boolean;
-    direction?: AgentDirection;
-    entry?:     number;
-    sl?:        number;
-    tp?:        number;
-    current?:   number;
-    pnl_usd?:   number;
-    pnl_pct?:   number;
-    size_usdc?: number;
-    btc_qty?:   number;
-  } | null;
+  paper_position:   null; // deprecated — now via server
   paper_stats: {
-    total_pnl:    number;
-    wins:         number;
-    losses:       number;
-    win_rate:     number;
-    total_trades: number;
-    best:         number;
-    worst:        number;
+    total_pnl: number; wins: number; losses: number;
+    win_rate: number;  total_trades: number; best: number; worst: number;
   };
-
-  // Market context
   last_price:  number | null;
   price_24h:   number | null;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function grade(conviction: number): ConvictionGrade {
-  if (conviction >= 85) return "A+";
-  if (conviction >= 70) return "A";
-  if (conviction >= 55) return "B";
-  if (conviction >= 40) return "C";
-  return "X";
-}
-
+// ─── Indicator helpers ────────────────────────────────────────────────────────
 function ema(vals: number[], p: number): number {
   if (vals.length < p) return NaN;
   const k = 2 / (p + 1);
@@ -124,120 +97,150 @@ function ema(vals: number[], p: number): number {
 }
 
 function atr(candles: BinanceCandle[], p = 14): number {
-  const trs = candles.slice(1).map((c, i) => {
-    const prev = candles[i];
-    return Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close));
-  });
+  const trs = candles.slice(1).map((c, i) => Math.max(
+    c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close)
+  ));
   if (trs.length < p) return NaN;
   return trs.slice(-p).reduce((a, b) => a + b, 0) / p;
 }
 
-// ─── Commentary engine ────────────────────────────────────────────────────────
-// Each thought is a pithy analyst observation. Rotated frequently so it "feels alive".
-
-function buildThought(ctx: {
-  price: number | null;
-  ema50: number | null;
-  ema21: number | null;
-  atrPct: number | null;
-  votes: StrategyVote[];
-  orb:  ORBResult;
-  regime: MarketRegime;
-  ob: BinanceOrderBook | null;
-  direction: AgentDirection;
-  conviction: number;
-  grade: ConvictionGrade;
-  candles15m: BinanceCandle[];
-  ticker: BinanceTicker | null;
-  signal?: MasterSignal | null;
-}, ts: string): string {
-  const { price, direction, conviction, grade: g, signal, votes } = ctx;
-  const aligned = votes.filter(v => v.bias === direction.toLowerCase()).length;
-  const pStr = price ? `$${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
-
-  // If there is an active signal → always show the full signal card
-  if (signal && direction !== "FLAT") {
-    const riskPct = ((Math.abs(signal.entry - signal.sl) / signal.entry) * 100).toFixed(2);
-    return [
-      `${direction}  ·  Entry ${pStr}  ·  SL $${signal.sl.toFixed(0)} (${riskPct}%)  ·  TP $${signal.tp.toFixed(0)}  ·  ${signal.rr} R:R`,
-      `Grade ${g}  ·  ${conviction}/100  ·  ${aligned}/3 strategies aligned  ·  Size ${signal.size_pct}%`,
-    ].join("\n");
+function rsiLast(closes: number[], p = 14): number {
+  if (closes.length <= p) return NaN;
+  const d = closes.slice(1).map((c, i) => c - closes[i]);
+  const g = d.map(x => Math.max(x, 0)), l = d.map(x => Math.abs(Math.min(x, 0)));
+  let ag = g.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  let al = l.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  for (let i = p; i < d.length; i++) {
+    ag = (ag * (p - 1) + g[i]) / p; al = (al * (p - 1) + l[i]) / p;
   }
-
-  // No signal — show bias status and what's missing
-  if (direction !== "FLAT") {
-    const needed = 55 - conviction;
-    return `${direction} bias  ·  ${conviction}/100 conviction (${g})  ·  ${aligned}/3 aligned  ·  Need ${needed > 0 ? `+${needed} pts` : "signal trigger"}  ·  BTC ${pStr}`;
-  }
-
-  return `FLAT  ·  No edge  ·  ${conviction}/100  ·  Strategies diverging  ·  BTC ${pStr}  ·  Waiting for confluence`;
+  return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
 }
 
-// ─── Conviction calculator ────────────────────────────────────────────────────
+function grade(conviction: number): ConvictionGrade {
+  if (conviction >= 85) return "A+";
+  if (conviction >= 70) return "A";
+  if (conviction >= 55) return "B";
+  if (conviction >= 40) return "C";
+  return "X";
+}
+
+// ─── Market regime detector ───────────────────────────────────────────────────
+function detectRegime(candles: BinanceCandle[]): MarketRegime {
+  if (candles.length < 30) return "UNKNOWN";
+  const closes = candles.slice(-30).map(c => c.close);
+  const e14 = ema(closes, 14), e28 = ema(closes.slice(0, -5), 14);
+  const atrV = atr(candles.slice(-20));
+  const mid  = closes[closes.length - 1];
+  if (!isNaN(atrV) && atrV / mid > 0.02) return "VOLATILE";
+  if (!isNaN(e14) && !isNaN(e28) && Math.abs((e14 - e28) / mid) > 0.002) return "TRENDING";
+  if (!isNaN(e14)) return "RANGING";
+  return "UNKNOWN";
+}
+
+// ─── Conviction calculator (4-strategy model) ─────────────────────────────────
 function calcConviction(
   votes:     StrategyVote[],
   direction: AgentDirection,
   atrPct:    number | null,
 ): number {
   if (direction === "FLAT") return 0;
-
-  const aligned = votes.filter(v => v.bias === direction.toLowerCase());
+  const dir = direction.toLowerCase();
+  const aligned = votes.filter(v => v.bias === dir);
   const n = aligned.length;
   if (n === 0) return 0;
 
-  // Alignment multiplier
-  const alignMult = n === 3 ? 1.6 : n === 2 ? 1.15 : 0.6;
+  // Alignment multiplier: rewards strong consensus
+  const alignMult = n === 4 ? 2.0 : n === 3 ? 1.4 : n === 2 ? 1.0 : 0.5;
 
-  // Average conditions met %
-  const avgMet = aligned.reduce((s, v) => s + v.met_pct, 0) / aligned.length;
+  // Quality score: avg conditions met × avg signal confidence
+  const avgMet  = aligned.reduce((s, v) => s + v.met_pct, 0) / n;
+  const signals = aligned.filter(v => v.signal);
+  const avgConf = signals.length
+    ? signals.reduce((s, v) => s + v.conf, 0) / signals.length
+    : avgMet * 0.7;
 
-  // Average confidence of signalling strategies
-  const signalling = aligned.filter(v => v.signal);
-  const avgConf    = signalling.length
-    ? signalling.reduce((s, v) => s + v.conf, 0) / signalling.length
-    : aligned.reduce((s, v) => s + v.met_pct, 0) / aligned.length;
+  // Signal bonus: extra weight when strategies actually fire signals
+  const signalBonus = signals.length / 4;
 
-  // Volatility discount
-  const volDiscount = atrPct != null && atrPct > 0.018 ? 0.8 : 1.0;
+  // Volatility discount: reduce size in high-vol environments
+  const volDiscount = atrPct != null && atrPct > 0.018 ? 0.82 : 1.0;
 
-  const raw = 35 * alignMult * (0.4 + avgMet * 0.4 + avgConf * 0.4) * volDiscount;
+  const raw = 30 * alignMult * (0.35 + avgMet * 0.35 + avgConf * 0.30 + signalBonus * 0.15) * volDiscount;
   return Math.min(Math.round(raw), 100);
 }
 
-// ─── Market regime detector ───────────────────────────────────────────────────
-function detectRegime(candles: BinanceCandle[]): MarketRegime {
-  if (candles.length < 30) return "UNKNOWN";
-  const closes  = candles.slice(-30).map(c => c.close);
-  const ema14   = ema(closes, 14);
-  const ema28   = ema(closes, Math.min(28, closes.length));
-  const atrVal  = atr(candles.slice(-20));
-  const mid     = closes[closes.length - 1];
-  const atrPct  = atrVal / mid;
-
-  if (atrPct > 0.02) return "VOLATILE";
-  if (!isNaN(ema14) && !isNaN(ema28)) {
-    const emaSlope = (ema14 - ema(closes.slice(0, -5), 14)) / mid;
-    if (Math.abs(emaSlope) > 0.002) return "TRENDING";
-    return "RANGING";
-  }
-  return "UNKNOWN";
-}
-
-// ─── Kelly position size ──────────────────────────────────────────────────────
-// Uses weighted average of strategy backtests:
-//   Momentum: ~55% WR, ~2.0 R:R → Kelly = 0.55 - 0.45/2.0 = 32.5%
-//   ORB-30:   55.3% WR, 2.25 R:R → Kelly = 35.5%
-//   HFT:      ~52% WR, ~1.2 R:R → Kelly = 18.3%
-// Fractional (25%) Kelly, scaled by conviction
+// ─── Kelly position sizing (4-strategy blend) ──────────────────────────────
+// Blended Kelly from all 4 strategy backtests:
+//   Momentum 15m: 55% WR, 2.0 R:R → Kelly = 32.5%
+//   HFT Scalper:  52% WR, 1.5 R:R → Kelly = 18.7%
+//   ORB-30:       55% WR, 2.2 R:R → Kelly = 35.0%
+//   OBI Scalper:  53% WR, 2.0 R:R → Kelly = 24.5%
+// Blended ≈ 27.7%  →  25% fractional = 6.9%  →  cap at 5%
 function calcSizePct(conviction: number, alignedCount: number): number {
-  const fullKelly = 0.30;                         // avg of 3 strategies
-  const fracKelly = fullKelly * 0.25;             // 25% fractional Kelly = 7.5%
+  const fracKelly = 0.277 * 0.25;
   const convScale = conviction / 100;
-  const alignBonus= alignedCount === 3 ? 1.3 : alignedCount === 2 ? 1.0 : 0.6;
-  return Math.min(Math.round(fracKelly * convScale * alignBonus * 1000) / 10, 5.0); // max 5%
+  const alignBonus = alignedCount >= 4 ? 1.4 : alignedCount === 3 ? 1.15 : 1.0;
+  return Math.min(Math.round(fracKelly * convScale * alignBonus * 1000) / 10, 5.0);
 }
 
-// ─── Chat response engine ─────────────────────────────────────────────────────
+// ─── Commentary builder ───────────────────────────────────────────────────────
+function buildThought(ctx: {
+  price: number | null;
+  atrPct: number | null;
+  votes: StrategyVote[];
+  regime: MarketRegime;
+  direction: AgentDirection;
+  conviction: number;
+  grade: ConvictionGrade;
+  signal?: MasterSignal | null;
+  serverData: ServerStatus | null;
+  obi: number | null;
+  rsi15m: number | null;
+}, ts: string): string {
+  const { price, direction, conviction, grade: g, signal, votes, regime, serverData, obi, rsi15m, atrPct } = ctx;
+  const pStr = price ? `$${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
+  const aligned = votes.filter(v => v.bias === direction.toLowerCase()).length;
+  const serverPos = serverData?.open_positions ?? [];
+  const serverStats = serverData?.stats;
+
+  // Active signal → always show the trade card
+  if (signal && direction !== "FLAT" && conviction >= 55) {
+    const riskPct = ((Math.abs(signal.entry - signal.sl) / signal.entry) * 100).toFixed(2);
+    const lines = [
+      `${direction}  ·  ${pStr}  ·  SL $${signal.sl.toFixed(0)} (${riskPct}%)  ·  TP $${signal.tp.toFixed(0)}  ·  ${signal.rr}`,
+      `Grade ${g}  ·  ${conviction}/100  ·  ${aligned}/4 strategies aligned  ·  ${regime}`,
+    ];
+    if (serverPos.length > 0)
+      lines.push(`Server: ${serverPos.length} open position${serverPos.length > 1 ? "s" : ""}`);
+    return lines.join("\n");
+  }
+
+  // Bias but no signal yet
+  if (direction !== "FLAT") {
+    const needed = Math.max(0, 55 - conviction);
+    const signallingVotes = votes.filter(v => v.signal && v.bias === direction.toLowerCase());
+    const parts = [
+      `${direction} bias  ·  ${conviction}/100 (${g})  ·  ${aligned}/4 aligned  ·  BTC ${pStr}`,
+      `Need ${needed > 0 ? `+${needed} pts` : "signal trigger"}  ·  ${signallingVotes.length}/4 strategies signalling`,
+    ];
+    if (obi !== null) parts.push(`OBI ${obi >= 0 ? "+" : ""}${obi.toFixed(3)}  ·  RSI(15m) ${rsi15m?.toFixed(1) ?? "—"}  ·  ATR ${atrPct ? (atrPct * 100).toFixed(2) + "%" : "—"}`);
+    return parts.join("\n");
+  }
+
+  // Flat — describe what we're watching
+  const mostVoted = votes.reduce((acc: Record<string, number>, v) => {
+    acc[v.bias] = (acc[v.bias] || 0) + 1; return acc;
+  }, {});
+  const dominant = Object.entries(mostVoted).sort((a, b) => b[1] - a[1])[0];
+  const serverStat = serverStats ? `Server: ${serverStats.total_trades} trades · P&L ${serverStats.total_pnl >= 0 ? "+" : ""}$${serverStats.total_pnl.toFixed(2)}` : "";
+  return [
+    `FLAT  ·  No edge  ·  ${conviction}/100  ·  ${dominant ? `${dominant[1]}/4 leaning ${dominant[0].toUpperCase()}` : "strategies diverging"}`,
+    `Regime: ${regime}  ·  BTC ${pStr}${obi !== null ? `  ·  OBI ${obi >= 0 ? "+" : ""}${obi.toFixed(3)}` : ""}`,
+    serverStat,
+  ].filter(Boolean).join("\n");
+}
+
+// ─── Smart chat response engine ───────────────────────────────────────────────
 interface ResponseCtx {
   price:          number | null;
   direction:      AgentDirection;
@@ -247,387 +250,420 @@ interface ResponseCtx {
   votes:          StrategyVote[];
   signal:         MasterSignal | null;
   atrPct:         number | null;
+  obi:            number | null;
+  rsi15m:         number | null;
   ema50v:         number | null;
   ema21v:         number | null;
-  orbResult:      ORBResult;
   momentumResult: StrategyResult;
+  orbResult:      ORBResult;
+  hftResult:      HFTResult;
+  obiResult:      OBIResult;
   ticker:         BinanceTicker | null;
-  paperPos:       MasterState["paper_position"];
-  paperStats:     MasterState["paper_stats"];
+  serverData:     ServerStatus | null;
 }
 
-function formatSignal(sig: MasterSignal, conv: number, g: ConvictionGrade, aligned: number): string {
+function fmtSig(sig: MasterSignal, conv: number, g: ConvictionGrade, aligned: number): string {
   const riskUsd  = Math.abs(sig.entry - sig.sl);
-  const rewardUsd= Math.abs(sig.tp - sig.entry);
+  const rwdUsd   = Math.abs(sig.tp - sig.entry);
   const riskPct  = (riskUsd / sig.entry * 100).toFixed(2);
   return [
-    `${sig.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}  ·  Grade ${g}  ·  ${conv}/100  ·  ${aligned}/3 aligned`,
-    `Entry   $${sig.entry.toFixed(0)}`,
-    `SL      $${sig.sl.toFixed(0)}  (−${riskPct}%  /  −$${riskUsd.toFixed(0)})`,
-    `TP      $${sig.tp.toFixed(0)}  (+$${rewardUsd.toFixed(0)})`,
-    `R:R     ${sig.rr}  ·  Size ${sig.size_pct}% of account`,
+    `${sig.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}  ·  Grade ${g}  ·  ${conv}/100  ·  ${aligned}/4 strategies`,
+    `Entry  $${sig.entry.toFixed(0)}`,
+    `SL     $${sig.sl.toFixed(0)}  (−${riskPct}% / −$${riskUsd.toFixed(0)})`,
+    `TP     $${sig.tp.toFixed(0)}  (+$${rwdUsd.toFixed(0)})`,
+    `R:R    ${sig.rr}  ·  Size ${sig.size_pct}% of account`,
   ].join("\n");
 }
 
 function generateResponse(userMsg: string, ctx: ResponseCtx): string {
+  const m   = userMsg.toLowerCase();
   const p   = ctx.price;
   const pStr = p ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
-  const dir  = ctx.direction;
-  const conv = ctx.conviction;
-  const g    = ctx.grade;
-  const sig  = ctx.signal;
-  const aligned = ctx.votes.filter(v => v.bias === dir.toLowerCase()).length;
+  const { direction: dir, conviction: conv, grade: g, signal: sig, votes, regime, serverData } = ctx;
+  const aligned = votes.filter(v => v.bias === dir.toLowerCase()).length;
+  const server  = serverData;
+  const stats   = server?.stats;
+  const positions = server?.open_positions ?? [];
 
-  // ── Always lead with the signal if one exists ────────────────────────────
-  if (sig && dir !== "FLAT" && conv >= 55) {
-    const base = formatSignal(sig, conv, g, aligned);
+  // ── Helper: always prepend signal if active ──────────────────────────────
+  const sigBlock = (suffix = "") => sig && dir !== "FLAT" && conv >= 55
+    ? fmtSig(sig, conv, g, aligned) + (suffix ? "\n\n" + suffix : "")
+    : null;
 
-    // Add a one-line context relevant to the question
-    const m = userMsg.toLowerCase();
-    if (/paper|stats|pnl|p&l|how.*doing/i.test(m)) {
-      const st = ctx.paperStats; const pos = ctx.paperPos;
-      const posLine = pos?.open
-        ? `Open ${pos.direction} @ $${pos.entry?.toFixed(0)} · unrealized ${(pos.pnl_usd ?? 0) >= 0 ? "+" : ""}$${(pos.pnl_usd ?? 0).toFixed(2)}`
-        : "No open paper position";
-      return `${base}\n\nPaper account: ${st.total_trades} trades · ${st.wins}W/${st.losses}L · ${st.total_pnl >= 0 ? "+" : ""}$${st.total_pnl.toFixed(2)} P&L\n${posLine}`;
+  // ── Server: positions / open trades ──────────────────────────────────────
+  if (/position|open trade|open pos|current trade/i.test(m)) {
+    if (positions.length === 0) {
+      return sigBlock("No open server positions — agent scanning for entry.") ?? "No open server positions. Agent is scanning all 4 strategies.";
     }
-    if (/wait|patience|should.*trade|enter|execute/i.test(m)) {
-      const verdict = conv >= 85 ? "A+ setup — execute." : conv >= 70 ? "Grade A — take it." : "Grade B — 50% size.";
+    const posLines = positions.map(pos => {
+      const pnl = pos.unrealized_pnl ?? 0;
+      return `  ${pos.direction.toUpperCase()} via ${pos.strategy_name}  ·  Entry $${pos.entry.toFixed(0)}  ·  P&L ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}  ·  ${pos.confidence ? `conf ${(pos.confidence * 100).toFixed(0)}%` : ""}`;
+    }).join("\n");
+    return `Open positions (${positions.length}):\n${posLines}`;
+  }
+
+  // ── Server: P&L / stats / performance ─────────────────────────────────────
+  if (/pnl|p&l|profit|performance|stats|win rate|trades|how.*doing|account/i.test(m)) {
+    if (!stats) return "Server agent not connected — cannot retrieve stats.";
+    const unrealized = positions.reduce((s, p) => s + (p.unrealized_pnl ?? 0), 0);
+    const lines = [
+      `Server Agent Performance`,
+      `Trades:  ${stats.total_trades} (${stats.wins}W / ${stats.losses}L)`,
+      `Win Rate: ${stats.win_rate.toFixed(1)}%`,
+      `Realized P&L: ${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)}`,
+      positions.length > 0 ? `Unrealized: ${unrealized >= 0 ? "+" : ""}$${unrealized.toFixed(2)} (${positions.length} positions)` : "No open positions",
+      stats.best_trade  ? `Best trade:  +$${stats.best_trade.toFixed(2)}` : "",
+      stats.worst_trade ? `Worst trade: $${stats.worst_trade.toFixed(2)}` : "",
+    ].filter(Boolean);
+    const s = sigBlock();
+    return s ? `${s}\n\n${lines.join("\n")}` : lines.join("\n");
+  }
+
+  // ── Agent log / activity ──────────────────────────────────────────────────
+  if (/log|activity|what.*doing|last.*scan|recent/i.test(m)) {
+    const logs = server?.log?.slice(0, 5) ?? [];
+    if (logs.length === 0) return "No agent log data — server may be starting up.";
+    return `Recent agent activity:\n${logs.map(l => `  ${l}`).join("\n")}`;
+  }
+
+  // ── Individual strategy queries ───────────────────────────────────────────
+  if (/momentum|mv15|15m|15 min/i.test(m) && !/orb|hft|obi/i.test(m)) {
+    const mv = ctx.momentumResult;
+    const vs = votes.find(v => v.name === "Momentum 15m");
+    const lines = [
+      `Momentum 15m  ·  Bias: ${mv.bias.toUpperCase()}  ·  ${mv.met_count}/${mv.total ?? 7} conditions`,
+      mv.signal ? `Signal: ${mv.signal.direction.toUpperCase()} @ $${mv.signal.entry?.toFixed(0)} · SL $${mv.signal.sl?.toFixed(0)} · TP $${mv.signal.tp?.toFixed(0)} · conf ${(mv.signal.confidence * 100).toFixed(0)}%` : "No signal",
+      `EMA50: $${ctx.ema50v?.toFixed(0) ?? "—"}  ·  EMA21: $${ctx.ema21v?.toFixed(0) ?? "—"}`,
+      vs ? `Agent weight: ${(vs.met_pct * 100).toFixed(0)}% conditions met` : "",
+    ].filter(Boolean);
+    return lines.join("\n");
+  }
+
+  if (/orb|opening range|breakout/i.test(m) && !/hft|obi|momentum/i.test(m)) {
+    const orb = ctx.orbResult;
+    return [
+      `ORB-30  ·  Bias: ${orb.bias.toUpperCase()}  ·  ${orb.met_count}/${orb.total ?? 4} conditions`,
+      orb.signal ? `Signal: ${orb.signal.direction.toUpperCase()} @ $${orb.signal.entry?.toFixed(0)} · conf ${(orb.signal.confidence * 100).toFixed(0)}%` : "No signal — waiting for OR breakout",
+    ].join("\n");
+  }
+
+  if (/hft|vwap|scalp.*1m|high freq/i.test(m) && !/obi|momentum|orb/i.test(m)) {
+    const hft = ctx.hftResult;
+    const ind = hft.indicators;
+    return [
+      `HFT Scalper  ·  Bias: ${hft.bias.toUpperCase()}  ·  ${hft.met_count}/${hft.total ?? 7} conditions`,
+      hft.signal ? `Signal: ${hft.signal.direction.toUpperCase()} @ $${hft.signal.entry?.toFixed(0)} · SL $${hft.signal.sl?.toFixed(0)} · conf ${(hft.signal.confidence * 100).toFixed(0)}%` : "No signal",
+      `VWAP: $${ind.vwap_1m?.toFixed(0) ?? "—"}  ·  OBI: ${ind.obi?.toFixed(3) ?? "—"}  ·  ATR: $${ind.atr_1m?.toFixed(0) ?? "—"}`,
+    ].join("\n");
+  }
+
+  if (/obi|order book|imbalance|book/i.test(m) && !/momentum|orb/i.test(m)) {
+    const obi = ctx.obiResult;
+    const ind = obi.obi_indicators;
+    const obiVal = ind.obi ?? ctx.obi;
+    return [
+      `OBI Scalper  ·  Bias: ${obi.bias.toUpperCase()}  ·  ${obi.met_count}/${obi.total ?? 3} conditions`,
+      obi.signal ? `Signal: ${obi.signal.direction.toUpperCase()} @ $${obi.signal.entry?.toFixed(0)} · conf ${(obi.signal.confidence * 100).toFixed(0)}%` : "No signal",
+      `OBI: ${obiVal != null ? (obiVal >= 0 ? "+" : "") + obiVal.toFixed(3) : "—"}  ·  EMA9: $${ind.ema9?.toFixed(0) ?? "—"}  ·  RSI: ${ind.rsi?.toFixed(1) ?? "—"}`,
+    ].join("\n");
+  }
+
+  // ── Regime / trend / volatility ───────────────────────────────────────────
+  if (/regime|trend|volatile|vol|atr|market condition/i.test(m)) {
+    const atrUsd  = p && ctx.atrPct ? (p * ctx.atrPct).toFixed(0) : "—";
+    const rsiStr  = ctx.rsi15m?.toFixed(1) ?? "—";
+    const e50Str  = ctx.ema50v?.toFixed(0) ?? "—";
+    const e21Str  = ctx.ema21v?.toFixed(0) ?? "—";
+    return [
+      `Market Regime: ${regime}  ·  BTC ${pStr}`,
+      `ATR(14): $${atrUsd} (${ctx.atrPct ? (ctx.atrPct * 100).toFixed(2) + "%" : "—"} of price)`,
+      `RSI(15m): ${rsiStr}  ·  EMA50: $${e50Str}  ·  EMA21: $${e21Str}`,
+      regime === "TRENDING" ? `Trending market — momentum and breakout strategies favoured` :
+      regime === "RANGING"  ? `Ranging market — mean-reversion and OBI scalping favoured` :
+      regime === "VOLATILE" ? `High volatility — reduce size, widen stops, use OBI only` :
+      `Low data — monitoring before committing edge`,
+    ].join("\n");
+  }
+
+  // ── Price / BTC specific ──────────────────────────────────────────────────
+  if (/btc|bitcoin|price|where.*btc|what.*price/i.test(m)) {
+    const chg = ctx.ticker?.change_pct;
+    return [
+      `BTC ${pStr}${chg !== undefined ? ` (${chg >= 0 ? "+" : ""}${chg?.toFixed(2)}% 24h)` : ""}`,
+      `EMA50: $${ctx.ema50v?.toFixed(0) ?? "—"}  ·  EMA21: $${ctx.ema21v?.toFixed(0) ?? "—"}  ·  RSI: ${ctx.rsi15m?.toFixed(1) ?? "—"}`,
+      sigBlock() ?? `Regime: ${regime}  ·  Conviction: ${conv}/100`,
+    ].filter(Boolean).join("\n");
+  }
+
+  // ── Risk / sizing ──────────────────────────────────────────────────────────
+  if (/risk|size|kelly|how much|position size|capital/i.test(m)) {
+    const sizePct = sig?.size_pct ?? calcSizePct(conv, aligned);
+    return [
+      `Position sizing (fractional Kelly, 4-strategy blend)`,
+      `Conviction: ${conv}/100 (${g})  ·  ${aligned}/4 strategies aligned`,
+      `Recommended size: ${sizePct}% of account`,
+      `Logic: ${g === "A+" ? "Full Kelly — maximum edge, 4-way confluence" : g === "A" ? "75% Kelly — strong edge, 3-way confluence" : g === "B" ? "50% Kelly — moderate edge, 2-way consensus" : "25% Kelly or less — edge insufficient for large size"}`,
+      conv < 55 ? `Not yet trading — need ${55 - conv} more conviction pts` : `✓ Trade criteria met`,
+    ].join("\n");
+  }
+
+  // ── Full status dump ──────────────────────────────────────────────────────
+  if (/status|everything|full|overview|all strategies|summary/i.test(m)) {
+    const voteLines = votes.map(v =>
+      `  ${v.name.padEnd(14)} ${v.bias.toUpperCase().padEnd(7)} ${v.signal ? "✓ SIGNAL" : `${(v.met_pct * 100).toFixed(0)}% conds`}`
+    );
+    const serverLine = stats
+      ? `\nServer: ${stats.total_trades} trades · ${stats.win_rate.toFixed(1)}% WR · P&L ${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)} · ${positions.length} open`
+      : "";
+    const s = sigBlock();
+    return (s ? s + "\n\n" : "") + [
+      `BTC ${pStr}  ·  ${regime}  ·  ${conv}/100 (${g})`,
+      `Strategy votes:`,
+      ...voteLines,
+      serverLine,
+    ].filter(Boolean).join("\n");
+  }
+
+  // ── Signal / entry / should I trade ──────────────────────────────────────
+  if (sig && dir !== "FLAT" && conv >= 55) {
+    const base = fmtSig(sig, conv, g, aligned);
+    if (/wait|patience|should|enter|execute|go/i.test(m)) {
+      const verdict = g === "A+" ? "A+ setup — execute with conviction." : g === "A" ? "Grade A — take it at 75% size." : "Grade B — 50% size, tighten SL.";
       return `${base}\n\n${verdict}`;
     }
     return base;
   }
 
-  // ── No signal — show bias status ─────────────────────────────────────────
-  const mv  = ctx.votes[0]; const orb = ctx.votes[1]; const hft = ctx.votes[2];
+  // ── Default: no signal, show best explanation ─────────────────────────────
   const needed = Math.max(0, 55 - conv);
-
-  // Paper stats question with no signal
-  if (/paper|stats|pnl|p&l|how.*doing/i.test(userMsg.toLowerCase())) {
-    const st = ctx.paperStats; const pos = ctx.paperPos;
-    const posLine = pos?.open
-      ? `Open ${pos.direction} @ $${pos.entry?.toFixed(0)} · unrealized ${(pos.pnl_usd ?? 0) >= 0 ? "+" : ""}$${(pos.pnl_usd ?? 0).toFixed(2)}`
-      : "No open position";
-    return `Paper account: ${st.total_trades} trades · ${st.wins}W/${st.losses}L · ${st.total_pnl >= 0 ? "+" : ""}$${st.total_pnl.toFixed(2)} P&L\n${posLine}\n\nNo active signal — conviction ${conv}/100`;
-  }
-
+  const voteLines = votes.map(v =>
+    `  ${v.name.padEnd(14)} ${v.bias.toUpperCase().padEnd(7)} ${v.signal ? "✓ SIGNAL" : `${(v.met_pct * 100).toFixed(0)}% conds`}`
+  );
   return [
-    `NO SIGNAL  ·  BTC ${pStr}`,
-    `Conviction  ${conv}/100 (${g})  ·  Need +${needed} pts to trigger`,
-    `Momentum    ${mv.bias.toUpperCase()}  ·  ${(mv.met_pct * 100).toFixed(0)}% conditions`,
-    `ORB-30      ${orb.bias.toUpperCase()}  ·  ${(orb.met_pct * 100).toFixed(0)}% conditions`,
-    `HFT Flow    ${hft.bias.toUpperCase()}`,
-    `${aligned}/3 strategies aligned${dir !== "FLAT" ? ` (${dir})` : " (diverging)"}  ·  Watching…`,
+    `NO SIGNAL  ·  BTC ${pStr}  ·  Conviction ${conv}/100 (${g})`,
+    `Need +${needed} pts to trigger. ${aligned}/4 strategies aligned (${dir}).`,
+    `Strategy votes:`,
+    ...voteLines,
+    ctx.atrPct ? `ATR: ${(ctx.atrPct * 100).toFixed(2)}%  ·  Regime: ${regime}` : `Regime: ${regime}`,
   ].join("\n");
 }
 
 // ─── Main hook ────────────────────────────────────────────────────────────────
-const PAPER_SIZE_USDC = 500;
-
 export function useMasterAgent(
   momentumResult: StrategyResult,
   orbResult:      ORBResult,
+  hftResult:      HFTResult,
+  obiResult:      OBIResult,
   candles15m:     BinanceCandle[],
   candles1m:      BinanceCandle[],
   ticker:         BinanceTicker | null,
   orderBook:      BinanceOrderBook | null,
-): MasterState {
-  const [thoughts, setThoughts]         = useState<string[]>([]);
-  const [chat, setChat]                 = useState<ChatMessage[]>([]);
-  const [paperPos, setPaperPos]         = useState<MasterState["paper_position"]>(null);
-  const [paperStats, setPaperStats]     = useState<MasterState["paper_stats"]>({
-    total_pnl: 0, wins: 0, losses: 0, win_rate: 0, total_trades: 0, best: 0, worst: 0,
-  });
-  const thoughtTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const paperPosRef     = useRef<MasterState["paper_position"]>(paperPos);
-  const paperStatsRef   = useRef<MasterState["paper_stats"]>(paperStats);
-  const chatMsgId       = useRef(0);
+  serverData:     ServerStatus | null,
+): MasterState & {
+  openPaperTrade:  (sig: MasterSignal) => void;
+  closePaperTrade: () => void;
+  resetPaper:      () => void;
+  sendMessage:     (msg: string) => void;
+} {
+  const [thoughts, setThoughts] = useState<string[]>([]);
+  const [chat, setChat]         = useState<ChatMessage[]>([]);
+  const thoughtTimerRef         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chatMsgId               = useRef(0);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const coreRef         = useRef<any>(null);
+  const coreRef                 = useRef<any>(null);
 
-  useEffect(() => { paperPosRef.current  = paperPos;   }, [paperPos]);
-  useEffect(() => { paperStatsRef.current = paperStats; }, [paperStats]);
-  useEffect(() => { coreRef.current = core; });          // always current
-
-  // ── Compute core state synchronously via useMemo ──────────────────────────
+  // ── Compute core state ────────────────────────────────────────────────────
   const core = (() => {
     const price = ticker?.last ?? candles15m[candles15m.length - 1]?.close ?? null;
 
-    // Strategy votes
-    const momBias = momentumResult.bias;
-    const orbBias = orbResult.bias;
-
-    // Simplified order-book OBI for mini "HFT" vote
-    let hftBias: "long" | "short" | "neutral" = "neutral";
+    // Order book imbalance
+    let obi: number | null = null;
     if (orderBook && orderBook.bids.length > 0 && orderBook.asks.length > 0) {
       const bidVol = orderBook.bids.slice(0, 10).reduce((s, l) => s + l.amount, 0);
       const askVol = orderBook.asks.slice(0, 10).reduce((s, l) => s + l.amount, 0);
-      const obi    = (bidVol - askVol) / (bidVol + askVol);
-      if (obi >  0.15) hftBias = "long";
-      if (obi < -0.15) hftBias = "short";
+      const tot = bidVol + askVol;
+      obi = tot > 0 ? (bidVol - askVol) / tot : 0;
     }
+    // Use OBI from obiResult if available
+    if (obiResult.obi_indicators.obi !== null) obi = obiResult.obi_indicators.obi;
 
+    // Technical indicators
+    const closes15 = candles15m.map(c => c.close);
+    const ema50v   = closes15.length >= 50 ? ema(closes15, 50) : null;
+    const ema21v   = closes15.length >= 21 ? ema(closes15, 21) : null;
+    const rsi15m   = closes15.length > 14   ? rsiLast(closes15) : null;
+    const atrVal   = atr(candles15m.slice(-20));
+    const atrPct   = price && !isNaN(atrVal) ? atrVal / price : null;
+
+    // Strategy votes — all 4
     const votes: StrategyVote[] = [
       {
         name: "Momentum 15m",
-        bias: momBias,
+        bias: momentumResult.bias,
         signal: !!momentumResult.signal,
-        conf:   momentumResult.signal?.confidence ?? (momentumResult.met_count / (momentumResult.total ?? 7)) * 0.7,
+        conf: momentumResult.signal?.confidence ?? (momentumResult.met_count / (momentumResult.total ?? 7)) * 0.65,
         met_pct: momentumResult.met_count / (momentumResult.total ?? 7),
+        timeframe: "15m",
+        reasoning: momentumResult.signal?.reasoning,
       },
       {
         name: "ORB-30",
-        bias: orbBias,
+        bias: orbResult.bias,
         signal: !!orbResult.signal,
-        conf:   orbResult.signal?.confidence ?? (orbResult.met_count / (orbResult.total ?? 6)) * 0.65,
-        met_pct: orbResult.met_count / (orbResult.total ?? 6),
+        conf: orbResult.signal?.confidence ?? (orbResult.met_count / (orbResult.total ?? 4)) * 0.60,
+        met_pct: orbResult.met_count / (orbResult.total ?? 4),
+        timeframe: "1m",
+        reasoning: orbResult.signal?.reasoning,
       },
       {
-        name: "HFT Flow",
-        bias: hftBias,
-        signal: hftBias !== "neutral",
-        conf:   hftBias !== "neutral" ? 0.55 : 0,
-        met_pct: hftBias !== "neutral" ? 0.6 : 0,
+        name: "HFT Scalper",
+        bias: hftResult.bias,
+        signal: !!hftResult.signal,
+        conf: hftResult.signal?.confidence ?? (hftResult.met_count / (hftResult.total ?? 7)) * 0.60,
+        met_pct: hftResult.met_count / (hftResult.total ?? 7),
+        timeframe: "1m",
+        reasoning: hftResult.signal?.reasoning,
+      },
+      {
+        name: "OBI Scalper",
+        bias: obiResult.bias,
+        signal: !!obiResult.signal,
+        conf: obiResult.signal?.confidence ?? (obiResult.met_count / (obiResult.total ?? 3)) * 0.55,
+        met_pct: obiResult.met_count / (obiResult.total ?? 3),
+        timeframe: "1m",
+        reasoning: obiResult.signal?.reasoning,
       },
     ];
 
-    // Consensus direction
+    // Consensus direction — need ≥2/4 strategies aligned
     const longCount  = votes.filter(v => v.bias === "long").length;
     const shortCount = votes.filter(v => v.bias === "short").length;
     let direction: AgentDirection = "FLAT";
-    if (longCount > shortCount && longCount >= 2)       direction = "LONG";
-    else if (shortCount > longCount && shortCount >= 2) direction = "SHORT";
-    else if (longCount === 1 && shortCount === 0)       direction = "LONG";
-    else if (shortCount === 1 && longCount === 0)       direction = "SHORT";
+    if (longCount >= 2 && longCount > shortCount)        direction = "LONG";
+    else if (shortCount >= 2 && shortCount > longCount)  direction = "SHORT";
+    else if (longCount === 1 && shortCount === 0)         direction = "LONG";
+    else if (shortCount === 1 && longCount === 0)         direction = "SHORT";
 
-    // Consensus count (how many agree with chosen direction)
     const consensusCount = direction === "LONG" ? longCount : direction === "SHORT" ? shortCount : 0;
+    const regime         = detectRegime(candles15m);
+    const conviction     = calcConviction(votes, direction, atrPct);
+    const g              = grade(conviction);
+    const sizePct        = calcSizePct(conviction, consensusCount);
 
-    // Market regime from 15m candles
-    const regime = detectRegime(candles15m);
-
-    // ATR
-    const atrVal = atr(candles15m.slice(-20));
-    const atrPct = price && !isNaN(atrVal) ? atrVal / price : null;
-
-    // EMA50 and EMA21 for commentary
-    const closes = candles15m.map(c => c.close);
-    const ema50v = closes.length >= 50 ? ema(closes, 50) : null;
-    const ema21v = closes.length >= 21 ? ema(closes, 21) : null;
-
-    // Conviction
-    const conviction = calcConviction(votes, direction, atrPct);
-    const g          = grade(conviction);
-    const sizePct    = calcSizePct(conviction, consensusCount);
-
-    // Build master signal if conviction is sufficient
+    // Master signal — pick best aligned signal from all 4
     let signal: MasterSignal | null = null;
     if (conviction >= 55 && direction !== "FLAT" && price) {
-      // Use the strongest aligned strategy's entry/SL/TP, scaled by conviction
-      const momSig = momentumResult.signal;
-      const orbSig = orbResult.signal;
+      const dir = direction.toLowerCase();
+      const dirSigs = [
+        momentumResult.signal?.direction === dir ? momentumResult.signal : null,
+        orbResult.signal?.direction === dir       ? orbResult.signal      : null,
+        hftResult.signal?.direction === dir       ? { ...hftResult.signal, sl: hftResult.signal.sl, tp: hftResult.signal.tp1 } : null,
+        obiResult.signal?.direction === dir       ? obiResult.signal      : null,
+      ].filter(Boolean) as Array<{ direction: string; entry: number; sl: number; tp: number; confidence: number; reasoning?: string }>;
 
-      let entry = price;
-      let sl: number, tp: number;
+      // Best signal = highest confidence among aligned ones
+      const best = dirSigs.sort((a, b) => b.confidence - a.confidence)[0];
 
-      // Priority: momentum signal → ORB signal → compute from ATR
-      if (momSig && momSig.direction === direction.toLowerCase() && momSig.sl && momSig.tp) {
-        entry = momSig.entry; sl = momSig.sl; tp = momSig.tp;
-      } else if (orbSig && orbSig.direction === direction.toLowerCase()) {
-        entry = orbSig.entry; sl = orbSig.sl; tp = orbSig.tp;
-      } else if (atrVal) {
-        const slDist = atrVal * 1.5;
-        const tpDist = atrVal * 3.0;
-        sl = direction === "LONG" ? entry - slDist : entry + slDist;
-        tp = direction === "LONG" ? entry + tpDist : entry - tpDist;
+      let entry = price, sl: number, tp: number;
+      if (best) {
+        entry = best.entry || price;
+        sl    = best.sl;
+        tp    = best.tp;
+      } else if (!isNaN(atrVal)) {
+        const slD = atrVal * 1.5, tpD = atrVal * 3.0;
+        sl = direction === "LONG" ? entry - slD : entry + slD;
+        tp = direction === "LONG" ? entry + tpD : entry - tpD;
       } else {
         sl = direction === "LONG" ? entry * 0.985 : entry * 1.015;
         tp = direction === "LONG" ? entry * 1.030 : entry * 0.970;
       }
 
-      const risk = Math.abs(entry - sl);
-      const rwd  = Math.abs(tp - entry);
-      const rr   = risk > 0 ? `1 : ${(rwd / risk).toFixed(2)}` : "—";
+      const risk = Math.abs(entry - sl), rwd = Math.abs(tp - entry);
+      const rr   = risk > 0 ? `1:${(rwd / risk).toFixed(1)}` : "—";
 
-      const reasoning = [
-        `${consensusCount}/3 strategies ${direction}`,
-        g === "A+" ? "maximum conviction — full size" : g === "A" ? "high conviction — 75% size" : "moderate conviction — 50% size",
-        `regime: ${regime}`,
-        momSig ? `MV15 signal (${(momSig.confidence * 100).toFixed(0)}% conf)` : "",
-        orbSig ? `ORB-30 breakout (${(orbSig.confidence * 100).toFixed(0)}% conf)` : "",
-      ].filter(Boolean).join(" · ");
+      const signallingNames = votes
+        .filter(v => v.signal && v.bias === dir)
+        .map(v => v.name).join(", ");
 
       signal = {
-        direction, entry, sl, tp, rr,
-        size_pct: sizePct,
-        conviction,
-        grade: g,
-        reasoning,
+        direction,
+        entry: Math.round(entry * 100) / 100,
+        sl:    Math.round(sl * 100) / 100,
+        tp:    Math.round(tp * 100) / 100,
+        rr, size_pct: sizePct, conviction, grade: g,
+        reasoning: `${consensusCount}/4 strategies aligned (${signallingNames || direction}) · regime: ${regime}`,
         timestamp: new Date().toISOString(),
       };
     }
 
-    return { votes, direction, consensusCount, conviction, grade: g, signal, regime, price, atrPct, ema50v, ema21v };
+    return { votes, direction, consensusCount, conviction, grade: g, signal, regime, price, atrPct, ema50v, ema21v, rsi15m, obi };
   })();
 
-  // ── Commentary ticker — refreshes every 12s ───────────────────────────────
+  // Always keep core ref up to date
+  useEffect(() => { coreRef.current = { ...core, momentumResult, orbResult, hftResult, obiResult, ticker, serverData }; });
+
+  // ── Commentary — refreshes every 30s or on conviction change ─────────────
   const generateThought = useCallback(() => {
-    const ts  = new Date().toLocaleTimeString();
+    const ts = new Date().toLocaleTimeString();
     const thought = buildThought({
-      price:      core.price,
-      ema50:      core.ema50v,
-      ema21:      core.ema21v,
-      atrPct:     core.atrPct,
-      votes:      core.votes,
-      orb:        orbResult,
-      regime:     core.regime,
-      ob:         orderBook,
-      direction:  core.direction,
-      conviction: core.conviction,
-      grade:      core.grade,
-      candles15m,
-      ticker,
-      signal:     core.signal,
+      price: core.price, atrPct: core.atrPct, votes: core.votes,
+      regime: core.regime, direction: core.direction,
+      conviction: core.conviction, grade: core.grade,
+      signal: core.signal, serverData,
+      obi: core.obi, rsi15m: core.rsi15m,
     }, ts);
     setThoughts(prev => [thought, ...prev].slice(0, 30));
-    // Push into chat feed as an auto-thought
     setChat(prev => [
       ...prev,
       { id: ++chatMsgId.current, role: "agent" as const, content: thought, timestamp: ts, type: "auto" as const },
     ].slice(-80));
-  }, [core, orbResult, orderBook, candles15m, ticker]);
+  }, [core, serverData]);
 
   useEffect(() => {
     generateThought();
     if (thoughtTimerRef.current) clearInterval(thoughtTimerRef.current);
-    thoughtTimerRef.current = setInterval(generateThought, 12_000);
+    thoughtTimerRef.current = setInterval(generateThought, 30_000);
     return () => { if (thoughtTimerRef.current) clearInterval(thoughtTimerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [core.direction, core.conviction, core.regime]);
-
-  // ── Paper position P&L update ─────────────────────────────────────────────
-  useEffect(() => {
-    const pos = paperPosRef.current;
-    if (!pos?.open || !core.price) return;
-    const price = core.price;
-
-    // Check SL/TP
-    const hitTP = pos.direction === "LONG" ? price >= (pos.tp ?? Infinity) : price <= (pos.tp ?? -Infinity);
-    const hitSL = pos.direction === "LONG" ? price <= (pos.sl ?? -Infinity) : price >= (pos.sl ?? Infinity);
-
-    if (hitTP || hitSL) {
-      const exitPrice  = hitTP ? pos.tp! : pos.sl!;
-      const priceDiff  = pos.direction === "LONG" ? exitPrice - pos.entry! : pos.entry! - exitPrice;
-      const pnl_usd    = priceDiff * (pos.btc_qty ?? 0);
-      const isWin      = hitTP;
-
-      setPaperPos(null);
-      setPaperStats(prev => {
-        const wins   = prev.wins + (isWin ? 1 : 0);
-        const losses = prev.losses + (!isWin ? 1 : 0);
-        const total  = prev.total_trades + 1;
-        return {
-          total_trades: total, wins, losses,
-          win_rate:    Math.round(wins / total * 1000) / 10,
-          total_pnl:   Math.round((prev.total_pnl + pnl_usd) * 100) / 100,
-          avg_rr:      0,
-          best:        Math.max(prev.best, pnl_usd),
-          worst:       Math.min(prev.worst, pnl_usd),
-        };
-      });
-      const closeMsg = `${hitTP ? "✅ TP HIT" : "⛔ SL HIT"} — position closed @ $${exitPrice.toFixed(0)} · P&L ${pnl_usd >= 0 ? "+" : ""}$${pnl_usd.toFixed(2)}`;
-      const closeTs  = new Date().toLocaleTimeString();
-      setThoughts(prev => [`[${closeTs}] ${closeMsg}`, ...prev].slice(0, 30));
-      setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: closeMsg, timestamp: closeTs, type: "system" as const }].slice(-80));
-    } else {
-      const priceDiff  = pos.direction === "LONG" ? price - pos.entry! : pos.entry! - price;
-      const pnl_usd    = priceDiff * (pos.btc_qty ?? 0);
-      const pnl_pct    = priceDiff / pos.entry! * 100;
-      setPaperPos(p => p ? { ...p, current: price, pnl_usd, pnl_pct } : null);
-    }
-  }, [core.price]);
-
-  // ── Paper trade execution ─────────────────────────────────────────────────
-  const openPaperTrade = useCallback((sig: MasterSignal) => {
-    if (paperPosRef.current?.open) return;
-    const btcQty = PAPER_SIZE_USDC / sig.entry;
-    setPaperPos({
-      open: true,
-      direction: sig.direction,
-      entry:     sig.entry,
-      sl:        sig.sl,
-      tp:        sig.tp,
-      current:   sig.entry,
-      pnl_usd:   0,
-      pnl_pct:   0,
-      size_usdc: PAPER_SIZE_USDC,
-      btc_qty:   btcQty,
-    });
-    const openMsg = `📄 Paper ${sig.direction} opened @ $${sig.entry.toFixed(0)} · SL $${sig.sl.toFixed(0)} · TP $${sig.tp.toFixed(0)} · ${sig.rr} R:R`;
-    const openTs  = new Date().toLocaleTimeString();
-    setThoughts(prev => [`[${openTs}] ${openMsg}`, ...prev].slice(0, 30));
-    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: openMsg, timestamp: openTs, type: "system" as const }].slice(-80));
-  }, []);
-
-  const closePaperTrade = useCallback(() => {
-    const pos   = paperPosRef.current;
-    if (!pos?.open || !core.price) return;
-    const price    = core.price;
-    const diff     = pos.direction === "LONG" ? price - pos.entry! : pos.entry! - price;
-    const pnl_usd  = diff * (pos.btc_qty ?? 0);
-    setPaperPos(null);
-    setPaperStats(prev => ({
-      ...prev,
-      total_trades: prev.total_trades + 1,
-      total_pnl:    Math.round((prev.total_pnl + pnl_usd) * 100) / 100,
-      best:         Math.max(prev.best, pnl_usd),
-      worst:        Math.min(prev.worst, pnl_usd),
-    }));
-    const manualTs  = new Date().toLocaleTimeString();
-    const manualMsg = `Manual close @ $${price.toFixed(0)} · P&L ${pnl_usd >= 0 ? "+" : ""}$${pnl_usd.toFixed(2)}`;
-    setThoughts(prev => [`[${manualTs}] ${manualMsg}`, ...prev].slice(0, 30));
-    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: manualMsg, timestamp: manualTs, type: "system" as const }].slice(-80));
-  }, [core.price]);
-
-  const resetPaper = useCallback(() => {
-    setPaperPos(null);
-    setPaperStats({ total_pnl: 0, wins: 0, losses: 0, win_rate: 0, total_trades: 0, best: 0, worst: 0 });
-    const resetTs = new Date().toLocaleTimeString();
-    setThoughts(prev => [`[${resetTs}] Paper account reset — $${PAPER_SIZE_USDC} per trade`, ...prev].slice(0, 30));
-    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: `Paper account reset. $${PAPER_SIZE_USDC} per trade.`, timestamp: resetTs, type: "system" as const }].slice(-80));
-  }, []);
+  }, [core.direction, core.conviction, core.regime, serverData?.stats?.total_trades]);
 
   // ── Chat: sendMessage ─────────────────────────────────────────────────────
   const sendMessage = useCallback((userMsg: string) => {
     if (!userMsg.trim()) return;
     const ts = new Date().toLocaleTimeString();
-    const userId = ++chatMsgId.current;
-    setChat(prev => [...prev, { id: userId, role: "user" as const, content: userMsg.trim(), timestamp: ts }]);
+    setChat(prev => [...prev, { id: ++chatMsgId.current, role: "user" as const, content: userMsg.trim(), timestamp: ts }]);
 
-    // Generate response after a short "thinking" delay
     setTimeout(() => {
-      const c = coreRef.current;
+      const c = coreRef.current ?? core;
       const response = generateResponse(userMsg, {
-        price:          c.price,
-        direction:      c.direction,
-        conviction:     c.conviction,
-        grade:          c.grade,
-        regime:         c.regime,
-        votes:          c.votes,
-        signal:         c.signal,
-        atrPct:         c.atrPct,
-        ema50v:         c.ema50v,
-        ema21v:         c.ema21v,
-        orbResult,
-        momentumResult,
-        ticker,
-        paperPos:       paperPosRef.current,
-        paperStats:     paperStatsRef.current,
+        price:     c.price,
+        direction: c.direction,
+        conviction: c.conviction,
+        grade:     c.grade,
+        regime:    c.regime,
+        votes:     c.votes,
+        signal:    c.signal,
+        atrPct:    c.atrPct,
+        obi:       c.obi,
+        rsi15m:    c.rsi15m,
+        ema50v:    c.ema50v,
+        ema21v:    c.ema21v,
+        momentumResult: c.momentumResult ?? momentumResult,
+        orbResult:      c.orbResult      ?? orbResult,
+        hftResult:      c.hftResult      ?? hftResult,
+        obiResult:      c.obiResult      ?? obiResult,
+        ticker:         c.ticker         ?? ticker,
+        serverData:     c.serverData     ?? serverData,
       });
       const rTs = new Date().toLocaleTimeString();
       setChat(prev => [...prev, { id: ++chatMsgId.current, role: "agent" as const, content: response, timestamp: rTs, type: "response" as const }].slice(-80));
-    }, 400 + Math.random() * 300);
-  }, [orbResult, momentumResult, ticker]);
+    }, 350 + Math.random() * 250);
+  }, [momentumResult, orbResult, hftResult, obiResult, ticker, serverData, core]);
+
+  // Deprecated paper trade stubs (server handles paper trading now)
+  const openPaperTrade  = useCallback(() => {}, []);
+  const closePaperTrade = useCallback(() => {}, []);
+  const resetPaper      = useCallback(() => {}, []);
 
   return {
     direction:       core.direction,
@@ -640,20 +676,21 @@ export function useMasterAgent(
     thoughts,
     chat,
     last_update:     new Date().toLocaleTimeString(),
-    paper_position:  paperPos,
-    paper_stats:     paperStats,
-    last_price:      core.price,
-    price_24h:       ticker?.change_pct ?? null,
-
-    // Actions (returned for panel to use)
+    paper_position:  null,
+    paper_stats: {
+      total_pnl:    serverData?.stats?.total_pnl    ?? 0,
+      wins:         serverData?.stats?.wins          ?? 0,
+      losses:       serverData?.stats?.losses        ?? 0,
+      win_rate:     serverData?.stats?.win_rate      ?? 0,
+      total_trades: serverData?.stats?.total_trades  ?? 0,
+      best:         serverData?.stats?.best_trade    ?? 0,
+      worst:        serverData?.stats?.worst_trade   ?? 0,
+    },
+    last_price: core.price,
+    price_24h:  ticker?.change_pct ?? null,
     openPaperTrade,
     closePaperTrade,
     resetPaper,
     sendMessage,
-  } as MasterState & {
-    openPaperTrade:  (sig: MasterSignal) => void;
-    closePaperTrade: () => void;
-    resetPaper:      () => void;
-    sendMessage:     (msg: string) => void;
   };
 }

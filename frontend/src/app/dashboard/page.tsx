@@ -17,6 +17,9 @@ import {
 } from "@/hooks/useBinanceStream";
 import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
+import { useHFTScalper, useAggTradeBuffer, type HFTResult } from "@/hooks/useHFTScalper";
+import { useOBIScalper, type OBIResult } from "@/hooks/useOBIScalper";
+import { useServerAgent } from "@/hooks/useServerAgent";
 import { useMasterAgent, type MasterSignal, type ConvictionGrade, type ChatMessage } from "@/hooks/useMasterAgent";
 
 // ─── Chart constants ──────────────────────────────────────────────────────────
@@ -1459,7 +1462,7 @@ function SignalCommandCenter({
               <div className="w-full rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
                 <div className="text-[9px] text-neutral-600">
                   {direction !== "FLAT"
-                    ? `${direction} bias · ${consensus_count}/3 strategies aligned · conviction ${conviction}`
+                    ? `${direction} bias · ${consensus_count}/4 strategies aligned · conviction ${conviction}`
                     : "Strategies diverging · no edge detected"}
                 </div>
               </div>
@@ -1729,10 +1732,21 @@ export default function OverviewPage() {
   const toastId = useRef(0);
 
   // ── Frontend strategy engines ─────────────────────────────────────────────
-  const strategyResult = useStrategyEngine(chartCandles);
-  const orbResult      = useORBStrategy(candles1m);
+  const strategyResult  = useStrategyEngine(chartCandles);
+  const orbResult       = useORBStrategy(candles1m);
+  const aggTrades       = useAggTradeBuffer();
+  const hftResult       = useHFTScalper(candles1m, btcOrderBook, aggTrades);
+  const obiResult       = useOBIScalper(candles1m, btcOrderBook);
 
-  const masterAgent = useMasterAgent(strategyResult, orbResult, chartCandles, candles1m, btcTicker, btcOrderBook);
+  // Server agent — 24/7 backend positions, trades, stats
+  const serverAgent = useServerAgent();
+
+  const masterAgent = useMasterAgent(
+    strategyResult, orbResult, hftResult, obiResult,
+    chartCandles, candles1m,
+    btcTicker, btcOrderBook,
+    serverAgent.status,
+  );
 
   const addToast = useCallback((t: Omit<Toast, "id">) =>
     setToasts(p => [...p.slice(-4), { ...t, id: ++toastId.current }]), []);
