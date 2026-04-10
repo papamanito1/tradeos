@@ -154,10 +154,9 @@ async def shutdown():
 
 @app.get("/health")
 async def health():
-    from app.core.config import settings as s
     return {
         "status": "ok",
-        "version": "1.0.1",
-        "mode": s.trading_mode,
-        "bingx_configured": bool(s.bingx_api_key),
+        "version": "1.0.2",
+        "mode": settings.trading_mode,
+        "bingx_configured": bool(settings.bingx_api_key),
     }
