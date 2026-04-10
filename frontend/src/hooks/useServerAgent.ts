@@ -77,16 +77,21 @@ export interface ServerAgentConfig {
 }
 
 export interface LiveExecutorStatus {
-  connected:           boolean;
+  connected?:           boolean;
   halted:              boolean;
   daily_pnl:           number;
   daily_loss_limit:    number;
   max_position_usdc:   number;
+  risk_per_trade_pct?: number;
+  max_leverage?:       number;
+  account_balance?:    number;
+  free_balance?:       number;
   open_count:          number;
   live_positions:      ServerPosition[];
   mode?:               string;
   keys_set?:           boolean;
   message?:            string;
+  last_error?:         string | null;
 }
 
 export interface GridStateData {

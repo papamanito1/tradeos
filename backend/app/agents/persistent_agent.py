@@ -1296,14 +1296,15 @@ class PersistentAgent:
                 self._log(f"⛔ [{name}] CIRCUIT BREAKER active — skipping trade (daily loss limit hit)")
                 return
             else:
-                # Schedule async live open — can't await in sync context, use task
+                live_leverage = min(leverage, 30)  # hard cap 30x
+
                 async def _do_live_open():
                     pos = await executor.open_position(
                         strategy_key=key,
                         strategy_name=name,
                         direction=d,
                         size_usdc=cfg["size_usdc"],
-                        leverage=leverage,
+                        leverage=live_leverage,
                         sl_price=round(sl, 2),
                         tp_price=round(tp, 2),
                         entry_price=entry,
@@ -1311,7 +1312,8 @@ class PersistentAgent:
                     if pos:
                         self.positions[key] = pos
                         self._log(f"★ [LIVE] [{name}] {d.upper()} @ ${pos['entry']:.0f} · "
-                                  f"SL ${sl:.0f} · TP ${tp:.0f}{lev_str} · BingX order executed")
+                                  f"margin ${pos['size_usdc']:.2f} (2% of capital) · "
+                                  f"{pos['leverage']}× · SL ${sl:.0f} · TP ${tp:.0f}")
                         self._save_state()
                         self._schedule_db_save()
                     else:

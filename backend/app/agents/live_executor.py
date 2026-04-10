@@ -30,13 +30,16 @@ class LiveExecutor:
     One instance shared by PersistentAgent.
     """
 
+    RISK_PER_TRADE_PCT = 0.02   # 2% of total capital per trade
+    MAX_LEVERAGE = 30            # hard cap on leverage
+
     def __init__(
         self,
         api_key: str,
         api_secret: str,
         testnet: bool = False,
-        daily_loss_limit: float = 200.0,   # hard stop if down $200 today
-        max_position_usdc: float = 500.0,  # never risk more than $500 per position
+        daily_loss_limit: float = 200.0,
+        max_position_usdc: float = 500.0,  # fallback if balance fetch fails
     ):
         self.daily_loss_limit   = daily_loss_limit
         self.max_position_usdc  = max_position_usdc
@@ -44,25 +47,28 @@ class LiveExecutor:
         self._day_str: str      = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self._halted: bool      = False
 
-        # Exchange positions keyed by strategy_key → exchange order id
         self.live_positions: dict[str, dict] = {}
         self.last_error: Optional[str] = None
+
+        # Cached balance (refreshed before each trade)
+        self._cached_balance: dict = {"total": 0, "free": 0, "used": 0}
+        self._balance_fetched_at: float = 0
 
         self._exchange = ccxt.bingx({
             "apiKey":          api_key,
             "secret":          api_secret,
             "enableRateLimit": True,
             "options": {
-                "defaultType": "swap",          # perpetual futures
+                "defaultType": "swap",
                 "defaultSubType": "linear",
             },
         })
 
         if testnet:
-            # BingX doesn't have a separate testnet URL in CCXT; warn user
             logger.warning("[LiveExecutor] BingX testnet not available via CCXT — using live API")
 
-        logger.info(f"[LiveExecutor] Initialized · daily_loss_limit=${daily_loss_limit} · max_pos=${max_position_usdc}")
+        logger.info(f"[LiveExecutor] Initialized · risk_per_trade={self.RISK_PER_TRADE_PCT:.0%} "
+                    f"· max_leverage={self.MAX_LEVERAGE}× · daily_loss_limit=${daily_loss_limit}")
 
     # ── Daily P&L tracker ────────────────────────────────────────────────────
 
@@ -106,18 +112,30 @@ class LiveExecutor:
         except Exception:
             pass  # already set or not needed
 
-    async def fetch_balance(self) -> dict:
+    async def fetch_balance(self, force: bool = False) -> dict:
+        now = time.time()
+        if not force and (now - self._balance_fetched_at) < 30 and self._cached_balance["total"] > 0:
+            return self._cached_balance
         try:
             bal = await self._exchange.fetch_balance({"type": "swap"})
             usdt = bal.get("USDT", {})
-            return {
+            self._cached_balance = {
                 "total":     float(usdt.get("total", 0)),
                 "free":      float(usdt.get("free", 0)),
                 "used":      float(usdt.get("used", 0)),
             }
+            self._balance_fetched_at = now
+            logger.info(f"[LiveExecutor] Balance: total=${self._cached_balance['total']:.2f} "
+                        f"· free=${self._cached_balance['free']:.2f}")
+            return self._cached_balance
         except Exception as e:
             logger.error(f"[LiveExecutor] fetch_balance failed: {e}")
-            return {"total": 0, "free": 0, "used": 0}
+            return self._cached_balance if self._cached_balance["total"] > 0 else {"total": 0, "free": 0, "used": 0}
+
+    def compute_trade_size(self, total_capital: float) -> float:
+        """2% of total capital — this is the margin (collateral) per trade."""
+        size = round(total_capital * self.RISK_PER_TRADE_PCT, 2)
+        return max(1.0, size)  # at least $1
 
     async def fetch_exchange_positions(self) -> list[dict]:
         """Return all open BTC perp positions from BingX."""
@@ -135,7 +153,7 @@ class LiveExecutor:
         strategy_key: str,
         strategy_name: str,
         direction: str,          # "long" or "short"
-        size_usdc: float,
+        size_usdc: float,        # requested size (may be overridden by 2% rule)
         leverage: int,
         sl_price: float,
         tp_price: float,
@@ -143,6 +161,7 @@ class LiveExecutor:
     ) -> Optional[dict]:
         """
         Opens a leveraged BTC/USDT:USDT perp position on BingX.
+        Position size = 2% of total BingX capital (margin), leverage capped at 30x.
         Returns a position dict compatible with the paper position format.
         """
         if self.halted:
@@ -150,13 +169,34 @@ class LiveExecutor:
             self.last_error = "Circuit breaker active"
             return None
 
-        # Cap position size
-        capped_usdc = min(size_usdc, self.max_position_usdc)
-        if capped_usdc != size_usdc:
-            logger.warning(f"[LiveExecutor] Position capped ${size_usdc} → ${capped_usdc}")
+        # Fetch live balance to compute dynamic position size
+        balance = await self.fetch_balance(force=True)
+        total_capital = balance["total"]
+        free_capital = balance["free"]
+
+        if total_capital <= 0:
+            self.last_error = f"No capital on BingX (total=${total_capital:.2f})"
+            logger.warning(f"[LiveExecutor] {self.last_error}")
+            return None
+
+        # 2% of total capital = margin for this trade
+        risk_size = self.compute_trade_size(total_capital)
+
+        # Don't exceed free margin
+        capped_usdc = min(risk_size, free_capital * 0.95)  # keep 5% buffer
+        if capped_usdc < 1.0:
+            self.last_error = f"Insufficient free margin (free=${free_capital:.2f}, need=${risk_size:.2f})"
+            logger.warning(f"[LiveExecutor] {self.last_error}")
+            return None
+
+        # Cap leverage at 30x
+        leverage = min(leverage, self.MAX_LEVERAGE)
+
+        logger.info(f"[LiveExecutor] Sizing: capital=${total_capital:.2f} · 2%=${risk_size:.2f} "
+                    f"· using=${capped_usdc:.2f} · leverage={leverage}× · "
+                    f"notional=${capped_usdc * leverage:.2f}")
 
         try:
-            # Set leverage and margin mode first
             await self._set_leverage(leverage)
             await self._set_margin_mode()
 
@@ -349,11 +389,16 @@ class LiveExecutor:
     # ── Status dict for API ───────────────────────────────────────────────────
 
     def status(self) -> dict:
+        total_cap = self._cached_balance.get("total", 0)
         return {
             "halted":            self._halted,
             "daily_pnl":         round(self._daily_pnl, 2),
             "daily_loss_limit":  self.daily_loss_limit,
-            "max_position_usdc": self.max_position_usdc,
+            "max_position_usdc": round(self.compute_trade_size(total_cap), 2) if total_cap > 0 else self.max_position_usdc,
+            "risk_per_trade_pct": self.RISK_PER_TRADE_PCT,
+            "max_leverage":      self.MAX_LEVERAGE,
+            "account_balance":   round(total_cap, 2),
+            "free_balance":      round(self._cached_balance.get("free", 0), 2),
             "open_count":        len(self.live_positions),
             "live_positions":    list(self.live_positions.values()),
             "last_error":        self.last_error,

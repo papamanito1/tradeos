@@ -1800,17 +1800,23 @@ function AgentContent() {
                       </button>
                     </div>
                   )}
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
                     {([
+                      ["Balance", `$${(server.liveExecutor.account_balance ?? 0).toFixed(2)}`, "#8b5cf6"],
+                      ["Free", `$${(server.liveExecutor.free_balance ?? 0).toFixed(2)}`, "#0a84ff"],
+                      ["Trade Size", `$${server.liveExecutor.max_position_usdc.toFixed(2)}`, "#f59e0b"],
+                      ["Max Lev", `${server.liveExecutor.max_leverage ?? 30}×`, "#22c55e"],
                       ["Daily P&L", `${server.liveExecutor.daily_pnl >= 0 ? "+" : ""}$${server.liveExecutor.daily_pnl.toFixed(2)}`, server.liveExecutor.daily_pnl >= 0 ? "#22c55e" : "#ef4444"],
-                      ["Loss Limit", `-$${server.liveExecutor.daily_loss_limit}`, "#f59e0b"],
-                      ["Open Trades", `${server.liveExecutor.open_count}`, "#0a84ff"],
+                      ["Open", `${server.liveExecutor.open_count}`, "#0a84ff"],
                     ] as const).map(([label, val, color]) => (
-                      <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-center">
-                        <div className="text-[9px] text-neutral-600 mb-1">{label}</div>
-                        <div className="text-[13px] font-bold font-mono" style={{ color }}>{val}</div>
+                      <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-center">
+                        <div className="text-[8px] text-neutral-600 mb-0.5">{label}</div>
+                        <div className="text-[11px] font-bold font-mono" style={{ color }}>{val}</div>
                       </div>
                     ))}
+                  </div>
+                  <div className="text-[9px] text-neutral-600 text-center">
+                    Each trade uses 2% of total capital as margin · max 30× leverage · daily loss limit -${server.liveExecutor.daily_loss_limit}
                   </div>
 
                   {/* Live positions from BingX */}
