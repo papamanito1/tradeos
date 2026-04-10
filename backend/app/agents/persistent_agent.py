@@ -967,11 +967,32 @@ class PersistentAgent:
         if not cfg.get("enabled", True):
             return
 
+        # Candle freshness check — don't trade on stale data
+        def _candle_age_sec(candles: list) -> float:
+            if not candles:
+                return float("inf")
+            try:
+                ts = datetime.fromisoformat(candles[-1]["timestamp"].replace("Z", "+00:00"))
+                return (datetime.now(timezone.utc) - ts).total_seconds()
+            except Exception:
+                return float("inf")
+
+        age_1m  = _candle_age_sec(candles1m)
+        age_15m = _candle_age_sec(candles15m)
+
+        use_momentum  = age_15m < 20 * 60  # allow up to 20 min (candle is 15m long)
+        use_1m_strats = age_1m  < 3 * 60   # 1m candles must be within 3 minutes
+
+        if age_15m >= 20 * 60 and self.scan_count % 5 == 0:
+            self._log(f"⚠ 15m candles stale ({age_15m/60:.0f}m old) — Momentum 15m paused")
+        if age_1m >= 3 * 60 and self.scan_count % 5 == 0:
+            self._log(f"⚠ 1m candles stale ({age_1m/60:.1f}m old) — 1m strategies paused")
+
         strategies = [
-            ("momentum", _run_momentum(candles15m)),
-            ("hft",      _run_hft(candles1m, orderbook)),
-            ("orb",      _run_orb(candles1m)),
-            ("obi",      _run_obi(candles1m, orderbook)),
+            ("momentum", _run_momentum(candles15m) if use_momentum  else {"bias": "neutral", "signal": None, "met_count": 0, "total": 7, "name": "Momentum 15m"}),
+            ("hft",      _run_hft(candles1m, orderbook) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 5, "name": "HFT Scalper"}),
+            ("orb",      _run_orb(candles1m) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 4, "name": "ORB-30"}),
+            ("obi",      _run_obi(candles1m, orderbook) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 3, "name": "OBI Scalper"}),
         ]
 
         # Rebuild training index periodically (every 10 scans or after trades)
@@ -1073,7 +1094,38 @@ class PersistentAgent:
     # ── Position management ───────────────────────────────────────────────────
 
     def _open_position(self, key: str, name: str, sig: dict, cfg: dict, price: float) -> None:
-        entry    = sig["entry"] if sig["entry"] > 0 else price
+        sig_entry = sig["entry"] if sig.get("entry", 0) > 0 else price
+        d         = sig["direction"]
+
+        # Always fill at live market price — never at the stale candle close
+        entry = price if price > 0 else sig_entry
+
+        # Preserve the ATR/dollar distances from the signal, shift SL/TP to actual fill
+        sig_sl = sig.get("sl") or 0
+        sig_tp = sig.get("tp") or 0
+        sl_dist = abs(sig_entry - sig_sl) if sig_sl else 0
+        tp_dist = abs(sig_tp - sig_entry) if sig_tp else 0
+
+        if sl_dist > 0:
+            sl = (entry - sl_dist) if d == "long" else (entry + sl_dist)
+        else:
+            sl = sig_sl
+
+        if tp_dist > 0:
+            tp = (entry + tp_dist) if d == "long" else (entry - tp_dist)
+        else:
+            tp = sig_tp
+
+        # Slippage check — skip if live price has moved too far from signal (chasing)
+        # Grid uses live_price as entry already, so no check needed
+        if sig_entry > 0 and not key.startswith("grid_"):
+            slip_pct = abs(entry - sig_entry) / sig_entry * 100
+            max_slip = 0.30  # 0.3% max slippage — reject stale signals
+            if slip_pct > max_slip:
+                self._log(f"⚠ [{name}] SKIPPED — price moved {slip_pct:.2f}% from signal "
+                          f"(${sig_entry:.0f} → ${entry:.0f}) · max {max_slip}%")
+                return
+
         leverage = max(1, int(cfg.get("leverage", 1)))
         btc_size = (cfg["size_usdc"] * leverage) / entry if entry > 0 else 0
 
@@ -1081,10 +1133,10 @@ class PersistentAgent:
             "id":             f"{key}-{int(time.time()*1000)}",
             "strategy_key":   key,
             "strategy_name":  name,
-            "direction":      sig["direction"],
-            "entry":          entry,
-            "sl":             sig["sl"],
-            "tp":             sig["tp"],
+            "direction":      d,
+            "entry":          round(entry, 2),
+            "sl":             round(sl, 2),
+            "tp":             round(tp, 2),
             "size_usdc":      cfg["size_usdc"],
             "leverage":       leverage,
             "confidence":     sig["confidence"],
@@ -1098,8 +1150,10 @@ class PersistentAgent:
             "is_paper":       cfg.get("mode", "paper") == "paper",
         }
         self.positions[key] = pos
-        lev_str = f" · {leverage}×" if leverage > 1 else ""
-        self._log(f"★ [{name}] OPENED {sig['direction'].upper()} @ ${entry:.0f} · SL ${sig['sl']:.0f} · TP ${sig['tp']:.0f} · conf {sig['confidence']*100:.0f}%{lev_str}")
+        lev_str  = f" · {leverage}×" if leverage > 1 else ""
+        slip_str = f" · filled ${sig_entry:.0f}→${entry:.0f}" if abs(entry - sig_entry) > 1 else ""
+        self._log(f"★ [{name}] OPENED {d.upper()} @ ${entry:.0f} · SL ${sl:.0f} · TP ${tp:.0f} · "
+                  f"conf {sig['confidence']*100:.0f}%{lev_str}{slip_str}")
 
     # Max hold time in minutes per strategy before auto-close at market
     MAX_HOLD_MINUTES = {"momentum": 240, "hft": 45, "orb": 180, "obi": 15, "grid": 120}
