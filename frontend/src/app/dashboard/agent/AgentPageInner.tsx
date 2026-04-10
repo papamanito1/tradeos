@@ -604,7 +604,7 @@ function AgentContent() {
       )}
 
       {/* ── All-strategy live status strip ───────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {[
           {
             name: "Momentum 15m",
@@ -643,6 +643,15 @@ function AgentContent() {
             hasSignal: !!obiResult.signal,
             conf: obiResult.signal?.confidence,
             color: "#10b981",
+          },
+          {
+            name: "Grid $50",
+            bias: gridResult.bias === "stopped" || gridResult.bias === "paused" ? "neutral" : gridResult.bias,
+            met: gridResult.metCount,
+            total: gridResult.total,
+            hasSignal: !!gridResult.signal,
+            conf: gridResult.signal?.confidence,
+            color: "#06b6d4",
           },
         ].map(s => {
           const biasColor = s.bias === "long" ? "#22c55e" : s.bias === "short" ? "#ef4444" : "#4b5563";
