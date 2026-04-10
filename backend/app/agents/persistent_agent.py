@@ -1177,7 +1177,8 @@ class PersistentAgent:
                         self._save_state()
                         self._schedule_db_save()
                     else:
-                        self._log(f"✗ [LIVE] [{name}] BingX open_position FAILED — check logs")
+                        err_msg = getattr(executor, "last_error", None) or "unknown error"
+                        self._log(f"✗ [LIVE] [{name}] BingX FAILED — {err_msg}")
 
                 asyncio.create_task(_do_live_open())
                 return

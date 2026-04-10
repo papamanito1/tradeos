@@ -46,6 +46,7 @@ class LiveExecutor:
 
         # Exchange positions keyed by strategy_key → exchange order id
         self.live_positions: dict[str, dict] = {}
+        self.last_error: Optional[str] = None
 
         self._exchange = ccxt.bingx({
             "apiKey":          api_key,
@@ -146,6 +147,7 @@ class LiveExecutor:
         """
         if self.halted:
             logger.warning(f"[LiveExecutor] ⛔ HALTED — daily circuit breaker active. No new trades.")
+            self.last_error = "Circuit breaker active"
             return None
 
         # Cap position size
@@ -160,25 +162,65 @@ class LiveExecutor:
 
             side      = "buy" if direction == "long" else "sell"
             notional  = capped_usdc * leverage
-            btc_qty   = notional / entry_price   # BTC amount to buy/sell
-            btc_qty   = round(btc_qty, 4)        # BingX requires 4 decimal precision
+            btc_qty   = notional / entry_price
+            btc_qty   = round(btc_qty, 4)
 
-            # Place market order with SL/TP in one call
+            # BingX minimum: 0.0001 BTC (~$7 at current prices)
+            if btc_qty < 0.0001:
+                logger.warning(f"[LiveExecutor] Order too small: {btc_qty} BTC (min 0.0001)")
+                self.last_error = f"Order too small: {btc_qty} BTC"
+                return None
+
+            logger.info(f"[LiveExecutor] Placing {side.upper()} {btc_qty} BTC @ ~${entry_price:.0f} "
+                        f"· notional ${notional:.0f} · lev {leverage}×")
+
+            # Step 1: Place market order (without SL/TP — more reliable across exchanges)
             order = await self._exchange.create_order(
                 SYMBOL,
                 "market",
                 side,
                 btc_qty,
                 None,
-                params={
-                    "stopLoss":   {"type": "MARKET", "stopPrice": round(sl_price, 2)},
-                    "takeProfit": {"type": "MARKET", "stopPrice": round(tp_price, 2)},
-                    "positionSide": "LONG" if direction == "long" else "SHORT",
-                },
+                params={"positionSide": "LONG" if direction == "long" else "SHORT"},
             )
 
             fill_price = float(order.get("average") or order.get("price") or entry_price)
             order_id   = str(order.get("id", ""))
+
+            logger.info(f"[LiveExecutor] Market order filled: id={order_id} @ ${fill_price:.2f}")
+
+            # Step 2: Place SL/TP as separate stop orders (more reliable than params)
+            try:
+                if sl_price > 0:
+                    sl_side = "sell" if direction == "long" else "buy"
+                    await self._exchange.create_order(
+                        SYMBOL, "market", sl_side, btc_qty, None,
+                        params={
+                            "stopPrice": round(sl_price, 2),
+                            "positionSide": "LONG" if direction == "long" else "SHORT",
+                            "reduceOnly": True,
+                            "triggerType": "MARK_PRICE",
+                        },
+                    )
+                    logger.info(f"[LiveExecutor] SL placed @ ${sl_price:.2f}")
+            except Exception as sl_err:
+                logger.warning(f"[LiveExecutor] SL order failed (position still open): {sl_err}")
+
+            try:
+                if tp_price > 0:
+                    tp_side = "sell" if direction == "long" else "buy"
+                    await self._exchange.create_order(
+                        SYMBOL, "market", tp_side, btc_qty, None,
+                        params={
+                            "stopPrice": round(tp_price, 2),
+                            "positionSide": "LONG" if direction == "long" else "SHORT",
+                            "reduceOnly": True,
+                            "triggerType": "MARK_PRICE",
+                        },
+                    )
+                    logger.info(f"[LiveExecutor] TP placed @ ${tp_price:.2f}")
+            except Exception as tp_err:
+                logger.warning(f"[LiveExecutor] TP order failed (position still open): {tp_err}")
 
             pos = {
                 "id":               f"{strategy_key}-live-{int(time.time()*1000)}",
@@ -201,13 +243,15 @@ class LiveExecutor:
             }
 
             self.live_positions[strategy_key] = pos
+            self.last_error = None
             logger.info(f"[LiveExecutor] ★ LIVE OPENED {direction.upper()} {btc_qty} BTC "
                         f"@ ${fill_price:.2f} · SL ${sl_price:.2f} · TP ${tp_price:.2f} "
                         f"· order_id={order_id}")
             return pos
 
         except Exception as e:
-            logger.error(f"[LiveExecutor] open_position FAILED for {strategy_key}: {type(e).__name__}: {e}")
+            self.last_error = f"{type(e).__name__}: {e}"
+            logger.error(f"[LiveExecutor] open_position FAILED for {strategy_key}: {self.last_error}")
             return None
 
     # ── Core: close a live position ──────────────────────────────────────────
@@ -306,12 +350,13 @@ class LiveExecutor:
 
     def status(self) -> dict:
         return {
-            "halted":          self._halted,
-            "daily_pnl":       round(self._daily_pnl, 2),
-            "daily_loss_limit": self.daily_loss_limit,
+            "halted":            self._halted,
+            "daily_pnl":         round(self._daily_pnl, 2),
+            "daily_loss_limit":  self.daily_loss_limit,
             "max_position_usdc": self.max_position_usdc,
-            "open_count":      len(self.live_positions),
-            "live_positions":  list(self.live_positions.values()),
+            "open_count":        len(self.live_positions),
+            "live_positions":    list(self.live_positions.values()),
+            "last_error":        self.last_error,
         }
 
     async def close(self) -> None:
