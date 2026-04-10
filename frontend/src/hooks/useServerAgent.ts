@@ -31,6 +31,8 @@ export interface ServerPosition {
   unrealized_pct: number;
   btc_size:       number;
   is_paper:       boolean;
+  is_shadow?:     boolean;
+  mode?:          string;   // "paper" | "live" | "shadow"
   leverage?:      number;
 }
 
@@ -95,11 +97,22 @@ export interface GridStateData {
   last_reset?:   string;
 }
 
+export interface LiveReadiness {
+  ready:           boolean;
+  trades:          number;
+  trades_needed:   number;
+  win_rate:        number;
+  win_rate_needed: number;
+  trust:           number;
+}
+
 export interface MasterBrainStatus {
   regime:             string;
   regime_confidence:  number;
   regime_updated:     string;
+  regime_stability?:  string;
   strategy_trust:     Record<string, number>;
+  live_readiness?:    Record<string, LiveReadiness>;
   portfolio:          {
     position_count:   number;
     long_exposure:    number;
@@ -123,9 +136,10 @@ export interface MasterBrainStatus {
     strategy_name:   string;
     direction:       string;
     regime:          string;
+    is_live?:        boolean;
     timestamp:       string;
   }>;
-  strategy_stats:     Record<string, { trades: number; wins: number; losses: number; total_pnl: number; win_rate: number }>;
+  strategy_stats:     Record<string, { trades: number; wins: number; losses: number; total_pnl: number; win_rate: number; live_trades?: number; live_wins?: number; live_pnl?: number }>;
   limits:             { max_daily_trades: number; max_consecutive_losses: number; max_open_positions: number; max_daily_loss: number };
 }
 

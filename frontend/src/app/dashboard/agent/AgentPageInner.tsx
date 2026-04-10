@@ -1036,7 +1036,7 @@ function AgentContent() {
           ["Firing",     firingStrategy],
           ["Open Pos",   server.loading ? "…" : `${server.openPositions.length} active`],
           ["Server P&L", server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—"],
-          ["Mode",       server.config?.mode === "live" ? "🔴 LIVE" : "📄 PAPER"],
+          ["Mode",       server.config?.mode === "live" ? "🔴 LIVE+SHADOW" : "📄 PAPER TRAINING"],
         ].map(([label, val]) => (
           <div key={label}>
             <div className="text-[9px] text-neutral-600 mb-0.5">{label}</div>
@@ -1095,7 +1095,7 @@ function AgentContent() {
         <div className="flex items-center gap-3 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
           <FileText size={14} className="text-violet-400 flex-shrink-0" />
           <div className="text-[12px] text-violet-300">
-            <strong>Paper mode active</strong> — simulated fills · live P&L tracking · no real money
+            <strong>Paper training active</strong> — building trade history for Master Brain · strategies must prove &gt;45% win rate on 10+ trades before live BingX execution
           </div>
         </div>
       )}
@@ -1103,7 +1103,7 @@ function AgentContent() {
         <div className="flex items-center gap-3 p-3 rounded-xl border border-red-500/30 bg-red-500/8">
           <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
           <div className="text-[12px] text-red-300">
-            <strong>Live mode active</strong> — real BingX perpetual futures · signals trigger real orders · risk controls enforced
+            <strong>Dual mode active</strong> — live-qualified strategies execute on BingX · unqualified strategies shadow-train on paper · Brain learns from both
           </div>
         </div>
       )}
@@ -1525,6 +1525,7 @@ function AgentContent() {
                 <span className="text-[13px] font-semibold text-white">Master Brain</span>
                 <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 font-mono">
                   {server.brain.regime.toUpperCase()} · {(server.brain.regime_confidence * 100).toFixed(0)}%
+                  {server.brain.regime_stability && ` · ${server.brain.regime_stability}`}
                 </span>
                 <span className="ml-auto text-[9px] text-neutral-600">
                   Updated {server.brain.regime_updated || "—"}
@@ -1548,25 +1549,51 @@ function AgentContent() {
                 ))}
               </div>
 
-              {/* Strategy trust bars */}
+              {/* Strategy trust + live readiness */}
               <div>
-                <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Strategy Trust</div>
-                <div className="space-y-1.5">
+                <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Strategy Trust &amp; Live Readiness</div>
+                <div className="space-y-2">
                   {Object.entries(server.brain.strategy_trust).map(([key, trust]) => {
                     const pct = Math.min(100, Math.max(0, (trust / 2) * 100));
                     const color = trust >= 1.2 ? "#22c55e" : trust <= 0.7 ? "#ef4444" : trust <= 0.9 ? "#f59e0b" : "#0a84ff";
                     const stats = server.brain!.strategy_stats?.[key];
+                    const readiness = server.brain!.live_readiness?.[key];
                     return (
-                      <div key={key} className="flex items-center gap-2">
-                        <span className="text-[9px] text-neutral-500 w-16 text-right font-mono">{key}</span>
-                        <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
+                      <div key={key} className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] text-neutral-500 w-16 text-right font-mono">{key}</span>
+                          <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
+                          </div>
+                          <span className="text-[9px] font-mono w-8 text-right" style={{ color }}>{trust.toFixed(2)}</span>
+                          {stats && (
+                            <span className="text-[8px] text-neutral-600 w-20 text-right">
+                              {stats.wins}W {stats.losses}L · {(stats.win_rate * 100).toFixed(0)}%
+                            </span>
+                          )}
+                          {readiness && (
+                            <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded font-mono ${readiness.ready ? "bg-green-500/15 text-green-400" : "bg-orange-500/15 text-orange-400"}`}>
+                              {readiness.ready ? "LIVE READY" : "TRAINING"}
+                            </span>
+                          )}
                         </div>
-                        <span className="text-[9px] font-mono w-8 text-right" style={{ color }}>{trust.toFixed(2)}</span>
-                        {stats && (
-                          <span className="text-[8px] text-neutral-600 w-20 text-right">
-                            {stats.wins}W {stats.losses}L · {(stats.win_rate * 100).toFixed(0)}%
-                          </span>
+                        {readiness && !readiness.ready && (
+                          <div className="flex items-center gap-2 ml-[72px]">
+                            <div className="flex-1 h-1 bg-neutral-800 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full bg-orange-500/60 transition-all duration-500"
+                                   style={{ width: `${Math.min(100, (readiness.trades / (readiness.trades + readiness.trades_needed)) * 100)}%` }} />
+                            </div>
+                            <span className="text-[7px] text-neutral-600 font-mono">
+                              {readiness.trades}/{readiness.trades + readiness.trades_needed} trades · WR {(readiness.win_rate * 100).toFixed(0)}% (need {(readiness.win_rate_needed * 100).toFixed(0)}%)
+                            </span>
+                          </div>
+                        )}
+                        {stats && stats.live_trades !== undefined && stats.live_trades > 0 && (
+                          <div className="flex items-center gap-1 ml-[72px]">
+                            <span className="text-[7px] text-purple-400 font-mono">
+                              LIVE: {stats.live_wins ?? 0}W / {stats.live_trades - (stats.live_wins ?? 0)}L · ${(stats.live_pnl ?? 0) >= 0 ? "+" : ""}{(stats.live_pnl ?? 0).toFixed(2)}
+                            </span>
+                          </div>
                         )}
                       </div>
                     );
@@ -1584,6 +1611,11 @@ function AgentContent() {
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${d.approved ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
                           {d.action}
                         </span>
+                        {d.is_live !== undefined && (
+                          <span className={`text-[7px] px-1 py-0.5 rounded font-mono ${d.is_live ? "bg-red-500/20 text-red-300" : "bg-blue-500/15 text-blue-300"}`}>
+                            {d.is_live ? "LIVE" : "PAPER"}
+                          </span>
+                        )}
                         <span className="text-[9px] text-white font-semibold">{d.strategy_name}</span>
                         <span className={`text-[8px] font-mono ${d.direction === "long" ? "text-green-400" : "text-red-400"}`}>
                           {d.direction.toUpperCase()}

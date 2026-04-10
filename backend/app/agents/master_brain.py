@@ -66,12 +66,21 @@ class MasterBrain:
             "unknown":       {"momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0, "grid": 1.0},
         }
 
+        # ── Live readiness thresholds ─────────────────────────────────────
+        self.MIN_PAPER_TRADES_FOR_LIVE = 10   # strategy must have 10+ paper trades before live
+        self.MIN_WIN_RATE_FOR_LIVE = 0.45     # must be >45% win rate to go live
+        self.LIVE_CONVICTION_THRESHOLD = 0.60 # higher bar for live than paper (0.45)
+        self.PAPER_CONVICTION_THRESHOLD = 0.40
+
         # ── Limits ───────────────────────────────────────────────────────
         self.MAX_DAILY_TRADES = 30
         self.MAX_CONSECUTIVE_LOSSES = 5
         self.MAX_OPEN_POSITIONS = 6   # across all strategies
         self.MAX_DAILY_LOSS = -300.0  # hard stop
         self.CORRELATION_PENALTY = 0.5  # reduce size if same-direction positions open
+
+        # ── Regime history for stability ──────────────────────────────────
+        self._regime_history: list[str] = []  # last 10 regime readings
 
     # ── Day reset ────────────────────────────────────────────────────────
 
@@ -133,6 +142,7 @@ class MasterBrain:
         self.current_regime = regime
         self.regime_confidence = round(conf, 2)
         self.regime_updated = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        self._regime_history = (self._regime_history + [regime])[-10:]
         return regime
 
     # ══════════════════════════════════════════════════════════════════════
@@ -147,9 +157,12 @@ class MasterBrain:
         open_positions: dict,
         live_price: float,
         portfolio_pnl: float,
+        is_live: bool = False,
     ) -> dict:
         """
         Master decision on whether to execute a signal.
+        is_live=True applies stricter thresholds — strategy must have proven
+        itself on paper first.
 
         Returns: {
             "approved": bool,
@@ -162,7 +175,7 @@ class MasterBrain:
         """
         self._check_day()
         reasons = []
-        score = 1.0   # starts neutral, modifiers push up/down
+        score = 1.0
 
         direction = signal.get("direction", "long")
         confidence = signal.get("confidence", 0.5)
@@ -184,7 +197,14 @@ class MasterBrain:
         elif affinity > 1.2:
             reasons.append(f"{strategy_key} strong in {self.current_regime} regime")
 
-        # ── Factor 3: Confluence — how many strategies agree? ────────────
+        # ── Factor 3: Regime stability — reject if regime is unstable ────
+        if len(self._regime_history) >= 5:
+            unique_recent = len(set(self._regime_history[-5:]))
+            if unique_recent >= 3:
+                score *= 0.7
+                reasons.append("regime unstable (3+ changes in 5 readings)")
+
+        # ── Factor 4: Confluence — how many strategies agree? ────────────
         same_dir_count = 0
         opposite_dir_count = 0
         for k, pos in open_positions.items():
@@ -201,55 +221,82 @@ class MasterBrain:
             score *= 0.7
             reasons.append(f"{opposite_dir_count} positions oppose — conflict")
 
-        # ── Factor 4: Risk gates ─────────────────────────────────────────
+        # ── Factor 5: Risk gates ─────────────────────────────────────────
         total_open = sum(1 for v in open_positions.values() if v)
 
-        # Max positions
         if total_open >= self.MAX_OPEN_POSITIONS:
             return self._reject(strategy_key, strategy_name, signal,
                                 f"Max {self.MAX_OPEN_POSITIONS} positions reached ({total_open} open)")
 
-        # Daily trade limit
         if self.daily_trades >= self.MAX_DAILY_TRADES:
             return self._reject(strategy_key, strategy_name, signal,
-                                f"Daily trade limit reached ({self.daily_trades}/{self.MAX_DAILY_TRADES})")
+                                f"Daily trade limit ({self.daily_trades}/{self.MAX_DAILY_TRADES})")
 
-        # Consecutive losses
         if self.consecutive_losses >= self.MAX_CONSECUTIVE_LOSSES:
             score *= 0.3
             reasons.append(f"⚠ {self.consecutive_losses} consecutive losses — caution mode")
 
-        # Daily P&L stop
         if self.daily_pnl <= self.MAX_DAILY_LOSS:
             return self._reject(strategy_key, strategy_name, signal,
-                                f"Daily loss limit hit (${self.daily_pnl:.0f} ≤ ${self.MAX_DAILY_LOSS:.0f})")
+                                f"Daily loss limit (${self.daily_pnl:.0f} ≤ ${self.MAX_DAILY_LOSS:.0f})")
 
-        # ── Factor 5: Signal quality ─────────────────────────────────────
-        score *= (0.7 + confidence * 0.6)  # range: 0.7 – 1.3
+        # ── Factor 6: Signal quality ─────────────────────────────────────
+        score *= (0.7 + confidence * 0.6)
         if confidence < 0.55:
             reasons.append("low signal confidence")
         elif confidence > 0.75:
             reasons.append("strong signal confidence")
 
-        # ── Factor 6: Correlation penalty ────────────────────────────────
+        # ── Factor 7: Correlation penalty ────────────────────────────────
         size_mult = 1.0
         if same_dir_count >= 2:
             size_mult *= self.CORRELATION_PENALTY
-            reasons.append(f"size reduced — correlated with {same_dir_count} open")
+            reasons.append(f"size reduced — {same_dir_count} correlated positions")
 
-        # ── Factor 7: Kelly-fraction sizing ──────────────────────────────
+        # ── Factor 8: Kelly-fraction sizing ──────────────────────────────
         stats = self.strategy_stats.get(strategy_key, {})
+        total_trades = stats.get("trades", 0)
         win_rate = stats.get("win_rate", 0.5)
         avg_win = stats.get("avg_win", 1.0)
         avg_loss = abs(stats.get("avg_loss", -1.0)) or 1.0
-        if win_rate > 0 and avg_loss > 0:
-            kelly = win_rate - (1 - win_rate) / (avg_win / avg_loss)
-            kelly_frac = max(0.1, min(0.5, kelly * 0.5))  # half-Kelly, clamped
+        if total_trades >= 5 and win_rate > 0 and avg_loss > 0:
+            kelly = win_rate - (1 - win_rate) / (avg_win / avg_loss) if avg_win > 0 else 0
+            kelly_frac = max(0.1, min(0.5, kelly * 0.5))
             size_mult *= (0.5 + kelly_frac)
+            if win_rate > 0.6:
+                reasons.append(f"high win rate ({win_rate:.0%}) → size boost")
+            elif win_rate < 0.4:
+                reasons.append(f"low win rate ({win_rate:.0%}) → size cut")
+
+        # ── Factor 9: LIVE-ONLY gates ────────────────────────────────────
+        if is_live:
+            # Must have enough paper history
+            if total_trades < self.MIN_PAPER_TRADES_FOR_LIVE:
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Not enough data — {total_trades}/{self.MIN_PAPER_TRADES_FOR_LIVE} "
+                                    f"paper trades needed before live")
+
+            # Must have acceptable win rate
+            if total_trades >= self.MIN_PAPER_TRADES_FOR_LIVE and win_rate < self.MIN_WIN_RATE_FOR_LIVE:
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Win rate too low for live ({win_rate:.0%} < {self.MIN_WIN_RATE_FOR_LIVE:.0%})")
+
+            # Trust must be reasonable
+            if trust < 0.7:
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Trust too low for live ({trust:.2f} < 0.70)")
+
+            # No live trades after 3 consecutive losses
+            if self.consecutive_losses >= 3:
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Live paused — {self.consecutive_losses} consecutive losses")
+
+            reasons.append("✓ live-qualified")
 
         # ── Final decision ───────────────────────────────────────────────
         conviction = min(1.0, max(0.0, score))
-        approved = conviction >= 0.45
+        threshold = self.LIVE_CONVICTION_THRESHOLD if is_live else self.PAPER_CONVICTION_THRESHOLD
+        approved = conviction >= threshold
 
         action = "APPROVE" if approved else "REJECT"
         if approved and size_mult < 0.6:
@@ -265,16 +312,19 @@ class MasterBrain:
             "strategy_name":   strategy_name,
             "direction":       direction,
             "regime":          self.current_regime,
+            "is_live":         is_live,
             "timestamp":       datetime.now(timezone.utc).strftime("%H:%M:%S"),
             "factors": {
-                "trust":        round(trust, 2),
-                "affinity":     round(affinity, 2),
-                "confluence":   same_dir_count,
-                "daily_trades": self.daily_trades,
+                "trust":         round(trust, 2),
+                "affinity":      round(affinity, 2),
+                "confluence":    same_dir_count,
+                "daily_trades":  self.daily_trades,
                 "consec_losses": self.consecutive_losses,
-                "daily_pnl":    round(self.daily_pnl, 2),
-                "signal_conf":  round(confidence, 2),
-                "kelly_size":   round(size_mult, 2),
+                "daily_pnl":     round(self.daily_pnl, 2),
+                "signal_conf":   round(confidence, 2),
+                "kelly_size":    round(size_mult, 2),
+                "total_trades":  total_trades,
+                "win_rate":      round(win_rate, 3),
             },
         }
 
@@ -283,8 +333,9 @@ class MasterBrain:
         if approved:
             self.daily_trades += 1
 
+        mode_tag = "LIVE" if is_live else "PAPER"
         log_emoji = "✅" if approved else "❌"
-        logger.info(f"[MasterBrain] {log_emoji} {action} {strategy_name} {direction.upper()} "
+        logger.info(f"[MasterBrain] [{mode_tag}] {log_emoji} {action} {strategy_name} {direction.upper()} "
                     f"· conviction {conviction:.0%} · size {size_mult:.0%} · {decision['reasoning']}")
         return decision
 
@@ -310,32 +361,39 @@ class MasterBrain:
     #  LEARNING: update trust after trade closes
     # ══════════════════════════════════════════════════════════════════════
 
-    def record_trade_result(self, strategy_key: str, pnl: float, won: bool) -> None:
-        """Called after every trade closure. Updates trust and stats."""
+    def record_trade_result(self, strategy_key: str, pnl: float, won: bool,
+                           was_live: bool = False) -> None:
+        """Called after every trade closure. Updates trust and stats.
+        Paper trades still count for learning — this is how the Brain
+        builds confidence before approving live execution."""
         self._check_day()
         self.daily_pnl += pnl
 
         if won:
             self.daily_wins += 1
             self.consecutive_losses = 0
-            # Reward: push trust toward 1.5 (max 2.0)
             cur = self.strategy_trust.get(strategy_key, 1.0)
             self.strategy_trust[strategy_key] = min(2.0, cur + 0.05)
         else:
             self.daily_losses_count += 1
             self.consecutive_losses += 1
-            # Penalize: push trust down (min 0.3)
             cur = self.strategy_trust.get(strategy_key, 1.0)
-            self.strategy_trust[strategy_key] = max(0.3, cur - 0.08)
+            penalty = 0.12 if was_live else 0.08  # live losses penalize harder
+            self.strategy_trust[strategy_key] = max(0.3, cur - penalty)
 
-        # Update per-strategy stats
         s = self.strategy_stats.setdefault(strategy_key, {
             "trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0,
             "win_rate": 0.5, "avg_win": 0.0, "avg_loss": 0.0,
             "win_pnls": [], "loss_pnls": [],
+            "live_trades": 0, "live_wins": 0, "live_pnl": 0.0,
         })
         s["trades"] += 1
         s["total_pnl"] += pnl
+        if was_live:
+            s["live_trades"] = s.get("live_trades", 0) + 1
+            s["live_pnl"] = s.get("live_pnl", 0.0) + pnl
+            if won:
+                s["live_wins"] = s.get("live_wins", 0) + 1
         if won:
             s["wins"] += 1
             s["win_pnls"] = (s.get("win_pnls", []) + [pnl])[-50:]
@@ -346,8 +404,10 @@ class MasterBrain:
             s["avg_loss"] = sum(s["loss_pnls"]) / len(s["loss_pnls"]) if s["loss_pnls"] else 0
         s["win_rate"] = s["wins"] / s["trades"] if s["trades"] > 0 else 0.5
 
-        logger.info(f"[MasterBrain] Trade result: {strategy_key} {'WIN' if won else 'LOSS'} "
-                    f"${pnl:+.2f} · trust now {self.strategy_trust[strategy_key]:.2f} "
+        mode_tag = "LIVE" if was_live else "PAPER"
+        logger.info(f"[MasterBrain] [{mode_tag}] {strategy_key} {'WIN' if won else 'LOSS'} "
+                    f"${pnl:+.2f} · trust {self.strategy_trust[strategy_key]:.2f} "
+                    f"· win rate {s['win_rate']:.0%} ({s['trades']} trades) "
                     f"· streak {self.consecutive_losses} losses")
 
     # ══════════════════════════════════════════════════════════════════════
@@ -395,13 +455,35 @@ class MasterBrain:
     #  STATUS (for API / frontend)
     # ══════════════════════════════════════════════════════════════════════
 
+    def is_strategy_live_ready(self, strategy_key: str) -> dict:
+        """Check if a strategy has enough paper history and win rate for live."""
+        stats = self.strategy_stats.get(strategy_key, {})
+        total = stats.get("trades", 0)
+        wr = stats.get("win_rate", 0.0)
+        trust = self.strategy_trust.get(strategy_key, 1.0)
+        ready = (total >= self.MIN_PAPER_TRADES_FOR_LIVE
+                 and wr >= self.MIN_WIN_RATE_FOR_LIVE
+                 and trust >= 0.7)
+        return {
+            "ready": ready,
+            "trades": total,
+            "trades_needed": max(0, self.MIN_PAPER_TRADES_FOR_LIVE - total),
+            "win_rate": round(wr, 3),
+            "win_rate_needed": self.MIN_WIN_RATE_FOR_LIVE,
+            "trust": round(trust, 2),
+        }
+
     def get_status(self, positions: dict, live_price: float) -> dict:
         portfolio = self.portfolio_summary(positions, live_price)
+        live_readiness = {k: self.is_strategy_live_ready(k)
+                         for k in self.strategy_trust}
         return {
             "regime":             self.current_regime,
             "regime_confidence":  self.regime_confidence,
             "regime_updated":     self.regime_updated,
+            "regime_stability":   self._regime_stability(),
             "strategy_trust":     {k: round(v, 2) for k, v in self.strategy_trust.items()},
+            "live_readiness":     live_readiness,
             "portfolio":          portfolio,
             "recent_decisions":   self.decisions[:10],
             "strategy_stats":     {k: {kk: vv for kk, vv in v.items() if kk not in ("win_pnls", "loss_pnls")}
@@ -414,6 +496,17 @@ class MasterBrain:
             },
         }
 
+    def _regime_stability(self) -> str:
+        if len(self._regime_history) < 3:
+            return "insufficient_data"
+        unique = len(set(self._regime_history[-5:]))
+        if unique <= 1:
+            return "stable"
+        elif unique == 2:
+            return "moderate"
+        else:
+            return "unstable"
+
     # ══════════════════════════════════════════════════════════════════════
     #  SERIALIZATION
     # ══════════════════════════════════════════════════════════════════════
@@ -422,6 +515,7 @@ class MasterBrain:
         return {
             "current_regime":     self.current_regime,
             "regime_confidence":  self.regime_confidence,
+            "regime_history":     self._regime_history[-10:],
             "strategy_trust":     self.strategy_trust,
             "strategy_stats":     self.strategy_stats,
             "consecutive_losses": self.consecutive_losses,
@@ -438,6 +532,7 @@ class MasterBrain:
             return
         self.current_regime     = data.get("current_regime", "unknown")
         self.regime_confidence  = data.get("regime_confidence", 0.0)
+        self._regime_history    = data.get("regime_history", [])
         self.strategy_trust     = data.get("strategy_trust", self.strategy_trust)
         self.strategy_stats     = data.get("strategy_stats", {})
         self.consecutive_losses = data.get("consecutive_losses", 0)

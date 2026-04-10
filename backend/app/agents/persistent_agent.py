@@ -895,8 +895,12 @@ class PersistentAgent:
         self.config["auto_execute"] = True
         self._running = True
         self._task = asyncio.create_task(self._loop())
-        self._log("Agent STARTED — all 5 strategies scanning every 20s (server-side, 24/7)")
-        logger.info("PersistentAgent started")
+        mode = self.config.get("mode", "paper")
+        if mode == "live":
+            self._log("Agent STARTED — DUAL MODE: paper shadow training + live BingX (qualified strategies only)")
+        else:
+            self._log("Agent STARTED — PAPER MODE: all 5 strategies training every 20s (server-side, 24/7)")
+        logger.info(f"PersistentAgent started in {mode} mode")
 
     async def stop(self) -> None:
         self._running = False
@@ -1035,8 +1039,24 @@ class PersistentAgent:
         # ── MasterBrain: detect market regime ────────────────────────────
         self.brain.detect_regime(candles15m, candles1m)
         if self.scan_count % 10 == 1:
+            stability = self.brain._regime_stability()
             self._log(f"🧠 Regime: {self.brain.current_regime.upper()} "
-                      f"({self.brain.regime_confidence:.0%} confidence)")
+                      f"({self.brain.regime_confidence:.0%} confidence · {stability})")
+
+            # Log live readiness summary
+            if self._is_live_mode():
+                ready_strats = []
+                training_strats = []
+                for sk in list(self.brain.strategy_trust.keys()):
+                    r = self.brain.is_strategy_live_ready(sk)
+                    if r["ready"]:
+                        ready_strats.append(f"{sk}({r['win_rate']:.0%})")
+                    else:
+                        training_strats.append(f"{sk}({r['trades']}/{self.brain.MIN_PAPER_TRADES_FOR_LIVE})")
+                if ready_strats:
+                    self._log(f"🟢 Live-ready: {', '.join(ready_strats)}")
+                if training_strats:
+                    self._log(f"📋 Training: {', '.join(training_strats)}")
 
         any_signal = False
         for key, result in strategies:
@@ -1075,21 +1095,8 @@ class PersistentAgent:
                           f"conf {conf*100:.0f}% (min {adj_min_conf*100:.0f}%){ti_str}{cd_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not open_pos and not in_cooldown and s_cfg.get("auto_execute", True):
-                    # ── MasterBrain gate: evaluate before executing ──
-                    decision = self.brain.evaluate_signal(
-                        strategy_key=key, strategy_name=name, signal=sig,
-                        open_positions=self.positions, live_price=live_price,
-                        portfolio_pnl=self.stats.get("total_pnl", 0),
-                    )
-                    if decision["approved"]:
-                        adjusted_cfg = {**s_cfg}
-                        adjusted_cfg["size_usdc"] = round(s_cfg["size_usdc"] * decision["size_multiplier"], 2)
-                        self._log(f"🧠 APPROVED {name} · conviction {decision['conviction']:.0%} "
-                                  f"· size {decision['size_multiplier']:.0%} · {decision['reasoning']}")
-                        self._open_position(key, name, sig, adjusted_cfg, live_price)
-                        any_signal = True
-                    else:
-                        self._log(f"🧠 BLOCKED {name} — {decision['reasoning']}")
+                    self._brain_gate_execute(key, name, sig, s_cfg, live_price)
+                    any_signal = True
             else:
                 if self.scan_count % 5 == 0:
                     ti_str = f" · trust {trust:.2f} {label}" if ti.get("total_trades", 0) > 0 else ""
@@ -1131,20 +1138,8 @@ class PersistentAgent:
                           f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS}{ti_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not already_open and slot_ok and grid_cfg.get("auto_execute", True):
-                    decision = self.brain.evaluate_signal(
-                        strategy_key="grid", strategy_name="Grid $50", signal=grid_sig,
-                        open_positions=self.positions, live_price=live_price,
-                        portfolio_pnl=self.stats.get("total_pnl", 0),
-                    )
-                    if decision["approved"]:
-                        adjusted_cfg = {**grid_cfg}
-                        adjusted_cfg["size_usdc"] = round(grid_cfg["size_usdc"] * decision["size_multiplier"], 2)
-                        self._log(f"🧠 APPROVED Grid $50 · conviction {decision['conviction']:.0%} "
-                                  f"· size {decision['size_multiplier']:.0%}")
-                        self._open_position(grid_level_key, "Grid $50", grid_sig, adjusted_cfg, live_price)
-                        any_signal = True
-                    else:
-                        self._log(f"🧠 BLOCKED Grid $50 — {decision['reasoning']}")
+                    self._brain_gate_execute(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
+                    any_signal = True
             elif self.scan_count % 5 == 0:
                 ti_str = f" · trust {grid_trust:.2f} {grid_label}" if grid_ti.get("total_trades", 0) > 0 else ""
                 self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
@@ -1154,6 +1149,112 @@ class PersistentAgent:
 
         self._save_state()           # fast file cache
         await self._save_state_db()  # durable DB persist
+
+    # ── Brain-gated execution (dual-mode: paper shadow + live) ─────────────
+
+    def _brain_gate_execute(self, key: str, name: str, sig: dict, cfg: dict, live_price: float) -> None:
+        """
+        Dual-mode execution pipeline:
+        - PAPER mode: evaluate with paper threshold, open paper position
+        - LIVE mode:
+            1. Try live evaluation (strict thresholds + win-rate gate)
+            2. If live-approved → execute on BingX
+            3. If live-rejected → fall back to paper shadow (trains the Brain)
+        """
+        strat_key = key.split("_")[0] if key.startswith("grid_") else key
+        is_live_mode = self._is_live_mode()
+
+        if is_live_mode:
+            live_decision = self.brain.evaluate_signal(
+                strategy_key=strat_key, strategy_name=name, signal=sig,
+                open_positions=self.positions, live_price=live_price,
+                portfolio_pnl=self.stats.get("total_pnl", 0),
+                is_live=True,
+            )
+            if live_decision["approved"]:
+                adjusted_cfg = {**cfg}
+                adjusted_cfg["size_usdc"] = round(cfg["size_usdc"] * live_decision["size_multiplier"], 2)
+                readiness = self.brain.is_strategy_live_ready(strat_key)
+                self._log(f"🧠 LIVE APPROVED {name} · conviction {live_decision['conviction']:.0%} "
+                          f"· size {live_decision['size_multiplier']:.0%} "
+                          f"· win rate {readiness['win_rate']:.0%} ({readiness['trades']} trades) "
+                          f"· {live_decision['reasoning']}")
+                self._open_position(key, name, sig, adjusted_cfg, live_price)
+                return
+
+            rejection_reason = live_decision["reasoning"]
+            paper_decision = self.brain.evaluate_signal(
+                strategy_key=strat_key, strategy_name=name, signal=sig,
+                open_positions=self.positions, live_price=live_price,
+                portfolio_pnl=self.stats.get("total_pnl", 0),
+                is_live=False,
+            )
+            if paper_decision["approved"]:
+                adjusted_cfg = {**cfg}
+                adjusted_cfg["size_usdc"] = round(cfg["size_usdc"] * paper_decision["size_multiplier"], 2)
+                readiness = self.brain.is_strategy_live_ready(strat_key)
+                self._log(f"🧠 SHADOW PAPER {name} (live blocked: {rejection_reason}) "
+                          f"· training data {readiness['trades']}/{self.brain.MIN_PAPER_TRADES_FOR_LIVE} trades "
+                          f"· win rate {readiness['win_rate']:.0%}")
+                self._open_position_paper_shadow(key, name, sig, adjusted_cfg, live_price)
+            else:
+                self._log(f"🧠 BLOCKED {name} — {rejection_reason}")
+        else:
+            decision = self.brain.evaluate_signal(
+                strategy_key=strat_key, strategy_name=name, signal=sig,
+                open_positions=self.positions, live_price=live_price,
+                portfolio_pnl=self.stats.get("total_pnl", 0),
+                is_live=False,
+            )
+            if decision["approved"]:
+                adjusted_cfg = {**cfg}
+                adjusted_cfg["size_usdc"] = round(cfg["size_usdc"] * decision["size_multiplier"], 2)
+                self._log(f"🧠 APPROVED {name} · conviction {decision['conviction']:.0%} "
+                          f"· size {decision['size_multiplier']:.0%} · {decision['reasoning']}")
+                self._open_position(key, name, sig, adjusted_cfg, live_price)
+            else:
+                self._log(f"🧠 BLOCKED {name} — {decision['reasoning']}")
+
+    def _open_position_paper_shadow(self, key: str, name: str, sig: dict, cfg: dict, price: float) -> None:
+        """Open a paper position even in live mode — shadow training for the Brain."""
+        sig_entry = sig["entry"] if sig.get("entry", 0) > 0 else price
+        d = sig["direction"]
+        entry = price if price > 0 else sig_entry
+
+        sig_sl = sig.get("sl") or 0
+        sig_tp = sig.get("tp") or 0
+        sl_dist = abs(sig_entry - sig_sl) if sig_sl else 0
+        tp_dist = abs(sig_tp - sig_entry) if sig_tp else 0
+        sl = ((entry - sl_dist) if d == "long" else (entry + sl_dist)) if sl_dist > 0 else sig_sl
+        tp = ((entry + tp_dist) if d == "long" else (entry - tp_dist)) if tp_dist > 0 else sig_tp
+
+        leverage = max(1, int(cfg.get("leverage", 1)))
+        btc_size = (cfg["size_usdc"] * leverage) / entry if entry > 0 else 0
+
+        pos = {
+            "id":             f"{key}-shadow-{int(time.time()*1000)}",
+            "strategy_key":   key,
+            "strategy_name":  name,
+            "direction":      d,
+            "entry":          round(entry, 2),
+            "sl":             round(sl, 2),
+            "tp":             round(tp, 2),
+            "size_usdc":      cfg["size_usdc"],
+            "leverage":       leverage,
+            "confidence":     sig["confidence"],
+            "reasoning":      sig.get("reasoning", ""),
+            "rr":             sig.get("rr", "1:2"),
+            "timestamp":      datetime.now(timezone.utc).isoformat(),
+            "current_price":  entry,
+            "unrealized_pnl": 0.0,
+            "unrealized_pct": 0.0,
+            "btc_size":       btc_size,
+            "is_paper":       True,
+            "is_shadow":      True,
+            "mode":           "shadow",
+        }
+        self.positions[key] = pos
+        self._log(f"📋 [SHADOW] [{name}] {d.upper()} @ ${entry:.0f} · paper training while building live confidence")
 
     # ── Position management ───────────────────────────────────────────────────
 
@@ -1341,10 +1442,9 @@ class PersistentAgent:
         self._log(f"{prefix} [{pos['strategy_name']}] {reason.upper()} @ ${exit_price:.0f} · "
                   f"P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
 
-        # Feed result to MasterBrain for learning
         strat_key = key.split("_")[0] if key.startswith("grid_") else key
         won = pnl > 0
-        self.brain.record_trade_result(strat_key, pnl, won)
+        self.brain.record_trade_result(strat_key, pnl, won, was_live=is_live)
 
         self._rebuild_training_index()
         self._save_state()
