@@ -533,9 +533,9 @@ function AgentContent() {
         ))}
 
         <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => { server.refresh(); forceScan(); }}
+          <button onClick={() => { server.forceScan(); forceScan(); }}
             className="p-2 rounded-lg hover:bg-neutral-800 text-neutral-600 hover:text-white transition-colors"
-            title="Refresh now">
+            title="Force scan now">
             <RefreshCw size={14} className={agentState === "scanning" ? "animate-spin" : ""} />
           </button>
 
@@ -552,6 +552,32 @@ function AgentContent() {
           </button>
         </div>
       </div>
+
+      {/* Server data status — shows if agent has live data */}
+      {server.status && (
+        <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-neutral-800 bg-neutral-900/50 text-[10px] flex-wrap">
+          <div className={`flex items-center gap-1.5 ${server.livePrice > 0 ? "text-green-400" : "text-red-400"}`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${server.livePrice > 0 ? "bg-green-400 animate-pulse" : "bg-red-500"}`} />
+            {server.livePrice > 0 ? `BTC $${server.livePrice.toLocaleString()}` : "No price feed"}
+          </div>
+          <div className="text-neutral-600">·</div>
+          <div className="text-neutral-400">
+            Enabled: <span className={server.config?.enabled ? "text-green-400" : "text-red-400"}>{server.config?.enabled ? "YES" : "NO"}</span>
+          </div>
+          <div className="text-neutral-600">·</div>
+          <div className="text-neutral-400">
+            Auto-Execute: <span className={server.config?.auto_execute ? "text-green-400" : "text-red-400"}>{server.config?.auto_execute ? "YES" : "NO"}</span>
+          </div>
+          <div className="text-neutral-600">·</div>
+          <div className="text-neutral-400">Scans: <span className="text-white">{server.scanCount}</span></div>
+          {(!server.config?.enabled || !server.config?.auto_execute) && (
+            <button onClick={() => server.startAgent()}
+              className="ml-auto px-3 py-1 rounded-lg bg-green-500/15 border border-green-500/30 text-green-400 text-[10px] font-bold hover:bg-green-500/25 transition-colors">
+              Enable Trading
+            </button>
+          )}
+        </div>
+      )}
 
       {!connected && config.mode !== "paper" && (
         <div className="flex items-center gap-3 p-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5">

@@ -137,11 +137,23 @@ export function useServerAgent() {
     await refresh();
   }, [refresh]);
 
+  const forceScan = useCallback(async () => {
+    await apiFetch("/api/agent/force-scan", { method: "POST" });
+    await refresh();
+  }, [refresh]);
+
+  // Auto-start the agent when the hook mounts if it's not running
+  useEffect(() => {
+    if (status && !status.running) {
+      apiFetch("/api/agent/start", { method: "POST" }).then(() => refresh()).catch(() => {});
+    }
+  }, [status?.running, refresh]);
+
   return {
     status, error, loading,
     refresh,
     startAgent, stopAgent,
-    updateConfig, resetAccount, closePosition,
+    updateConfig, resetAccount, closePosition, forceScan,
     // Convenience shortcuts
     running:        status?.running        ?? false,
     config:         status?.config         ?? null,

@@ -30,12 +30,17 @@ async def get_status():
 async def start_agent():
     agent = _get()
     await agent.start()
-    return {"ok": True, "message": "Agent started"}
+    # Force-enable trading even if stale DB config had it off
+    agent.config["enabled"]      = True
+    agent.config["auto_execute"] = True
+    agent._schedule_db_save()
+    return {"ok": True, "message": "Agent started", "config": agent.config}
 
 
 @router.post("/stop")
 async def stop_agent():
     agent = _get()
+    agent.config["enabled"] = False
     await agent.stop()
     return {"ok": True, "message": "Agent stopped"}
 
@@ -69,3 +74,34 @@ async def close_position(strategy_key: str):
     if not ok:
         raise HTTPException(status_code=404, detail=f"No open position for {strategy_key}")
     return {"ok": True, "closed": strategy_key}
+
+
+@router.get("/debug")
+async def debug_agent():
+    """Detailed diagnostic — shows market data availability and strategy state."""
+    from app.agents.live_market_stream import LIVE_CANDLES, LIVE_PRICES, LIVE_ORDERBOOK
+    agent = _get()
+    price_data = LIVE_PRICES.get("BTC/USDT", {})
+    orderbook  = LIVE_ORDERBOOK.get("BTC/USDT")
+    return {
+        "agent_running":   agent._running,
+        "scan_count":      agent.scan_count,
+        "last_scan":       agent.last_scan,
+        "config":          agent.config,
+        "positions":       agent.positions,
+        "live_price":      price_data.get("last", 0),
+        "candles_1m":      len(LIVE_CANDLES.get("BTC/USDT:1m", [])),
+        "candles_15m":     len(LIVE_CANDLES.get("BTC/USDT:15m", [])),
+        "orderbook_bids":  len(orderbook.get("bids", [])) if orderbook else 0,
+        "last_5_logs":     agent.log[:5],
+    }
+
+
+@router.post("/force-scan")
+async def force_scan():
+    """Trigger an immediate strategy scan (for testing/debugging)."""
+    agent = _get()
+    if not agent._running:
+        raise HTTPException(status_code=400, detail="Agent is not running")
+    await agent._scan()
+    return {"ok": True, "scan_count": agent.scan_count, "log": agent.log[:10]}

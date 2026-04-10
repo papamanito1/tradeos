@@ -593,11 +593,18 @@ class PersistentAgent:
 
     async def start(self) -> None:
         if self._running:
+            # Already running — ensure trading flags are active
+            self.config["enabled"]      = True
+            self.config["auto_execute"] = True
+            self._schedule_db_save()
             return
         # Load from DB first (persistent) — overrides the file loaded in __init__
         loaded_from_db = await self._load_state_db()
         if not loaded_from_db:
             self._load_state()  # file fallback (local dev)
+        # Always force trading-active flags on start regardless of stale DB config
+        self.config["enabled"]      = True
+        self.config["auto_execute"] = True
         self._running = True
         self._task = asyncio.create_task(self._loop())
         self._log("Agent STARTED — all 4 strategies scanning every 20s (server-side, 24/7)")
