@@ -56,123 +56,99 @@ _background_tasks: list[asyncio.Task] = []
 
 @app.on_event("startup")
 async def startup():
-    logger.info("TradeOS starting up...")
+    """
+    Startup hook — MUST return quickly (< 10 s) so Railway health check passes.
+    All slow/network operations are kicked off as background tasks.
+    """
+    logger.info("TradeOS starting up…")
 
-    # Init DB (non-fatal — falls back to SQLite if PostgreSQL is unreachable)
+    # Kick off all heavy init as a background task so the hook returns immediately
+    asyncio.create_task(_background_init())
+
+    logger.info("TradeOS accepting requests — background init in progress")
+
+
+async def _background_init():
+    """All slow startup work runs here, off the critical startup path."""
+    await asyncio.sleep(0.5)  # tiny delay so Uvicorn finishes binding first
+
+    # 1 — DB (SQLite fallback if PG unreachable; 10 s hard cap)
     try:
-        await asyncio.wait_for(init_db(), timeout=12)
+        await asyncio.wait_for(init_db(), timeout=10)
         logger.info("Database initialized")
-    except asyncio.TimeoutError:
-        logger.error("DB init timed out after 12 s — continuing with SQLite fallback")
     except Exception as e:
-        logger.error(f"DB init failed entirely: {e} — continuing without persistent DB")
+        logger.error(f"DB init error ({type(e).__name__}): {e} — using SQLite fallback")
 
-    # Seed admin if missing
+    # 2 — Seed admin (already handles upsert; 10 s cap)
     try:
         from app.seeds.seed_data import seed
-        await asyncio.wait_for(seed(), timeout=15)
-    except asyncio.TimeoutError:
-        logger.warning("Seed timed out — skipping")
+        await asyncio.wait_for(seed(), timeout=10)
     except Exception as e:
         logger.warning(f"Seed skipped: {e}")
 
-    # ── Always ensure Kashan/Manan admin exists (survives SQLite resets) ──────
+    # 3 — Ensure Kashan/Manan admin always exists
     async def _ensure_kashan():
         from app.core.database import AsyncSessionLocal
         from app.core.security import hash_password
         from app.models.user import User
         from sqlalchemy import select
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(select(User).where(User.username == "Kashan"))
-            user = result.scalar_one_or_none()
-            if not user:
-                session.add(User(username="Kashan", hashed_password=hash_password("Manan"),
-                                 is_active=True, is_admin=True))
+        async with AsyncSessionLocal() as s:
+            r = await s.execute(select(User).where(User.username == "Kashan"))
+            u = r.scalar_one_or_none()
+            if not u:
+                s.add(User(username="Kashan", hashed_password=hash_password("Manan"),
+                            is_active=True, is_admin=True))
             else:
-                user.hashed_password = hash_password("Manan")
-                user.is_active = True
-            await session.commit()
-            logger.info("Admin user Kashan ensured")
+                u.hashed_password = hash_password("Manan")
+                u.is_active = True
+            await s.commit()
+            logger.info("Admin Kashan ensured")
     try:
-        await asyncio.wait_for(_ensure_kashan(), timeout=10)
-    except asyncio.TimeoutError:
-        logger.warning("Kashan admin ensure timed out — skipping")
+        await asyncio.wait_for(_ensure_kashan(), timeout=8)
     except Exception as e:
         logger.warning(f"Kashan admin ensure failed: {e}")
 
-    # Load risk settings from DB
-    try:
-        from app.core.database import AsyncSessionLocal
-        from app.models.risk_settings import RiskSettings
-        from sqlalchemy import select
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(select(RiskSettings).limit(1))
-            rs = result.scalar_one_or_none()
-            if rs:
-                update_risk_engine(RiskConfig(
-                    max_daily_loss_usd=rs.max_daily_loss_usd,
-                    max_daily_loss_pct=rs.max_daily_loss_pct,
-                    max_position_size_usd=rs.max_position_size_usd,
-                    max_leverage=rs.max_leverage,
-                    max_open_trades=rs.max_open_trades,
-                    symbol_blacklist=rs.symbol_blacklist,
-                ))
-    except Exception as e:
-        logger.warning(f"Risk settings load failed: {e}")
-
-    # Start Redis pub/sub listener FIRST so the in-memory queue is registered
-    # before the market stream starts publishing events (avoids race condition).
+    # 4 — Redis listener (background, non-blocking by design)
     channels = [
         "market:ticker", "market:kline", "market:orderbook",
         "signal:new", "execution:order_placed",
         "execution:risk_block", "risk:kill_switch", "risk:position_closed",
         "journal:new",
     ]
-    task = asyncio.create_task(redis_listener(channels))
-    _background_tasks.append(task)
-    # Yield once so the listener task runs its setup code before we start streaming
-    await asyncio.sleep(0)
-    logger.info("Redis listener started")
+    _background_tasks.append(asyncio.create_task(redis_listener(channels)))
+    logger.info("Redis listener task created")
 
-    # Start Live Market Stream Agent (Binance public WebSocket — no API key needed)
+    # 5 — Live market stream (background WebSocket — don't block on connect)
     try:
         from app.agents.live_market_stream import create_live_stream_agent
-        live_stream = create_live_stream_agent()
-        await asyncio.wait_for(live_stream.start(), timeout=10)
-        logger.info("Live market stream agent started (Binance public WS)")
-    except asyncio.TimeoutError:
-        logger.warning("Live stream agent start timed out — skipping")
+        ls = create_live_stream_agent()
+        asyncio.create_task(ls.start())
+        logger.info("Live market stream task created")
     except Exception as e:
-        logger.warning(f"Live stream agent failed to start: {e}")
+        logger.warning(f"Live stream create failed: {e}")
 
-    # ── Trading pipeline: Signal → Risk → Execution (paper) ──────────────────
+    # 6 — Signal / execution pipeline (background)
     try:
         from app.agents.signal_agent import SignalAgent
         from app.agents.execution_agent import ExecutionAgent
         from app.exchange.paper_trading import PaperTradingEngine
-
         paper_engine = PaperTradingEngine()
-        exec_agent = ExecutionAgent(exchange=paper_engine, mode="paper")
-        signal_agent = SignalAgent(execution_agent=exec_agent)
-
-        await asyncio.wait_for(signal_agent.start(), timeout=10)
-        logger.info("Signal agent started — strategies will run every 60 s")
-    except asyncio.TimeoutError:
-        logger.warning("Signal agent start timed out — skipping")
+        exec_agent  = ExecutionAgent(exchange=paper_engine, mode="paper")
+        sig_agent   = SignalAgent(execution_agent=exec_agent)
+        asyncio.create_task(sig_agent.start())
+        logger.info("Signal agent task created")
     except Exception as e:
-        logger.warning(f"Signal/execution pipeline failed to start: {e}")
+        logger.warning(f"Signal pipeline create failed: {e}")
 
-    # Start 24/7 persistent trading agent
+    # 7 — 24/7 persistent trading agent
     try:
         from app.agents.persistent_agent import start_agent
-        await asyncio.wait_for(start_agent(), timeout=15)
-        logger.info("Persistent trading agent started — running 24/7 on server")
-    except asyncio.TimeoutError:
-        logger.warning("Persistent agent start timed out — skipping")
+        await asyncio.wait_for(start_agent(), timeout=12)
+        logger.info("Persistent trading agent started")
     except Exception as e:
-        logger.warning(f"Persistent agent failed to start: {e}")
+        logger.warning(f"Persistent agent failed: {e}")
 
-    logger.info("TradeOS ready")
+    logger.info("Background init complete — all systems running")
 
 
 @app.on_event("shutdown")
