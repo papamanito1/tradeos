@@ -912,7 +912,8 @@ class PersistentAgent:
                       f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS} · {block or 'EXECUTING'}")
 
             if cond_ok and conf_ok and not already_open and slot_ok and cfg.get("auto_execute", True):
-                self._open_position(grid_level_key, "Grid $50", grid_sig, cfg, live_price)
+                grid_cfg = {**cfg, "leverage": 30}
+                self._open_position(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
                 any_signal = True
         elif self.scan_count % 5 == 0:
             self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "

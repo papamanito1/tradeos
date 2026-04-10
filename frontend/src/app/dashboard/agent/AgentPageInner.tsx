@@ -1333,7 +1333,7 @@ function AgentContent() {
 
               {/* Strategy spec footer */}
               <div className="flex gap-3 mt-3 pt-3 border-t border-neutral-800">
-                {[["Spacing", "$50", "text-cyan-400"], ["Leverage", "3–5×", "text-white"],
+                {[["Spacing", "$50", "text-cyan-400"], ["Leverage", "30×", "text-orange-400"],
                   ["R:R", "1:1", "text-neutral-300"], ["Timeframe", "continuous", "text-blue-400"],
                   ["Max Hold", "2 hr", "text-neutral-400"], ["Bias", "Long", "text-green-400"],
                 ].map(([l, v, cls]) => (
