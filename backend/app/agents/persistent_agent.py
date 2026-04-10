@@ -789,13 +789,14 @@ class PersistentAgent:
                 else:
                     break
 
-            # Time since last SL
+            # Time since last SL (use large int sentinel instead of inf — JSON safe)
+            NO_SL = 999_999_999
             last_sl = next((t for t in trades_sorted if t.get("exit_reason") == "sl"), None)
-            ms_since_sl = float("inf")
+            ms_since_sl = NO_SL
             if last_sl and last_sl.get("closed_at"):
                 try:
                     sl_time = datetime.fromisoformat(last_sl["closed_at"].replace("Z", "+00:00"))
-                    ms_since_sl = (now - sl_time).total_seconds() * 1000
+                    ms_since_sl = int((now - sl_time).total_seconds() * 1000)
                 except Exception:
                     pass
 
@@ -970,12 +971,12 @@ class PersistentAgent:
         # Candle freshness check — don't trade on stale data
         def _candle_age_sec(candles: list) -> float:
             if not candles:
-                return float("inf")
+                return 99999.0
             try:
                 ts = datetime.fromisoformat(candles[-1]["timestamp"].replace("Z", "+00:00"))
                 return (datetime.now(timezone.utc) - ts).total_seconds()
             except Exception:
-                return float("inf")
+                return 99999.0
 
         age_1m  = _candle_age_sec(candles1m)
         age_15m = _candle_age_sec(candles15m)
@@ -1017,7 +1018,7 @@ class PersistentAgent:
             conf_adj = ti.get("conf_adj", 0)
             trust    = ti.get("trust_score", 1.0)
             label    = ti.get("label", "NORMAL")
-            cooldown_ms = ti.get("ms_since_sl", float("inf"))
+            cooldown_ms = ti.get("ms_since_sl", 999_999_999)
             in_cooldown = cooldown_ms < 30 * 60 * 1000   # 30-min cooldown after SL
 
             if sig:
