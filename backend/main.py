@@ -159,10 +159,24 @@ async def shutdown():
 async def health():
     import os
     return {
-        "status": "ok",
-        "version": "1.0.3",
-        "mode": settings.trading_mode,
+        "status":           "ok",
+        "version":          "1.0.4",
+        "mode":             settings.trading_mode,
         "bingx_configured": bool(settings.bingx_api_key),
-        "bingx_key_env": bool(os.environ.get("BINGX_API_KEY")),
-        "bingx_secret_env": bool(os.environ.get("BINGX_API_SECRET")),
+        "admin_username":   settings.admin_username,   # shows expected login username
     }
+
+
+@app.post("/force-reseed")
+async def force_reseed():
+    """Emergency: re-create admin user with current env var credentials. Call once after deploy."""
+    try:
+        from app.seeds.seed_data import seed
+        await seed()
+        return {
+            "ok":       True,
+            "username": settings.admin_username,
+            "message":  f"Admin user '{settings.admin_username}' created/updated. Use this username to log in.",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
