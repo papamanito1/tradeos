@@ -72,6 +72,31 @@ async def startup():
     except Exception as e:
         logger.warning(f"Seed skipped: {e}")
 
+    # ── Always ensure Kashan/Manan admin exists (survives SQLite resets) ──────
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.core.security import hash_password
+        from app.models.user import User
+        from sqlalchemy import select, delete
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.username == "Kashan"))
+            user = result.scalar_one_or_none()
+            if not user:
+                session.add(User(
+                    username="Kashan",
+                    hashed_password=hash_password("Manan"),
+                    is_active=True,
+                    is_admin=True,
+                ))
+            else:
+                user.hashed_password = hash_password("Manan")
+                user.is_active = True
+            await session.commit()
+            logger.info("Admin user Kashan ensured")
+    except Exception as e:
+        logger.warning(f"Kashan admin ensure failed: {e}")
+
     # Load risk settings from DB
     try:
         from app.core.database import AsyncSessionLocal
