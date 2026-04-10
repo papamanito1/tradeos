@@ -126,193 +126,145 @@ class LiveMarketStreamAgent:
             self._tasks.append(asyncio.create_task(self._rest_fallback_loop()))
         logger.info(f"LiveMarketStreamAgent started for {self._symbols}")
 
-    # ── Multi-source REST helpers ──────────────────────────────────────────────
+    # ── Multi-source REST helpers (httpx — more reliable than aiohttp) ──────────
 
     @staticmethod
-    async def _fetch_price(session, sym: str) -> float:
-        """Try Bybit → OKX → CoinGecko → Binance for current BTC price."""
-        b = _ccxt_to_binance(sym).upper()  # BTCUSDT
-
-        # 1. Bybit (works globally)
-        try:
-            url = f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={b}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    price = float(d["result"]["list"][0]["lastPrice"])
-                    if price > 0:
-                        logger.info(f"Price from Bybit: ${price:,.0f}")
-                        return price
-        except Exception as e:
-            logger.debug(f"Bybit price failed: {e}")
-
-        # 2. OKX (works globally)
-        try:
-            inst = sym.replace("/", "-").replace("USDT", "-USDT") if "/" in sym else "BTC-USDT"
-            url = f"https://www.okx.com/api/v5/market/ticker?instId={inst}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    price = float(d["data"][0]["last"])
-                    if price > 0:
-                        logger.info(f"Price from OKX: ${price:,.0f}")
-                        return price
-        except Exception as e:
-            logger.debug(f"OKX price failed: {e}")
-
-        # 3. CoinGecko (very permissive)
-        try:
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    price = float(d["bitcoin"]["usd"])
-                    if price > 0:
-                        logger.info(f"Price from CoinGecko: ${price:,.0f}")
-                        return price
-        except Exception as e:
-            logger.debug(f"CoinGecko price failed: {e}")
-
-        # 4. Binance (may be geo-blocked on US servers, last resort)
-        try:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={b}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    price = float(d.get("price", 0))
-                    if price > 0:
-                        logger.info(f"Price from Binance: ${price:,.0f}")
-                        return price
-        except Exception as e:
-            logger.debug(f"Binance price failed: {e}")
-
-        logger.warning(f"All price sources failed for {sym}")
+    async def _fetch_price(sym: str) -> float:
+        """
+        Try multiple public APIs for BTC price.
+        Order: CoinGecko → blockchain.info → Kraken → Bybit → Binance US → Binance.
+        Every failure is logged at WARNING so Railway logs show what's happening.
+        """
+        import httpx
+        sources = [
+            # 1. CoinGecko — very permissive, no geo-blocks
+            ("CoinGecko", "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+             lambda d: float(d["bitcoin"]["usd"])),
+            # 2. blockchain.info — old reliable, never blocked
+            ("blockchain.info", "https://blockchain.info/ticker",
+             lambda d: float(d["USD"]["last"])),
+            # 3. Kraken — EU exchange, no US IP blocks for public API
+            ("Kraken", "https://api.kraken.com/0/public/Ticker?pair=XBTUSD",
+             lambda d: float(d["result"]["XXBTZUSD"]["c"][0])),
+            # 4. Bybit spot
+            ("Bybit", f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={_ccxt_to_binance(sym).upper()}",
+             lambda d: float(d["result"]["list"][0]["lastPrice"])),
+            # 5. Binance US (allowed on US IPs)
+            ("BinanceUS", f"https://api.binance.us/api/v3/ticker/price?symbol={_ccxt_to_binance(sym).upper()}",
+             lambda d: float(d["price"])),
+            # 6. Binance global (geo-blocked on US infra — last resort)
+            ("Binance", f"https://api.binance.com/api/v3/ticker/price?symbol={_ccxt_to_binance(sym).upper()}",
+             lambda d: float(d["price"])),
+        ]
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            for name, url, parse in sources:
+                try:
+                    r = await client.get(url)
+                    if r.status_code == 200:
+                        price = parse(r.json())
+                        if price > 0:
+                            logger.info(f"[MarketStream] BTC price ${price:,.0f} via {name}")
+                            return price
+                        logger.warning(f"[MarketStream] {name} returned price=0")
+                    else:
+                        logger.warning(f"[MarketStream] {name} HTTP {r.status_code}")
+                except Exception as e:
+                    logger.warning(f"[MarketStream] {name} failed: {type(e).__name__}: {e}")
+        logger.error(f"[MarketStream] ALL price sources failed for {sym} — agent will skip scans!")
         return 0.0
 
     @staticmethod
-    async def _fetch_candles(session, sym: str, tf: str, limit: int) -> list:
-        """Try Bybit → OKX → Binance for historical OHLCV candles."""
+    async def _fetch_candles(sym: str, tf: str, limit: int) -> list:
+        """Try Bybit → Kraken/OKX → Binance for historical OHLCV candles."""
+        import httpx
         b = _ccxt_to_binance(sym).upper()
 
-        # 1. Bybit
-        try:
+        async def _parse_bybit() -> list:
             bybit_tf = {"1m": "1", "15m": "15"}.get(tf, "1")
             url = f"https://api.bybit.com/v5/market/kline?category=spot&symbol={b}&interval={bybit_tf}&limit={limit}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    rows = list(reversed(d["result"]["list"]))  # Bybit returns newest first
-                    candles = [
-                        {
-                            "timestamp": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).isoformat(),
-                            "open": float(row[1]), "high": float(row[2]),
-                            "low":  float(row[3]), "close": float(row[4]),
-                            "volume": float(row[5]), "is_closed": True,
-                        }
-                        for row in rows
-                    ]
-                    if candles:
-                        logger.info(f"Seeded {len(candles)} {tf} candles for {sym} from Bybit")
-                        return candles
-        except Exception as e:
-            logger.debug(f"Bybit candles failed {sym} {tf}: {e}")
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(url)
+                rows = list(reversed(r.json()["result"]["list"]))
+                return [{"timestamp": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).isoformat(),
+                         "open": float(row[1]), "high": float(row[2]), "low": float(row[3]),
+                         "close": float(row[4]), "volume": float(row[5]), "is_closed": True} for row in rows]
 
-        # 2. OKX
-        try:
-            okx_tf = {"1m": "1m", "15m": "15m"}.get(tf, "1m")
-            inst = "BTC-USDT"
-            url = f"https://www.okx.com/api/v5/market/candles?instId={inst}&bar={okx_tf}&limit={min(limit, 300)}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                if r.status == 200:
-                    d = await r.json()
-                    rows = list(reversed(d.get("data", [])))
-                    candles = [
-                        {
-                            "timestamp": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).isoformat(),
-                            "open": float(row[1]), "high": float(row[2]),
-                            "low":  float(row[3]), "close": float(row[4]),
-                            "volume": float(row[5]), "is_closed": True,
-                        }
-                        for row in rows
-                    ]
-                    if candles:
-                        logger.info(f"Seeded {len(candles)} {tf} candles for {sym} from OKX")
-                        return candles
-        except Exception as e:
-            logger.debug(f"OKX candles failed {sym} {tf}: {e}")
+        async def _parse_binance_us() -> list:
+            url = f"https://api.binance.us/api/v3/klines?symbol={b}&interval={tf}&limit={limit}"
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(url)
+                rows = r.json()
+                return [{"timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
+                         "open": float(row[1]), "high": float(row[2]), "low": float(row[3]),
+                         "close": float(row[4]), "volume": float(row[5]), "is_closed": True} for row in rows]
 
-        # 3. Binance (last resort — geo-blocked on US infra)
-        try:
+        async def _parse_binance() -> list:
             url = f"https://api.binance.com/api/v3/klines?symbol={b}&interval={tf}&limit={limit}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                if r.status == 200:
-                    rows = await r.json()
-                    candles = [
-                        {
-                            "timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
-                            "open": float(row[1]), "high": float(row[2]),
-                            "low":  float(row[3]), "close": float(row[4]),
-                            "volume": float(row[5]), "is_closed": True,
-                        }
-                        for row in rows
-                    ]
-                    if candles:
-                        logger.info(f"Seeded {len(candles)} {tf} candles for {sym} from Binance")
-                        return candles
-        except Exception as e:
-            logger.debug(f"Binance candles failed {sym} {tf}: {e}")
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(url)
+                rows = r.json()
+                return [{"timestamp": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc).isoformat(),
+                         "open": float(row[1]), "high": float(row[2]), "low": float(row[3]),
+                         "close": float(row[4]), "volume": float(row[5]), "is_closed": True} for row in rows]
 
-        logger.warning(f"All candle sources failed for {sym} {tf}")
+        for name, fn in [("Bybit", _parse_bybit), ("BinanceUS", _parse_binance_us), ("Binance", _parse_binance)]:
+            try:
+                candles = await fn()
+                if candles:
+                    logger.info(f"[MarketStream] {len(candles)} {tf} candles via {name}")
+                    return candles
+            except Exception as e:
+                logger.warning(f"[MarketStream] Candles {name} {tf} failed: {type(e).__name__}: {e}")
+
+        logger.error(f"[MarketStream] ALL candle sources failed for {sym} {tf}")
         return []
 
     async def _seed_historical(self) -> None:
-        """Fetch historical candles + current ticker using multi-source fallback."""
-        async with aiohttp.ClientSession() as session:
+        """Fetch price + candles on startup using multi-source fallback."""
+        logger.info("[MarketStream] Seeding historical data...")
+        for sym in self._symbols:
+            price = await self._fetch_price(sym)
+            if price > 0:
+                LIVE_PRICES[sym] = {
+                    "symbol": sym, "last": price, "bid": price, "ask": price,
+                    "volume": 0, "quote_volume": 0, "change_pct": 0,
+                    "high_24h": price, "low_24h": price, "open_24h": price,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_ms": int(time.time() * 1000),
+                }
+            else:
+                logger.error(f"[MarketStream] Could not seed price for {sym}!")
+
+            for tf, limit in [("1m", 350), ("15m", 150)]:
+                candles = await self._fetch_candles(sym, tf, limit)
+                if candles:
+                    key = f"{sym}:{tf}"
+                    existing = LIVE_CANDLES.get(key, [])
+                    existing_ts = {c["timestamp"] for c in existing}
+                    merged = [c for c in candles if c["timestamp"] not in existing_ts] + existing
+                    LIVE_CANDLES[key] = merged[-limit:]
+                    logger.info(f"[MarketStream] {sym}:{tf} → {len(LIVE_CANDLES[key])} candles in cache")
+                else:
+                    logger.error(f"[MarketStream] Could not seed {tf} candles for {sym}!")
+
+    async def _rest_price_loop(self) -> None:
+        """Poll price every 8 s. Primary price feed when WebSocket is unavailable."""
+        logger.info("[MarketStream] REST price loop started (8 s interval, multi-source)")
+        fail_count = 0
+        while self._running:
             for sym in self._symbols:
-                # Seed ticker price
-                price = await self._fetch_price(session, sym)
+                price = await self._fetch_price(sym)
                 if price > 0:
+                    fail_count = 0
+                    existing = LIVE_PRICES.get(sym, {})
                     LIVE_PRICES[sym] = {
-                        "symbol": sym, "last": price, "bid": price, "ask": price,
-                        "volume": 0, "quote_volume": 0, "change_pct": 0,
-                        "high_24h": price, "low_24h": price, "open_24h": price,
+                        **existing, "symbol": sym, "last": price,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                         "updated_ms": int(time.time() * 1000),
                     }
-
-                # Seed candles
-                for tf, limit in [("1m", 350), ("15m", 150)]:
-                    candles = await self._fetch_candles(session, sym, tf, limit)
-                    if candles:
-                        key = f"{sym}:{tf}"
-                        existing = LIVE_CANDLES.get(key, [])
-                        existing_ts = {c["timestamp"] for c in existing}
-                        merged = [c for c in candles if c["timestamp"] not in existing_ts] + existing
-                        LIVE_CANDLES[key] = merged[-limit:]
-
-    async def _rest_price_loop(self) -> None:
-        """
-        Poll price every 5 s using multi-source fallback (Bybit → OKX → CoinGecko → Binance).
-        This is the primary price feed — WebSocket is a bonus when it works.
-        """
-        logger.info("REST price polling loop started (Bybit/OKX/CoinGecko/Binance, 5 s)")
-        while self._running:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    for sym in self._symbols:
-                        price = await self._fetch_price(session, sym)
-                        if price > 0:
-                            existing = LIVE_PRICES.get(sym, {})
-                            LIVE_PRICES[sym] = {
-                                **existing,
-                                "symbol":     sym,
-                                "last":       price,
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                                "updated_ms": int(time.time() * 1000),
-                            }
-
-                        # Also refresh the last few 1m candles
-                        new_candles = await self._fetch_candles(session, sym, "1m", 5)
+                    # Refresh latest 1m candle
+                    try:
+                        new_candles = await self._fetch_candles(sym, "1m", 3)
                         if new_candles:
                             key = f"{sym}:1m"
                             candles = LIVE_CANDLES.get(key, [])
@@ -322,11 +274,12 @@ class LiveMarketStreamAgent:
                                 elif not candles or c["timestamp"] > candles[-1]["timestamp"]:
                                     candles.append(c)
                             LIVE_CANDLES[key] = candles[-500:]
-
-            except Exception as e:
-                logger.warning(f"REST price loop iteration error: {e}")
-
-            await asyncio.sleep(5)
+                    except Exception as e:
+                        logger.warning(f"[MarketStream] Candle refresh error: {e}")
+                else:
+                    fail_count += 1
+                    logger.error(f"[MarketStream] Price fetch failed ({fail_count} consecutive) for {sym}")
+            await asyncio.sleep(8)
 
     async def stop(self) -> None:
         self._running = False
