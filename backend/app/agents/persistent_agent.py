@@ -592,7 +592,7 @@ class PersistentAgent:
         return {
             "config":     self.config,
             "positions":  self.positions,
-            "trades":     self.trades[-200:],
+            "trades":     self.trades[-500:],   # persist up to 500 trades
             "stats":      self.stats,
             "log":        self.log[-100:],
             "grid_state": self.grid_state,
@@ -602,10 +602,16 @@ class PersistentAgent:
     def _apply_state(self, data: dict) -> None:
         self.config     = data.get("config",     DEFAULT_CONFIG.copy())
         self.positions  = data.get("positions",  {})
-        self.trades     = data.get("trades",     [])[-200:]
-        self.stats      = data.get("stats",      self._empty_stats())
+        self.trades     = data.get("trades",     [])[-500:]   # keep up to 500 trades in memory
         self.log        = data.get("log",        [])[-100:]
         self.grid_state = data.get("grid_state", {})
+        # Always rebuild stats from trade history — never trust stale stored stats
+        self._rebuild_stats()
+        # Merge stored stats for fields not derivable from trades (best/worst may be correct)
+        stored = data.get("stats", {})
+        if stored and self.stats["total_trades"] > 0:
+            self.stats["best_trade"]  = max(self.stats.get("best_trade",  stored.get("best_trade",  0)), stored.get("best_trade",  0))
+            self.stats["worst_trade"] = min(self.stats.get("worst_trade", stored.get("worst_trade", 0)), stored.get("worst_trade", 0))
 
     # ── File fallback (local dev / fast cache) ────────────────────────────────
 
@@ -661,7 +667,7 @@ class PersistentAgent:
                     )
                     return True
         except Exception as e:
-            logger.warning(f"DB state load failed: {e}")
+            logger.warning(f"[Agent] DB state load FAILED: {type(e).__name__}: {e}")
         return False
 
     async def _save_state_db(self) -> None:
@@ -685,7 +691,7 @@ class PersistentAgent:
                         "ON CONFLICT (id) DO UPDATE SET state = :s, updated_at = :t"
                     ), {"s": payload, "t": ts})
         except Exception as e:
-            logger.debug(f"DB state save failed: {e}")
+            logger.warning(f"[Agent] DB state save FAILED: {type(e).__name__}: {e}")
 
     def _schedule_db_save(self) -> None:
         """Fire-and-forget DB save from a sync context."""
@@ -699,6 +705,23 @@ class PersistentAgent:
     def _empty_stats(self) -> dict:
         return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
                 "total_pnl": 0.0, "best_trade": 0.0, "worst_trade": 0.0}
+
+    def _rebuild_stats(self) -> None:
+        """Recompute stats from trade history — ensures P&L is always correct after load."""
+        s = self._empty_stats()
+        for t in self.trades:
+            pnl = t.get("pnl_usd", 0) or 0
+            reason = t.get("exit_reason", "")
+            s["total_trades"] += 1
+            if reason == "tp" or pnl > 0:
+                s["wins"] += 1
+            elif reason == "sl" or pnl < 0:
+                s["losses"] += 1
+            s["total_pnl"]   = round(s["total_pnl"] + pnl, 2)
+            s["best_trade"]  = max(s["best_trade"],  pnl)
+            s["worst_trade"] = min(s["worst_trade"], pnl)
+        s["win_rate"] = round(s["wins"] / s["total_trades"] * 100, 1) if s["total_trades"] > 0 else 0.0
+        self.stats = s
 
     def _log(self, msg: str) -> None:
         ts   = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -982,8 +1005,8 @@ class PersistentAgent:
                  "pnl_usd": pnl, "pnl_pct": pct,
                  "closed_at": datetime.now(timezone.utc).isoformat(), "status": "confirmed"}
         self.trades.insert(0, trade)
-        if len(self.trades) > 100:
-            self.trades = self.trades[:100]
+        if len(self.trades) > 500:
+            self.trades = self.trades[:500]
 
         # Update stats
         s = self.stats
@@ -999,6 +1022,9 @@ class PersistentAgent:
 
         self.positions[key] = None
         self._log(f"[{pos['strategy_name']}] {reason.upper()} hit @ ${exit_price:.0f} · P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
+        # Persist immediately after every close — don't wait for scan-end save
+        self._save_state()
+        self._schedule_db_save()
 
     def close_position(self, key: str) -> bool:
         pos = self.positions.get(key)
@@ -1043,8 +1069,8 @@ class PersistentAgent:
             "last_scan":      self.last_scan,
             "live_price":     price,
             "open_positions": open_positions,
-            "trades":         self.trades[:50],
-            "stats":          self.stats,
+            "trades":         self.trades[:200],   # send up to 200 most recent trades
+            "stats":          self.stats,          # always rebuilt from trade history
             "log":            self.log[:100],
             "grid_state":     self.grid_state,
             "grid_positions": open_grid,
