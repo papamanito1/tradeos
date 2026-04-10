@@ -3,6 +3,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -182,36 +183,35 @@ async def force_reseed():
         return {"ok": False, "error": str(e)}
 
 
+class AdminCredentials(BaseModel):
+    username: str = "Kashan"
+    password: str = "Manan"
+
 @app.post("/reset-admin-password")
-async def reset_admin_password():
-    """Emergency: reset admin password to 'TradeOS2024!' so you can log in."""
+async def reset_admin_password(creds: AdminCredentials = AdminCredentials()):
+    """Emergency: create/update admin user with given credentials."""
     try:
         from app.core.database import AsyncSessionLocal
         from app.core.security import hash_password
         from app.models.user import User
-        from sqlalchemy import select
+        from sqlalchemy import select, delete
 
-        NEW_PASS = "TradeOS2024!"
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(User).where(User.username == settings.admin_username))
-            user = result.scalar_one_or_none()
-            if not user:
-                # Create fresh
-                user = User(
-                    username=settings.admin_username,
-                    hashed_password=hash_password(NEW_PASS),
-                    is_active=True,
-                    is_admin=True,
-                )
-                session.add(user)
-            else:
-                user.hashed_password = hash_password(NEW_PASS)
+            # Delete all existing users to avoid conflicts
+            await session.execute(delete(User))
+            # Create fresh admin
+            user = User(
+                username=creds.username,
+                hashed_password=hash_password(creds.password),
+                is_active=True,
+                is_admin=True,
+            )
+            session.add(user)
             await session.commit()
         return {
             "ok":       True,
-            "username": settings.admin_username,
-            "password": NEW_PASS,
-            "message":  f"Login with username='{settings.admin_username}' password='{NEW_PASS}'. Change it after logging in.",
+            "username": creds.username,
+            "message":  f"Admin user set to '{creds.username}'. You can now log in.",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
