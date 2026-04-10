@@ -7,7 +7,7 @@ import {
   Bot, Power, RefreshCw, ExternalLink, Zap, Shield,
   CheckCircle2, XCircle, TrendingUp, TrendingDown,
   AlertTriangle, Activity, ChevronRight, Trash2, Copy,
-  FileText, RotateCcw, X, DollarSign,
+  FileText, RotateCcw, X, DollarSign, Save, Loader2,
 } from "lucide-react";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
@@ -17,7 +17,7 @@ import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
 import { useGridStrategy, GridResult } from "@/hooks/useGridStrategy";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
-import { useServerAgent } from "@/hooks/useServerAgent";
+import { useServerAgent, type ServerAgentConfig } from "@/hooks/useServerAgent";
 import { formatUSD } from "@/lib/utils";
 
 
@@ -352,6 +352,208 @@ function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
 }
 
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
+// ─── Config panel — draft state + Make Changes ────────────────────────────────
+function ConfigPanel({
+  serverConfig,
+  onSave,
+}: {
+  serverConfig: ServerAgentConfig | null;
+  onSave: (patch: Partial<ServerAgentConfig>) => Promise<void>;
+}) {
+  const [draft, setDraft]     = useState<ServerAgentConfig | null>(null);
+  const [saving, setSaving]   = useState(false);
+  const [saved, setSaved]     = useState(false);
+  const [dirty, setDirty]     = useState(false);
+
+  // Sync draft from server when config first loads (or resets)
+  useEffect(() => {
+    if (serverConfig && !dirty) {
+      setDraft(serverConfig);
+    }
+  }, [serverConfig, dirty]);
+
+  const set = <K extends keyof ServerAgentConfig>(key: K, val: ServerAgentConfig[K]) => {
+    setDraft(prev => prev ? { ...prev, [key]: val } : prev);
+    setDirty(true);
+    setSaved(false);
+  };
+
+  const handleSave = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      await onSave(draft);
+      setDirty(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    if (serverConfig) { setDraft(serverConfig); setDirty(false); setSaved(false); }
+  };
+
+  const d = draft ?? serverConfig;
+  if (!d) {
+    return (
+      <div className="col-span-12 lg:col-span-5 card p-5 flex items-center gap-3 text-neutral-600">
+        <Loader2 size={14} className="animate-spin" />
+        <span className="text-[12px]">Loading agent config…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="col-span-12 lg:col-span-5 card p-5 space-y-5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Shield size={13} className="text-neutral-500" />
+          <span className="text-[13px] font-semibold text-white">Agent Configuration</span>
+        </div>
+        {dirty && (
+          <span className="text-[9px] px-2 py-0.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-400">
+            Unsaved changes
+          </span>
+        )}
+      </div>
+
+      {/* Mode */}
+      <div>
+        <label className="text-[10px] text-neutral-600 block mb-2">Execution Mode</label>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            ["paper", "📄 Paper"],
+            ["perps", "🚀 Perps"],
+            ["spot",  "⚡ Spot"],
+          ] as const).map(([m, label]) => (
+            <button key={m} onClick={() => set("mode", m)}
+              className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
+              style={d.mode === m
+                ? m === "paper"
+                  ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
+                  : { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
+                : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+              }>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="text-[9px] text-neutral-700 mt-1.5">
+          {d.mode === "paper"
+            ? "Simulated fills · live P&L tracking · no wallet needed"
+            : d.mode === "perps"
+            ? "Opens Phantom Perps — full leverage, confirm in wallet"
+            : "Executes USDC↔wBTC swap directly on Solana mainnet"}
+        </div>
+      </div>
+
+      {/* Size */}
+      <div>
+        <label className="text-[10px] text-neutral-600 block mb-1.5">Trade Size (USDC)</label>
+        <div className="flex gap-2">
+          <input type="number" value={d.size_usdc}
+            onChange={e => set("size_usdc", Number(e.target.value))}
+            className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-[12px] font-mono text-white outline-none focus:border-blue-500" />
+          <div className="flex gap-1">
+            {[50, 100, 250].map(s => (
+              <button key={s} onClick={() => set("size_usdc", s)}
+                className="px-2 py-2 rounded-lg text-[10px] font-bold border transition-colors"
+                style={d.size_usdc === s
+                  ? { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
+                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
+                }>${s}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Min confidence */}
+      <div>
+        <div className="flex justify-between mb-1.5">
+          <label className="text-[10px] text-neutral-600">Min Confidence</label>
+          <span className="text-[10px] font-mono text-blue-400">{(d.min_confidence * 100).toFixed(0)}%</span>
+        </div>
+        <input type="range" min={0.4} max={0.95} step={0.05}
+          value={d.min_confidence}
+          onChange={e => set("min_confidence", Number(e.target.value))}
+          className="w-full accent-blue-500" />
+        <div className="flex justify-between text-[9px] text-neutral-700 mt-1">
+          <span>Aggressive (40%)</span><span>Conservative (95%)</span>
+        </div>
+      </div>
+
+      {/* Min conditions */}
+      <div>
+        <div className="flex justify-between mb-1.5">
+          <label className="text-[10px] text-neutral-600">Min Conditions Met</label>
+          <span className="text-[10px] font-mono text-blue-400">{d.min_conditions}+ met</span>
+        </div>
+        <input type="range" min={3} max={7} step={1}
+          value={d.min_conditions}
+          onChange={e => set("min_conditions", Number(e.target.value))}
+          className="w-full accent-blue-500" />
+        <div className="flex justify-between text-[9px] text-neutral-700 mt-1">
+          <span>Loose (3)</span><span>Strict (7)</span>
+        </div>
+      </div>
+
+      {/* Auto-execute toggle */}
+      <div className="flex items-center justify-between py-3 px-4 rounded-xl border border-neutral-800 bg-neutral-900">
+        <div>
+          <div className="text-[11px] font-semibold text-white">Auto-Execute</div>
+          <div className="text-[9px] text-neutral-600 mt-0.5">Skip confirmation modal — execute immediately</div>
+        </div>
+        <button onClick={() => set("auto_execute", !d.auto_execute)}
+          className="relative w-10 h-5 rounded-full border transition-colors flex-shrink-0"
+          style={d.auto_execute
+            ? { background: "rgba(239,68,68,0.3)", borderColor: "rgba(239,68,68,0.4)" }
+            : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)" }
+          }>
+          <span className="absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200"
+            style={{ left: d.auto_execute ? "22px" : "2px", background: d.auto_execute ? "#ef4444" : "#3d3d58" }} />
+        </button>
+      </div>
+
+      {d.auto_execute && (
+        <div className="flex items-start gap-2 p-3 rounded-lg border border-red-500/20 bg-red-500/5">
+          <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+          <div className="text-[10px] text-red-400/80">Auto-execute ON — agent trades automatically when signal conditions are met.</div>
+        </div>
+      )}
+
+      {/* ── Make Changes button ─────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={handleSave}
+          disabled={saving || !dirty}
+          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all"
+          style={dirty && !saving
+            ? { background: "rgba(10,132,255,0.18)", border: "1px solid rgba(10,132,255,0.4)", color: "#60aaff" }
+            : saved
+            ? { background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }
+            : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "#3d3d58", cursor: "not-allowed" }
+          }>
+          {saving
+            ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
+            : saved
+            ? <><CheckCircle2 size={12} /> Applied to server</>
+            : <><Save size={12} /> Make Changes</>
+          }
+        </button>
+        {dirty && (
+          <button onClick={handleReset}
+            className="px-3 py-2.5 rounded-xl text-[11px] border transition-colors"
+            style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#4b5563" }}>
+            Reset
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AgentContent() {
   const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
 
@@ -687,117 +889,8 @@ function AgentContent() {
       {/* Config + log grid */}
       <div className="grid grid-cols-12 gap-4">
 
-        {/* Config panel */}
-        <div className="col-span-12 lg:col-span-5 card p-5 space-y-5">
-          <div className="flex items-center gap-2">
-            <Shield size={13} className="text-neutral-500" />
-            <span className="text-[13px] font-semibold text-white">Agent Configuration</span>
-          </div>
-
-          {/* Mode */}
-          <div>
-            <label className="text-[10px] text-neutral-600 block mb-2">Execution Mode</label>
-            <div className="grid grid-cols-3 gap-2">
-              {([
-                ["paper", "📄 Paper"],
-                ["perps", "🚀 Perps"],
-                ["spot",  "⚡ Spot"],
-              ] as const).map(([m, label]) => (
-                <button key={m} onClick={() => updateConfig({ mode: m })}
-                  className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
-                  style={config.mode === m
-                    ? m === "paper"
-                      ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
-                      : { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
-                    : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-                  }>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="text-[9px] text-neutral-700 mt-1.5">
-              {config.mode === "paper"
-                ? "Simulated fills · live P&L tracking · no wallet needed"
-                : config.mode === "perps"
-                ? "Opens Phantom Perps — full leverage, confirm in wallet"
-                : "Executes USDC↔wBTC swap directly on Solana mainnet"}
-            </div>
-          </div>
-
-          {/* Size */}
-          <div>
-            <label className="text-[10px] text-neutral-600 block mb-1.5">Trade Size (USDC)</label>
-            <div className="flex gap-2">
-              <input type="number" value={config.size_usdc}
-                onChange={e => updateConfig({ size_usdc: Number(e.target.value) })}
-                className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-[12px] font-mono text-white outline-none focus:border-blue-500" />
-              <div className="flex gap-1">
-                {[50, 100, 250].map(s => (
-                  <button key={s} onClick={() => updateConfig({ size_usdc: s })}
-                    className="px-2 py-2 rounded-lg text-[10px] font-bold border transition-colors"
-                    style={config.size_usdc === s
-                      ? { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
-                      : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }
-                    }>${s}</button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Min confidence */}
-          <div>
-            <div className="flex justify-between mb-1.5">
-              <label className="text-[10px] text-neutral-600">Min Confidence</label>
-              <span className="text-[10px] font-mono text-blue-400">{(config.min_confidence * 100).toFixed(0)}%</span>
-            </div>
-            <input type="range" min={0.4} max={0.95} step={0.05}
-              value={config.min_confidence}
-              onChange={e => updateConfig({ min_confidence: Number(e.target.value) })}
-              className="w-full accent-blue-500" />
-            <div className="flex justify-between text-[9px] text-neutral-700 mt-1">
-              <span>Aggressive (40%)</span><span>Conservative (95%)</span>
-            </div>
-          </div>
-
-          {/* Min conditions */}
-          <div>
-            <div className="flex justify-between mb-1.5">
-              <label className="text-[10px] text-neutral-600">Min Conditions Met</label>
-              <span className="text-[10px] font-mono text-blue-400">{config.min_conditions}+ met</span>
-            </div>
-            <input type="range" min={3} max={7} step={1}
-              value={config.min_conditions}
-              onChange={e => updateConfig({ min_conditions: Number(e.target.value) })}
-              className="w-full accent-blue-500" />
-            <div className="flex justify-between text-[9px] text-neutral-700 mt-1">
-              <span>Loose (3)</span><span>Strict (7)</span>
-            </div>
-          </div>
-
-          {/* Auto-execute toggle */}
-          <div className="flex items-center justify-between py-3 px-4 rounded-xl border border-neutral-800 bg-neutral-900">
-            <div>
-              <div className="text-[11px] font-semibold text-white">Auto-Execute</div>
-              <div className="text-[9px] text-neutral-600 mt-0.5">Skip confirmation modal — execute immediately</div>
-            </div>
-            <button onClick={() => updateConfig({ auto_execute: !config.auto_execute })}
-              className="relative w-10 h-5 rounded-full border transition-colors flex-shrink-0"
-              style={config.auto_execute
-                ? { background: "rgba(239,68,68,0.3)", borderColor: "rgba(239,68,68,0.4)" }
-                : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)" }
-              }>
-              <span className="absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200"
-                style={{ left: config.auto_execute ? "22px" : "2px", background: config.auto_execute ? "#ef4444" : "#3d3d58" }} />
-            </button>
-          </div>
-
-          {config.auto_execute && (
-            <div className="flex items-start gap-2 p-3 rounded-lg border border-red-500/20 bg-red-500/5">
-              <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
-              <div className="text-[10px] text-red-400/80">Auto-execute is ON. The agent will submit transactions automatically when conditions are met. Each trade requires Phantom wallet approval.</div>
-            </div>
-          )}
-        </div>
+        {/* Config panel — wired to server.config with draft + Make Changes */}
+        <ConfigPanel serverConfig={server.config} onSave={server.updateConfig} />
 
         {/* Right: conditions + HFT meters + log */}
         <div className="col-span-12 lg:col-span-7 space-y-4">
