@@ -1463,7 +1463,7 @@ function SignalCommandCenter({
               <div className="w-full rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
                 <div className="text-[9px] text-neutral-600">
                   {direction !== "FLAT"
-                    ? `${direction} bias · ${consensus_count}/4 strategies aligned · conviction ${conviction}`
+                    ? `${direction} bias · ${consensus_count}/5 strategies aligned · conviction ${conviction}`
                     : "Strategies diverging · no edge detected"}
                 </div>
               </div>
@@ -2104,7 +2104,7 @@ export default function OverviewPage() {
         <div className="flex items-center justify-between px-1 pb-2">
           <div className="flex items-center gap-2 text-[8px] text-neutral-800">
             <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
-            <span>TradeOS · BTC/USDT live · Binance WebSocket · 4 strategies active</span>
+            <span>TradeOS · BTC/USDT live · Binance WebSocket · 5 strategies active</span>
           </div>
           {lastUpdate && <span className="text-[8px] text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</span>}
         </div>

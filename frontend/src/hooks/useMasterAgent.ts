@@ -6,7 +6,7 @@
  * Aggregates ALL 4 live strategy signals + server-side agent data.
  * Models a senior hedge fund analyst with full market context access:
  *
- *  Layer 1 — Strategy Consensus   : 4 strategies vote (need ≥2/4 aligned)
+ *  Layer 1 — Strategy Consensus   : 5 strategies vote (need ≥2/5 aligned)
  *  Layer 2 — Conviction Scoring   : Weighted 0-100, 4-strategy Kelly sizing
  *  Layer 3 — Market Regime        : Trending / Ranging / Volatile / Unknown
  *  Layer 4 — Kelly Position Size  : Fractional Kelly scaled by conviction
@@ -300,7 +300,7 @@ function generateResponse(userMsg: string, ctx: ResponseCtx): string {
   // ── Server: positions / open trades ──────────────────────────────────────
   if (/position|open trade|open pos|current trade/i.test(m)) {
     if (positions.length === 0) {
-      return sigBlock("No open server positions — agent scanning for entry.") ?? "No open server positions. Agent is scanning all 4 strategies.";
+      return sigBlock("No open server positions — agent scanning for entry.") ?? "No open server positions. Agent is scanning all 5 strategies.";
     }
     const posLines = positions.map(pos => {
       const pnl = pos.unrealized_pnl ?? 0;

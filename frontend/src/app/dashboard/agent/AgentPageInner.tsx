@@ -271,7 +271,7 @@ function PaperPanel({
       ) : (
         <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <DollarSign size={13} className="text-neutral-700" />
-          <span className="text-[11px] text-neutral-700">No open paper positions · all 4 strategies scanning for signals…</span>
+          <span className="text-[11px] text-neutral-700">No open paper positions · all 5 strategies scanning for signals…</span>
         </div>
       )}
 
@@ -1269,7 +1269,7 @@ function AgentContent() {
           {
             icon: Bot,
             title: "How the Agent Works",
-            body: "Runs 24/7 on the server — never stops when the browser closes. All 4 strategies scan independently every 20s. Each can hold its own position simultaneously — up to 4 concurrent trades.",
+            body: "Runs 24/7 on the server — never stops when the browser closes. All 5 strategies scan independently every 20s. Each can hold its own position simultaneously — Grid $50 supports up to 5 concurrent positions.",
           },
           {
             icon: Shield,

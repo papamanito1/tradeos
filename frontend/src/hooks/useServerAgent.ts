@@ -4,7 +4,7 @@
  * useServerAgent
  * ──────────────
  * Polls the backend 24/7 agent every 5 seconds.
- * The backend (Railway) runs all 4 strategies continuously even when
+ * The backend (Railway) runs all 5 strategies continuously even when
  * the browser is closed. This hook is read-only except for control calls.
  */
 

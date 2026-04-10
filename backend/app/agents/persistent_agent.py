@@ -1,7 +1,7 @@
 """
 Persistent 24/7 Trading Agent
 ==============================
-Runs all 4 strategies on the backend server continuously.
+Runs all 5 strategies on the backend server continuously.
 Positions survive browser close / page refreshes.
 State is persisted to a JSON file and reloaded on startup.
 
@@ -567,7 +567,7 @@ def _run_grid(candles1m: list, live_price: float, grid_state: dict) -> dict:
 
 class PersistentAgent:
     """
-    The 24/7 brain. Runs all 4 strategies every SCAN_INTERVAL seconds.
+    The 24/7 brain. Runs all 5 strategies every SCAN_INTERVAL seconds.
     Each strategy gets its own independent position slot.
     """
 
@@ -726,7 +726,7 @@ class PersistentAgent:
         self.config["auto_execute"] = True
         self._running = True
         self._task = asyncio.create_task(self._loop())
-        self._log("Agent STARTED — all 4 strategies scanning every 20s (server-side, 24/7)")
+        self._log("Agent STARTED — all 5 strategies scanning every 20s (server-side, 24/7)")
         logger.info("PersistentAgent started")
 
     async def stop(self) -> None:
