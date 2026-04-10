@@ -1370,7 +1370,13 @@ class PersistentAgent:
         open_grid      = [p for k, p in self.positions.items() if k.startswith("grid_") and p]
 
         live_executor_status = None
-        if self._live:
+        # Eagerly init executor if BingX keys are configured, so status always shows
+        from app.core.config import settings as _cfg
+        if _cfg.bingx_api_key and _cfg.bingx_api_secret:
+            executor = self._get_live_executor()
+            if executor:
+                live_executor_status = executor.status()
+        elif self._live:
             live_executor_status = self._live.status()
 
         return {
