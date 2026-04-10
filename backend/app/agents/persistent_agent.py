@@ -1275,7 +1275,10 @@ class PersistentAgent:
         self._record_trade_closure(key, pos, pnl, exit_price, reason, is_live=False)
 
     def _record_trade_closure(self, key: str, pos: dict, pnl: float, exit_price: float, reason: str, is_live: bool) -> None:
-        pct   = round(pnl / (pos["entry"] * pos.get("btc_size", 1)) * 100, 4) if pos["entry"] > 0 else 0
+        entry  = pos.get("entry") or 0
+        d      = pos.get("direction", "long")
+        diff   = (exit_price - entry) if d == "long" else (entry - exit_price)
+        pct    = round(diff / entry * 100, 4) if entry > 0 else 0
         trade = {**pos, "exit_price": exit_price, "exit_reason": reason,
                  "pnl_usd": pnl, "pnl_pct": pct,
                  "closed_at": datetime.now(timezone.utc).isoformat(),
