@@ -20,9 +20,14 @@ def _make_engine(url: str, is_sqlite: bool):
         kwargs["poolclass"] = StaticPool
     else:
         kwargs["pool_pre_ping"] = True
-        kwargs["pool_size"] = 5
-        kwargs["max_overflow"] = 10
-        kwargs["connect_args"] = {"server_settings": {"application_name": "tradeos"}}
+        kwargs["pool_size"] = 3
+        kwargs["max_overflow"] = 5
+        # Short timeouts so startup never hangs waiting for a slow/dead PG server
+        kwargs["connect_args"] = {
+            "server_settings": {"application_name": "tradeos"},
+            "timeout": 5,           # asyncpg: max 5 s to establish TCP + auth
+            "command_timeout": 10,  # asyncpg: max 10 s per query
+        }
     return create_async_engine(url, **kwargs)
 
 engine = _make_engine(settings.database_url, _is_sqlite)

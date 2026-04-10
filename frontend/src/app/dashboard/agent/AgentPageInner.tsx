@@ -1036,7 +1036,7 @@ function AgentContent() {
           ["Firing",     firingStrategy],
           ["Open Pos",   server.loading ? "…" : `${server.openPositions.length} active`],
           ["Server P&L", server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—"],
-          ["Mode",       "📄 PAPER"],
+          ["Mode",       server.config?.mode === "live" ? "🔴 LIVE" : "📄 PAPER"],
         ].map(([label, val]) => (
           <div key={label}>
             <div className="text-[9px] text-neutral-600 mb-0.5">{label}</div>
@@ -1091,7 +1091,7 @@ function AgentContent() {
         </div>
       )}
 
-      {config.mode === "paper" && (
+      {(server.config?.mode ?? "paper") === "paper" && (
         <div className="flex items-center gap-3 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
           <FileText size={14} className="text-violet-400 flex-shrink-0" />
           <div className="text-[12px] text-violet-300">
@@ -1099,7 +1099,7 @@ function AgentContent() {
           </div>
         </div>
       )}
-      {config.mode === "live" && (
+      {server.config?.mode === "live" && (
         <div className="flex items-center gap-3 p-3 rounded-xl border border-red-500/30 bg-red-500/8">
           <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
           <div className="text-[12px] text-red-300">
@@ -1637,7 +1637,7 @@ function AgentContent() {
             })()}
           </div>
 
-          {config.mode === "paper" && (
+          {(server.config?.mode ?? "paper") !== "live" && (
             server.loading ? (
               <div className="card p-6 flex items-center justify-center gap-3 text-neutral-600">
                 <RefreshCw size={14} className="animate-spin" />
@@ -1663,7 +1663,7 @@ function AgentContent() {
           )}
 
           {/* ── Live BingX Trading Panel ─────────────────────────────────── */}
-          {config.mode === "live" && (
+          {server.config?.mode === "live" && (
             <div className="card p-4 space-y-4">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />

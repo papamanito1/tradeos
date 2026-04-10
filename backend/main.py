@@ -60,40 +60,43 @@ async def startup():
 
     # Init DB (non-fatal — falls back to SQLite if PostgreSQL is unreachable)
     try:
-        await init_db()
+        await asyncio.wait_for(init_db(), timeout=12)
         logger.info("Database initialized")
+    except asyncio.TimeoutError:
+        logger.error("DB init timed out after 12 s — continuing with SQLite fallback")
     except Exception as e:
         logger.error(f"DB init failed entirely: {e} — continuing without persistent DB")
 
     # Seed admin if missing
     try:
         from app.seeds.seed_data import seed
-        await seed()
+        await asyncio.wait_for(seed(), timeout=15)
+    except asyncio.TimeoutError:
+        logger.warning("Seed timed out — skipping")
     except Exception as e:
         logger.warning(f"Seed skipped: {e}")
 
     # ── Always ensure Kashan/Manan admin exists (survives SQLite resets) ──────
-    try:
+    async def _ensure_kashan():
         from app.core.database import AsyncSessionLocal
         from app.core.security import hash_password
         from app.models.user import User
-        from sqlalchemy import select, delete
-
+        from sqlalchemy import select
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(User).where(User.username == "Kashan"))
             user = result.scalar_one_or_none()
             if not user:
-                session.add(User(
-                    username="Kashan",
-                    hashed_password=hash_password("Manan"),
-                    is_active=True,
-                    is_admin=True,
-                ))
+                session.add(User(username="Kashan", hashed_password=hash_password("Manan"),
+                                 is_active=True, is_admin=True))
             else:
                 user.hashed_password = hash_password("Manan")
                 user.is_active = True
             await session.commit()
             logger.info("Admin user Kashan ensured")
+    try:
+        await asyncio.wait_for(_ensure_kashan(), timeout=10)
+    except asyncio.TimeoutError:
+        logger.warning("Kashan admin ensure timed out — skipping")
     except Exception as e:
         logger.warning(f"Kashan admin ensure failed: {e}")
 
