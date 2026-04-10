@@ -61,14 +61,29 @@ export interface StrategyOverride {
 }
 
 export interface ServerAgentConfig {
-  enabled:             boolean;
-  size_usdc:           number;
-  min_confidence:      number;
-  min_conditions:      number;
-  mode:                string;
-  auto_execute:        boolean;
-  leverage:            number;
-  strategy_overrides?: Record<string, StrategyOverride>;
+  enabled:              boolean;
+  size_usdc:            number;
+  min_confidence:       number;
+  min_conditions:       number;
+  mode:                 string;   // "paper" | "live"
+  auto_execute:         boolean;
+  leverage:             number;
+  strategy_overrides?:  Record<string, StrategyOverride>;
+  daily_loss_limit?:    number;   // live trading circuit breaker ($)
+  max_position_usdc?:   number;   // hard cap per position ($)
+}
+
+export interface LiveExecutorStatus {
+  connected:           boolean;
+  halted:              boolean;
+  daily_pnl:           number;
+  daily_loss_limit:    number;
+  max_position_usdc:   number;
+  open_count:          number;
+  live_positions:      ServerPosition[];
+  mode?:               string;
+  keys_set?:           boolean;
+  message?:            string;
 }
 
 export interface GridStateData {
@@ -80,17 +95,18 @@ export interface GridStateData {
 }
 
 export interface ServerStatus {
-  running:         boolean;
-  config:          ServerAgentConfig;
-  scan_count:      number;
-  last_scan:       string | null;
-  live_price:      number;
-  open_positions:  ServerPosition[];
-  trades:          ServerTrade[];
-  stats:           ServerStats;
-  log:             string[];
-  grid_state?:     GridStateData;
-  grid_positions?: ServerPosition[];
+  running:          boolean;
+  config:           ServerAgentConfig;
+  scan_count:       number;
+  last_scan:        string | null;
+  live_price:       number;
+  open_positions:   ServerPosition[];
+  trades:           ServerTrade[];
+  stats:            ServerStats;
+  log:              string[];
+  grid_state?:      GridStateData;
+  grid_positions?:  ServerPosition[];
+  live_executor?:   LiveExecutorStatus | null;
 }
 
 async function apiFetch(path: string, opts?: RequestInit) {
@@ -162,6 +178,20 @@ export function useServerAgent() {
     await refresh();
   }, [refresh]);
 
+  const closeLivePosition = useCallback(async (strategyKey: string) => {
+    await apiFetch(`/api/agent/live/close/${strategyKey}`, { method: "POST" });
+    await refresh();
+  }, [refresh]);
+
+  const resetCircuitBreaker = useCallback(async () => {
+    await apiFetch("/api/agent/live/reset-circuit-breaker", { method: "POST" });
+    await refresh();
+  }, [refresh]);
+
+  const fetchLiveBalance = useCallback(async () => {
+    return await apiFetch("/api/agent/live/balance");
+  }, []);
+
   // Auto-start the agent when the hook mounts if it's not running
   useEffect(() => {
     if (status && !status.running) {
@@ -174,17 +204,19 @@ export function useServerAgent() {
     refresh,
     startAgent, stopAgent,
     updateConfig, resetAccount, closePosition, forceScan,
+    closeLivePosition, resetCircuitBreaker, fetchLiveBalance,
     // Convenience shortcuts
-    running:        status?.running         ?? false,
-    config:         status?.config          ?? null,
-    openPositions:  status?.open_positions  ?? [],
-    trades:         status?.trades          ?? [],
-    stats:          status?.stats           ?? null,
-    log:            status?.log             ?? [],
-    scanCount:      status?.scan_count      ?? 0,
-    lastScan:       status?.last_scan       ?? null,
-    livePrice:      status?.live_price      ?? 0,
-    gridState:      status?.grid_state      ?? null,
-    gridPositions:  status?.grid_positions  ?? [],
+    running:          status?.running         ?? false,
+    config:           status?.config          ?? null,
+    openPositions:    status?.open_positions  ?? [],
+    trades:           status?.trades          ?? [],
+    stats:            status?.stats           ?? null,
+    log:              status?.log             ?? [],
+    scanCount:        status?.scan_count      ?? 0,
+    lastScan:         status?.last_scan       ?? null,
+    livePrice:        status?.live_price      ?? 0,
+    gridState:        status?.grid_state      ?? null,
+    gridPositions:    status?.grid_positions  ?? [],
+    liveExecutor:     status?.live_executor   ?? null,
   };
 }

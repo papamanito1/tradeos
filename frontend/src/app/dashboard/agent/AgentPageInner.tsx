@@ -542,24 +542,57 @@ function ConfigPanel({
           {/* Mode */}
           <div>
             <label className="text-[10px] text-neutral-600 block mb-2">Execution Mode</label>
-            <div className="grid grid-cols-3 gap-2">
-              {([["paper", "📄 Paper"], ["perps", "🚀 Perps"], ["spot", "⚡ Spot"]] as const).map(([m, label]) => (
-                <button key={m} onClick={() => set("mode", m)}
-                  className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
-                  style={d.mode === m
-                    ? m === "paper"
-                      ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
-                      : { background: "rgba(10,132,255,0.12)", borderColor: "rgba(10,132,255,0.3)", color: "#60aaff" }
-                    : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }}>
-                  {label}
-                </button>
-              ))}
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => set("mode", "paper")}
+                className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
+                style={d.mode === "paper"
+                  ? { background: "rgba(139,92,246,0.15)", borderColor: "rgba(139,92,246,0.35)", color: "#a78bfa" }
+                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }}>
+                📄 Paper
+              </button>
+              <button onClick={() => set("mode", "live")}
+                className="py-2.5 rounded-xl text-[10px] font-bold border transition-colors"
+                style={d.mode === "live"
+                  ? { background: "rgba(239,68,68,0.15)", borderColor: "rgba(239,68,68,0.4)", color: "#ef4444" }
+                  : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)", color: "#3d3d58" }}>
+                🔴 Live (BingX)
+              </button>
             </div>
-            <div className="text-[9px] text-neutral-700 mt-1.5">
-              {d.mode === "paper" ? "Simulated fills · live P&L tracking · no wallet needed"
-                : d.mode === "perps" ? "Opens Phantom Perps — full leverage, confirm in wallet"
-                : "Executes USDC↔wBTC swap directly on Solana mainnet"}
+            <div className="text-[9px] mt-1.5"
+              style={{ color: d.mode === "live" ? "#f87171" : "#4b5563" }}>
+              {d.mode === "paper"
+                ? "Simulated fills · live P&L tracking · no real money"
+                : "⚠ Real money · BingX perpetual futures · requires API keys in Railway"}
             </div>
+
+            {/* Live mode: risk controls */}
+            {d.mode === "live" && (
+              <div className="mt-3 space-y-3 p-3 rounded-xl border border-red-500/20 bg-red-500/5">
+                <div className="text-[9px] font-bold text-red-400 uppercase tracking-wide flex items-center gap-1.5">
+                  <Shield size={10} /> Live Risk Controls
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <label className="text-[9px] text-neutral-500">Daily Loss Limit (circuit breaker)</label>
+                    <span className="text-[9px] font-mono text-red-400">${d.daily_loss_limit ?? 200}</span>
+                  </div>
+                  <input type="range" min={50} max={1000} step={50} value={d.daily_loss_limit ?? 200}
+                    onChange={e => set("daily_loss_limit", Number(e.target.value))}
+                    className="w-full accent-red-500" />
+                  <div className="flex justify-between text-[8px] text-neutral-700 mt-0.5"><span>$50</span><span>$1000</span></div>
+                </div>
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <label className="text-[9px] text-neutral-500">Max Position Size Cap</label>
+                    <span className="text-[9px] font-mono text-orange-400">${d.max_position_usdc ?? 500}</span>
+                  </div>
+                  <input type="range" min={50} max={2000} step={50} value={d.max_position_usdc ?? 500}
+                    onChange={e => set("max_position_usdc", Number(e.target.value))}
+                    className="w-full accent-orange-500" />
+                  <div className="flex justify-between text-[8px] text-neutral-700 mt-0.5"><span>$50</span><span>$2000</span></div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Default Size */}
@@ -1058,20 +1091,19 @@ function AgentContent() {
         </div>
       )}
 
-      {!connected && config.mode !== "paper" && (
-        <div className="flex items-center gap-3 p-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5">
-          <AlertTriangle size={16} className="text-yellow-400 flex-shrink-0" />
-          <div className="text-[12px] text-yellow-300">
-            Connect your <strong>Phantom wallet</strong> using the button above to enable live execution.
-            Switch to <strong>Paper mode</strong> to trade without a wallet.
-          </div>
-        </div>
-      )}
       {config.mode === "paper" && (
         <div className="flex items-center gap-3 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
           <FileText size={14} className="text-violet-400 flex-shrink-0" />
           <div className="text-[12px] text-violet-300">
-            <strong>Paper mode active</strong> — no wallet required. Trades are simulated at signal price with live P&L tracking.
+            <strong>Paper mode active</strong> — simulated fills · live P&L tracking · no real money
+          </div>
+        </div>
+      )}
+      {config.mode === "live" && (
+        <div className="flex items-center gap-3 p-3 rounded-xl border border-red-500/30 bg-red-500/8">
+          <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
+          <div className="text-[12px] text-red-300">
+            <strong>Live mode active</strong> — real BingX perpetual futures · signals trigger real orders · risk controls enforced
           </div>
         </div>
       )}
@@ -1628,6 +1660,134 @@ function AgentContent() {
                 onReset={() => server.resetAccount()}
               />
             )
+          )}
+
+          {/* ── Live BingX Trading Panel ─────────────────────────────────── */}
+          {config.mode === "live" && (
+            <div className="card p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[13px] font-semibold text-white">Live Trading · BingX</span>
+                <span className="ml-auto text-[9px] px-2 py-0.5 rounded-full border border-red-500/30 bg-red-500/10 text-red-400 font-bold">REAL MONEY</span>
+              </div>
+
+              {/* Circuit breaker status */}
+              {server.liveExecutor && (
+                <>
+                  {server.liveExecutor.halted && (
+                    <div className="flex items-center gap-3 p-3 rounded-xl border border-red-500/40 bg-red-500/10">
+                      <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
+                      <div className="flex-1">
+                        <div className="text-[11px] font-bold text-red-400">⛔ Circuit Breaker Active</div>
+                        <div className="text-[9px] text-red-400/70 mt-0.5">Daily loss limit hit · All trading halted</div>
+                      </div>
+                      <button onClick={() => server.resetCircuitBreaker()}
+                        className="px-3 py-1.5 rounded-lg text-[10px] font-bold border border-orange-500/30 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors">
+                        Reset
+                      </button>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-3 gap-3">
+                    {([
+                      ["Daily P&L", `${server.liveExecutor.daily_pnl >= 0 ? "+" : ""}$${server.liveExecutor.daily_pnl.toFixed(2)}`, server.liveExecutor.daily_pnl >= 0 ? "#22c55e" : "#ef4444"],
+                      ["Loss Limit", `-$${server.liveExecutor.daily_loss_limit}`, "#f59e0b"],
+                      ["Open Trades", `${server.liveExecutor.open_count}`, "#0a84ff"],
+                    ] as const).map(([label, val, color]) => (
+                      <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-center">
+                        <div className="text-[9px] text-neutral-600 mb-1">{label}</div>
+                        <div className="text-[13px] font-bold font-mono" style={{ color }}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Live positions from BingX */}
+                  {server.liveExecutor.live_positions.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] text-neutral-600 font-bold uppercase tracking-wide">Open BingX Positions</div>
+                      {server.liveExecutor.live_positions.map(pos => {
+                        const pnl = pos.unrealized_pnl ?? 0;
+                        const isLong = pos.direction === "long";
+                        return (
+                          <div key={pos.id} className="flex items-center gap-3 p-3 rounded-xl border border-neutral-800 bg-neutral-900">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${isLong ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
+                                  {pos.direction.toUpperCase()}
+                                </span>
+                                <span className="text-[10px] text-white font-semibold truncate">{pos.strategy_name}</span>
+                                <span className="text-[8px] text-orange-400 font-mono">{pos.leverage}×</span>
+                              </div>
+                              <div className="text-[9px] text-neutral-600 mt-0.5 font-mono">
+                                Entry ${pos.entry?.toLocaleString()} · SL ${pos.sl?.toLocaleString() ?? "—"} · TP ${pos.tp?.toLocaleString() ?? "—"}
+                              </div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <div className={`text-[12px] font-bold font-mono ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                              </div>
+                              <button onClick={() => server.closeLivePosition(pos.strategy_key)}
+                                className="text-[9px] text-neutral-600 hover:text-red-400 transition-colors mt-0.5">
+                                Close
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* No executor (keys not configured) */}
+              {!server.liveExecutor && (
+                <div className="space-y-3 p-4 rounded-xl border border-neutral-800 bg-neutral-900/50">
+                  <div className="text-[11px] font-semibold text-white">Setup Required</div>
+                  <div className="space-y-2 text-[10px] text-neutral-500">
+                    <div className="flex items-start gap-2">
+                      <span className="text-orange-400 font-bold flex-shrink-0">1.</span>
+                      <span>Create a <strong className="text-white">BingX account</strong> → enable UTA → deposit USDT</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-orange-400 font-bold flex-shrink-0">2.</span>
+                      <span>Generate API keys (Futures Trading only, IP-whitelist Railway&apos;s IP)</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-orange-400 font-bold flex-shrink-0">3.</span>
+                      <span>Add <code className="bg-neutral-800 px-1 rounded text-[9px]">BINGX_API_KEY</code> and <code className="bg-neutral-800 px-1 rounded text-[9px]">BINGX_API_SECRET</code> to Railway environment variables</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-orange-400 font-bold flex-shrink-0">4.</span>
+                      <span>Redeploy Railway — then switch mode to <strong className="text-white">Live</strong> and hit Make Changes</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Recent live trades from history */}
+              {server.trades.filter(t => t.is_paper === false).length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] text-neutral-600 font-bold uppercase tracking-wide">Live Trade History</div>
+                  {server.trades.filter(t => t.is_paper === false).slice(0, 10).map((t, i) => {
+                    const pnl = t.pnl_usd ?? 0;
+                    return (
+                      <div key={i} className="flex items-center gap-3 py-2 px-3 rounded-lg border border-neutral-800 bg-neutral-900/50">
+                        <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
+                          {(t.direction ?? "?").toUpperCase()}
+                        </span>
+                        <span className="text-[10px] text-neutral-400 flex-1 truncate">{t.strategy_name}</span>
+                        <span className="text-[9px] text-neutral-600 font-mono">${t.entry?.toFixed(0)} → ${t.exit_price?.toFixed(0)}</span>
+                        <span className={`text-[10px] font-bold font-mono flex-shrink-0 ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                        </span>
+                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${t.exit_reason === "tp" ? "bg-green-500/10 text-green-400" : t.exit_reason === "sl" ? "bg-red-500/10 text-red-400" : "bg-neutral-800 text-neutral-500"}`}>
+                          {t.exit_reason?.toUpperCase()}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Conditions checklist */}

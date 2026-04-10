@@ -597,7 +597,7 @@ class PersistentAgent:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self.config: dict      = {}
-        self.positions: dict   = {}   # key → PaperPosition | None
+        self.positions: dict   = {}   # key → position dict | None
         self.trades: list      = []   # closed/confirmed trades
         self.stats:  dict      = {}
         self.log:    list      = []   # last 200 lines
@@ -605,7 +605,30 @@ class PersistentAgent:
         self.training_index: dict = {}  # per-strategy performance index (self-learning)
         self.scan_count        = 0
         self.last_scan: Optional[str] = None
+        self._live: Optional[object] = None   # LiveExecutor instance when mode == "live"
         self._load_state()
+
+    def _get_live_executor(self):
+        """Return a LiveExecutor if BingX keys are configured, else None."""
+        from app.core.config import settings
+        if not settings.bingx_api_key or not settings.bingx_api_secret:
+            return None
+        if self._live is None:
+            from app.agents.live_executor import LiveExecutor
+            ddl = float(self.config.get("daily_loss_limit", 200.0))
+            max_pos = float(self.config.get("max_position_usdc", 500.0))
+            self._live = LiveExecutor(
+                api_key=settings.bingx_api_key,
+                api_secret=settings.bingx_api_secret,
+                testnet=settings.bingx_testnet,
+                daily_loss_limit=ddl,
+                max_position_usdc=max_pos,
+            )
+            self._log(f"[LIVE] BingX executor initialised · daily_loss_limit=${ddl}")
+        return self._live
+
+    def _is_live_mode(self) -> bool:
+        return self.config.get("mode") == "live"
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
@@ -874,6 +897,9 @@ class PersistentAgent:
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._live:
+            await self._live.close()
+            self._live = None
         self._log("Agent STOPPED")
         self._save_state()
         await self._save_state_db()
@@ -1102,34 +1128,61 @@ class PersistentAgent:
         entry = price if price > 0 else sig_entry
 
         # Preserve the ATR/dollar distances from the signal, shift SL/TP to actual fill
-        sig_sl = sig.get("sl") or 0
-        sig_tp = sig.get("tp") or 0
+        sig_sl  = sig.get("sl") or 0
+        sig_tp  = sig.get("tp") or 0
         sl_dist = abs(sig_entry - sig_sl) if sig_sl else 0
         tp_dist = abs(sig_tp - sig_entry) if sig_tp else 0
 
-        if sl_dist > 0:
-            sl = (entry - sl_dist) if d == "long" else (entry + sl_dist)
-        else:
-            sl = sig_sl
+        sl = ((entry - sl_dist) if d == "long" else (entry + sl_dist)) if sl_dist > 0 else sig_sl
+        tp = ((entry + tp_dist) if d == "long" else (entry - tp_dist)) if tp_dist > 0 else sig_tp
 
-        if tp_dist > 0:
-            tp = (entry + tp_dist) if d == "long" else (entry - tp_dist)
-        else:
-            tp = sig_tp
-
-        # Slippage check — skip if live price has moved too far from signal (chasing)
-        # Grid uses live_price as entry already, so no check needed
+        # Slippage guard — skip if price moved >0.3% from signal (chasing)
         if sig_entry > 0 and not key.startswith("grid_"):
             slip_pct = abs(entry - sig_entry) / sig_entry * 100
-            max_slip = 0.30  # 0.3% max slippage — reject stale signals
-            if slip_pct > max_slip:
+            if slip_pct > 0.30:
                 self._log(f"⚠ [{name}] SKIPPED — price moved {slip_pct:.2f}% from signal "
-                          f"(${sig_entry:.0f} → ${entry:.0f}) · max {max_slip}%")
+                          f"(${sig_entry:.0f} → ${entry:.0f}) · max 0.3%")
                 return
 
         leverage = max(1, int(cfg.get("leverage", 1)))
         btc_size = (cfg["size_usdc"] * leverage) / entry if entry > 0 else 0
+        lev_str  = f" · {leverage}×" if leverage > 1 else ""
+        slip_str = f" · filled ${sig_entry:.0f}→${entry:.0f}" if abs(entry - sig_entry) > 1 else ""
 
+        # ── LIVE MODE: execute on BingX ───────────────────────────────────────
+        if self._is_live_mode():
+            executor = self._get_live_executor()
+            if not executor:
+                self._log(f"⚠ [{name}] Live mode but no BingX keys — falling back to paper")
+            elif executor.halted:
+                self._log(f"⛔ [{name}] CIRCUIT BREAKER active — skipping trade (daily loss limit hit)")
+                return
+            else:
+                # Schedule async live open — can't await in sync context, use task
+                async def _do_live_open():
+                    pos = await executor.open_position(
+                        strategy_key=key,
+                        strategy_name=name,
+                        direction=d,
+                        size_usdc=cfg["size_usdc"],
+                        leverage=leverage,
+                        sl_price=round(sl, 2),
+                        tp_price=round(tp, 2),
+                        entry_price=entry,
+                    )
+                    if pos:
+                        self.positions[key] = pos
+                        self._log(f"★ [LIVE] [{name}] {d.upper()} @ ${pos['entry']:.0f} · "
+                                  f"SL ${sl:.0f} · TP ${tp:.0f}{lev_str} · BingX order executed")
+                        self._save_state()
+                        self._schedule_db_save()
+                    else:
+                        self._log(f"✗ [LIVE] [{name}] BingX open_position FAILED — check logs")
+
+                asyncio.create_task(_do_live_open())
+                return
+
+        # ── PAPER MODE: simulated fill ────────────────────────────────────────
         pos = {
             "id":             f"{key}-{int(time.time()*1000)}",
             "strategy_key":   key,
@@ -1148,11 +1201,10 @@ class PersistentAgent:
             "unrealized_pnl": 0.0,
             "unrealized_pct": 0.0,
             "btc_size":       btc_size,
-            "is_paper":       cfg.get("mode", "paper") == "paper",
+            "is_paper":       True,
+            "mode":           "paper",
         }
         self.positions[key] = pos
-        lev_str  = f" · {leverage}×" if leverage > 1 else ""
-        slip_str = f" · filled ${sig_entry:.0f}→${entry:.0f}" if abs(entry - sig_entry) > 1 else ""
         self._log(f"★ [{name}] OPENED {d.upper()} @ ${entry:.0f} · SL ${sl:.0f} · TP ${tp:.0f} · "
                   f"conf {sig['confidence']*100:.0f}%{lev_str}{slip_str}")
 
@@ -1193,8 +1245,10 @@ class PersistentAgent:
                 exit_price = (tp if hit_tp else (sl if hit_sl else price)) or price
                 self._close_position(key, exit_price, reason)
             else:
-                diff = (price - pos["entry"]) if d == "long" else (pos["entry"] - price)
-                pnl  = diff * pos["btc_size"]
+                d_   = pos["direction"]
+                diff = (price - pos["entry"]) if d_ == "long" else (pos["entry"] - price)
+                lev  = pos.get("leverage", 1)
+                pnl  = diff * pos["btc_size"] * lev
                 pct  = diff / pos["entry"] * 100 if pos["entry"] > 0 else 0
                 self.positions[key] = {**pos, "current_price": price, "unrealized_pnl": round(pnl, 2), "unrealized_pct": round(pct, 4)}
 
@@ -1203,19 +1257,33 @@ class PersistentAgent:
         if not pos:
             return
 
+        # ── LIVE MODE: close on BingX exchange ────────────────────────────────
+        if pos.get("mode") == "live" and self._live:
+            async def _do_live_close():
+                trade = await self._live.close_position(key, exit_price, reason)
+                if trade:
+                    self._record_trade_closure(key, pos, trade["pnl_usd"], exit_price, reason, is_live=True)
+                else:
+                    self._log(f"⚠ [LIVE] close_position FAILED for {key} — position may still be open on exchange")
+            asyncio.create_task(_do_live_close())
+            return
+
+        # ── PAPER MODE: simulate closure ──────────────────────────────────────
         d    = pos["direction"]
         diff = (exit_price - pos["entry"]) if d == "long" else (pos["entry"] - exit_price)
         pnl  = round(diff * pos["btc_size"], 2)
-        pct  = round(diff / pos["entry"] * 100, 4) if pos["entry"] > 0 else 0
+        self._record_trade_closure(key, pos, pnl, exit_price, reason, is_live=False)
 
+    def _record_trade_closure(self, key: str, pos: dict, pnl: float, exit_price: float, reason: str, is_live: bool) -> None:
+        pct   = round(pnl / (pos["entry"] * pos.get("btc_size", 1)) * 100, 4) if pos["entry"] > 0 else 0
         trade = {**pos, "exit_price": exit_price, "exit_reason": reason,
                  "pnl_usd": pnl, "pnl_pct": pct,
-                 "closed_at": datetime.now(timezone.utc).isoformat(), "status": "confirmed"}
+                 "closed_at": datetime.now(timezone.utc).isoformat(),
+                 "status": "confirmed", "is_live": is_live}
         self.trades.insert(0, trade)
         if len(self.trades) > 500:
             self.trades = self.trades[:500]
 
-        # Update stats
         s = self.stats
         s["total_trades"] += 1
         if reason == "tp":
@@ -1228,10 +1296,10 @@ class PersistentAgent:
         s["worst_trade"] = min(s.get("worst_trade", pnl), pnl)
 
         self.positions[key] = None
-        self._log(f"[{pos['strategy_name']}] {reason.upper()} hit @ ${exit_price:.0f} · P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
-        # Immediately re-index training data so agent learns from this trade
+        prefix = "[LIVE]" if is_live else ""
+        self._log(f"{prefix} [{pos['strategy_name']}] {reason.upper()} @ ${exit_price:.0f} · "
+                  f"P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
         self._rebuild_training_index()
-        # Persist immediately after every close
         self._save_state()
         self._schedule_db_save()
 
@@ -1296,19 +1364,25 @@ class PersistentAgent:
         price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0)
         open_positions = [p for p in self.positions.values() if p]
         open_grid      = [p for k, p in self.positions.items() if k.startswith("grid_") and p]
+
+        live_executor_status = None
+        if self._live:
+            live_executor_status = self._live.status()
+
         return {
-            "running":          self._running,
-            "config":           self.config,
-            "scan_count":       self.scan_count,
-            "last_scan":        self.last_scan,
-            "live_price":       price,
-            "open_positions":   open_positions,
-            "trades":           self.trades[:200],
-            "stats":            self.stats,
-            "log":              self.log[:100],
-            "grid_state":       self.grid_state,
-            "grid_positions":   open_grid,
-            "training_index":   self.training_index,
+            "running":              self._running,
+            "config":               self.config,
+            "scan_count":           self.scan_count,
+            "last_scan":            self.last_scan,
+            "live_price":           price,
+            "open_positions":       open_positions,
+            "trades":               self.trades[:200],
+            "stats":                self.stats,
+            "log":                  self.log[:100],
+            "grid_state":           self.grid_state,
+            "grid_positions":       open_grid,
+            "training_index":       self.training_index,
+            "live_executor":        live_executor_status,
         }
 
 

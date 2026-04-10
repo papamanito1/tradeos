@@ -53,14 +53,16 @@ class StrategyOverride(BaseModel):
     min_conditions: Optional[int]   = None
 
 class ConfigPatch(BaseModel):
-    enabled:             Optional[bool]  = None
-    size_usdc:           Optional[float] = None
-    min_confidence:      Optional[float] = None
-    min_conditions:      Optional[int]   = None
-    mode:                Optional[str]   = None
-    auto_execute:        Optional[bool]  = None
-    leverage:            Optional[int]   = None
-    strategy_overrides:  Optional[dict[str, StrategyOverride]] = None
+    enabled:              Optional[bool]  = None
+    size_usdc:            Optional[float] = None
+    min_confidence:       Optional[float] = None
+    min_conditions:       Optional[int]   = None
+    mode:                 Optional[str]   = None
+    auto_execute:         Optional[bool]  = None
+    leverage:             Optional[int]   = None
+    strategy_overrides:   Optional[dict[str, StrategyOverride]] = None
+    daily_loss_limit:     Optional[float] = None
+    max_position_usdc:    Optional[float] = None
 
 
 @router.post("/config")
@@ -150,3 +152,63 @@ async def force_scan():
         raise HTTPException(status_code=400, detail="Agent is not running")
     await agent._scan()
     return {"ok": True, "scan_count": agent.scan_count, "log": agent.log[:10]}
+
+
+# ── Live Trading (BingX) ───────────────────────────────────────────────────────
+
+@router.get("/live/status")
+async def live_status():
+    """Return live executor status — open BingX positions, daily P&L, circuit breaker."""
+    agent = _get()
+    if not agent._live:
+        from app.core.config import settings
+        keys_set = bool(settings.bingx_api_key)
+        return {
+            "connected":  False,
+            "keys_set":   keys_set,
+            "mode":       agent.config.get("mode", "paper"),
+            "message":    "BingX keys not configured" if not keys_set else "Live executor not initialised (set mode=live to activate)",
+        }
+    return {
+        "connected": True,
+        "mode":      agent.config.get("mode"),
+        **agent._live.status(),
+    }
+
+
+@router.post("/live/close/{strategy_key}")
+async def live_close_position(strategy_key: str):
+    """Manually close a live BingX position for the given strategy."""
+    agent = _get()
+    if not agent._live:
+        raise HTTPException(status_code=400, detail="Live executor not active (mode is not 'live')")
+    pos = agent._live.live_positions.get(strategy_key)
+    if not pos:
+        raise HTTPException(status_code=404, detail=f"No live position found for {strategy_key}")
+    from app.agents.live_market_stream import LIVE_PRICES
+    price = LIVE_PRICES.get("BTC/USDT", {}).get("last", pos["entry"])
+    trade = await agent._live.close_position(strategy_key, price, "manual_api")
+    if trade:
+        agent._record_trade_closure(strategy_key, pos, trade["pnl_usd"], trade["exit_price"], "manual_api", is_live=True)
+    return {"ok": True, "trade": trade}
+
+
+@router.get("/live/balance")
+async def live_balance():
+    """Fetch live BingX account USDT balance."""
+    agent = _get()
+    if not agent._live:
+        raise HTTPException(status_code=400, detail="Live executor not active")
+    bal = await agent._live.fetch_balance()
+    return {"balance": bal}
+
+
+@router.post("/live/reset-circuit-breaker")
+async def reset_circuit_breaker():
+    """Manually reset the daily loss circuit breaker (use with caution)."""
+    agent = _get()
+    if not agent._live:
+        raise HTTPException(status_code=400, detail="Live executor not active")
+    agent._live._halted    = False
+    agent._live._daily_pnl = 0.0
+    return {"ok": True, "message": "Circuit breaker reset — trading resumed"}

@@ -30,12 +30,17 @@ class Settings(BaseSettings):
     trading_mode: Literal["paper", "live"] = "paper"
     allow_live_trading: int = 0  # 0 = disabled, 1 = enabled
 
-    # Exchange
+    # Exchange (legacy Binance)
     exchange_id: str = "binance"
     exchange_api_key: str = ""
     exchange_api_secret: str = ""
     exchange_testnet: bool = True
     use_mock_exchange: int = 1
+
+    # BingX — Live perpetual futures trading
+    bingx_api_key: str = ""
+    bingx_api_secret: str = ""
+    bingx_testnet: bool = False   # BingX has no CCXT testnet — use real with small size
 
     class Config:
         env_file = (".env", "../.env")
