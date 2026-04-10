@@ -4,8 +4,8 @@ const nextConfig = {
   ...(process.env.BUILD_STANDALONE === "1" ? { output: "standalone" } : {}),
 
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
-    NEXT_PUBLIC_WS_URL:  process.env.NEXT_PUBLIC_WS_URL  || "ws://localhost:8000",
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "https://tradeos-production-8f21.up.railway.app",
+    NEXT_PUBLIC_WS_URL:  process.env.NEXT_PUBLIC_WS_URL  || "wss://tradeos-production-8f21.up.railway.app",
   },
 
   generateBuildId: async () => `build-${Date.now()}`,
