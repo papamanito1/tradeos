@@ -602,6 +602,7 @@ class PersistentAgent:
         self.stats:  dict      = {}
         self.log:    list      = []   # last 200 lines
         self.grid_state: dict  = {}   # Grid $50 strategy persistent state
+        self.training_index: dict = {}  # per-strategy performance index (self-learning)
         self.scan_count        = 0
         self.last_scan: Optional[str] = None
         self._load_state()
@@ -610,13 +611,14 @@ class PersistentAgent:
 
     def _state_dict(self) -> dict:
         return {
-            "config":     self.config,
-            "positions":  self.positions,
-            "trades":     self.trades[-500:],   # persist up to 500 trades
-            "stats":      self.stats,
-            "log":        self.log[-100:],
-            "grid_state": self.grid_state,
-            "saved_at":   datetime.now(timezone.utc).isoformat(),
+            "config":          self.config,
+            "positions":       self.positions,
+            "trades":          self.trades[-500:],   # persist up to 500 trades
+            "stats":           self.stats,
+            "log":             self.log[-100:],
+            "grid_state":      self.grid_state,
+            "training_index":  self.training_index,
+            "saved_at":        datetime.now(timezone.utc).isoformat(),
         }
 
     def _apply_state(self, data: dict) -> None:
@@ -625,8 +627,9 @@ class PersistentAgent:
         self.positions  = data.get("positions",  {})
         self.trades     = data.get("trades",     [])[-500:]   # keep up to 500 trades in memory
         self.log        = data.get("log",        [])[-100:]
-        self.grid_state = data.get("grid_state", {})
-        # Always rebuild stats from trade history — never trust stale stored stats
+        self.grid_state      = data.get("grid_state", {})
+        self.training_index  = data.get("training_index", {})
+        # Always rebuild stats + training index from trade history
         self._rebuild_stats()
         # Merge stored stats for fields not derivable from trades (best/worst may be correct)
         stored = data.get("stats", {})
@@ -743,6 +746,98 @@ class PersistentAgent:
             s["worst_trade"] = min(s["worst_trade"], pnl)
         s["win_rate"] = round(s["wins"] / s["total_trades"] * 100, 1) if s["total_trades"] > 0 else 0.0
         self.stats = s
+        self._rebuild_training_index()
+
+    # ── Training data index — self-learning from trade history ────────────────
+
+    def _rebuild_training_index(self) -> None:
+        """
+        Build per-strategy performance metrics from closed trade history.
+        Used during scans to dynamically adjust confidence requirements,
+        apply loss cooldowns, and weight strategies by recent performance.
+        """
+        KEY_TO_NAME = {"momentum": "momentum", "hft": "hft", "orb": "orb", "obi": "obi"}
+        by_strat: dict[str, list] = {"momentum": [], "hft": [], "orb": [], "obi": [], "grid": []}
+
+        for t in self.trades:
+            sk = t.get("strategy_key", "")
+            if sk.startswith("grid_"):
+                by_strat["grid"].append(t)
+            elif sk in by_strat:
+                by_strat[sk].append(t)
+
+        idx: dict[str, dict] = {}
+        now = datetime.now(timezone.utc)
+
+        for key, trades in by_strat.items():
+            trades_sorted = sorted(trades, key=lambda t: t.get("closed_at", ""), reverse=True)
+            wins   = [t for t in trades_sorted if t.get("exit_reason") == "tp" or (t.get("pnl_usd", 0) or 0) > 0]
+            losses = [t for t in trades_sorted if t.get("exit_reason") == "sl" or (t.get("pnl_usd", 0) or 0) < 0]
+            total  = len(wins) + len(losses)
+            win_rate = wins.__len__() / total if total >= 3 else 0.50
+
+            # Streak from most recent
+            streak = 0
+            for t in trades_sorted:
+                is_win = t.get("exit_reason") == "tp" or (t.get("pnl_usd", 0) or 0) > 0
+                if streak == 0:
+                    streak = 1 if is_win else -1
+                elif streak > 0 and is_win:
+                    streak += 1
+                elif streak < 0 and not is_win:
+                    streak -= 1
+                else:
+                    break
+
+            # Time since last SL
+            last_sl = next((t for t in trades_sorted if t.get("exit_reason") == "sl"), None)
+            ms_since_sl = float("inf")
+            if last_sl and last_sl.get("closed_at"):
+                try:
+                    sl_time = datetime.fromisoformat(last_sl["closed_at"].replace("Z", "+00:00"))
+                    ms_since_sl = (now - sl_time).total_seconds() * 1000
+                except Exception:
+                    pass
+
+            total_pnl = sum(t.get("pnl_usd", 0) or 0 for t in trades_sorted)
+
+            # Composite trust score (mirrors frontend logic)
+            wr_mult     = 0.5 + win_rate
+            cooldown    = 0.70 if ms_since_sl < 45 * 60 * 1000 else 1.0   # 45-min cooldown after SL
+            streak_mult = (1.25 if streak >= 3 else 1.10 if streak >= 2
+                           else 0.70 if streak <= -3 else 0.82 if streak <= -2 else 1.0)
+            trust = max(0.30, min(2.0, wr_mult * cooldown * streak_mult))
+
+            # Dynamic confidence adjustment: cold strategies need higher confidence
+            conf_adj = 0.0
+            if streak <= -3:
+                conf_adj = 0.10       # require 10% more confidence when on cold streak
+            elif streak <= -2:
+                conf_adj = 0.05
+            elif streak >= 3:
+                conf_adj = -0.05      # reward hot streak with lower threshold
+
+            label = "HOT" if streak >= 2 else "COLD" if streak <= -2 else "NORMAL"
+
+            idx[key] = {
+                "win_rate":      round(win_rate, 3),
+                "total_trades":  total,
+                "wins":          len(wins),
+                "losses":        len(losses),
+                "streak":        streak,
+                "total_pnl":     round(total_pnl, 2),
+                "ms_since_sl":   ms_since_sl,
+                "trust_score":   round(trust, 3),
+                "conf_adj":      round(conf_adj, 3),
+                "label":         label,
+                "last_updated":  now.isoformat(),
+            }
+
+        self.training_index = idx
+        total_indexed = sum(v["total_trades"] for v in idx.values())
+        if total_indexed > 0 and self.scan_count % 20 == 0:
+            summary = " · ".join(f"{k}:{v['label']}({v['trust_score']:.2f})" for k, v in idx.items() if v["total_trades"] > 0)
+            self._log(f"[TRAINING] Indexed {total_indexed} trades → {summary}")
 
     def _log(self, msg: str) -> None:
         ts   = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -879,6 +974,10 @@ class PersistentAgent:
             ("obi",      _run_obi(candles1m, orderbook)),
         ]
 
+        # Rebuild training index periodically (every 10 scans or after trades)
+        if self.scan_count % 10 == 0:
+            self._rebuild_training_index()
+
         any_signal = False
         for key, result in strategies:
             s_cfg = self._strategy_cfg(key)
@@ -892,20 +991,36 @@ class PersistentAgent:
             name = result.get("name", key)
             open_pos = self.positions.get(key)
 
+            # Training-adjusted thresholds
+            ti = self.training_index.get(key, {})
+            conf_adj = ti.get("conf_adj", 0)
+            trust    = ti.get("trust_score", 1.0)
+            label    = ti.get("label", "NORMAL")
+            cooldown_ms = ti.get("ms_since_sl", float("inf"))
+            in_cooldown = cooldown_ms < 30 * 60 * 1000   # 30-min cooldown after SL
+
             if sig:
                 conf = sig.get("confidence", 0)
+                adj_min_conf = min(0.95, s_cfg.get("min_confidence", 0.50) + conf_adj)
                 cond_ok = met >= s_cfg.get("min_conditions", 2)
-                conf_ok = conf >= s_cfg.get("min_confidence", 0.50)
-                block   = "POS OPEN" if open_pos else ("conf_fail" if not conf_ok else ("cond_fail" if not cond_ok else ""))
+                conf_ok = conf >= adj_min_conf
+                block   = ("POS OPEN" if open_pos
+                           else "COOLDOWN" if in_cooldown
+                           else "conf_fail" if not conf_ok
+                           else "cond_fail" if not cond_ok else "")
 
-                self._log(f"[{name}] SIGNAL {sig['direction'].upper()} · {met}/{total} conds · conf {conf*100:.0f}% · {block or 'EXECUTING'}")
+                ti_str = f" · trust {trust:.2f} {label}" if ti.get("total_trades", 0) > 0 else ""
+                cd_str = f" · ⏸ {int(cooldown_ms/60000)}m since SL" if in_cooldown else ""
+                self._log(f"[{name}] SIGNAL {sig['direction'].upper()} · {met}/{total} conds · "
+                          f"conf {conf*100:.0f}% (min {adj_min_conf*100:.0f}%){ti_str}{cd_str} · {block or 'EXECUTING'}")
 
-                if cond_ok and conf_ok and not open_pos and s_cfg.get("auto_execute", True):
+                if cond_ok and conf_ok and not open_pos and not in_cooldown and s_cfg.get("auto_execute", True):
                     self._open_position(key, name, sig, s_cfg, live_price)
                     any_signal = True
             else:
                 if self.scan_count % 5 == 0:
-                    self._log(f"[{name}] {met}/{total} conds · no signal · {bias}")
+                    ti_str = f" · trust {trust:.2f} {label}" if ti.get("total_trades", 0) > 0 else ""
+                    self._log(f"[{name}] {met}/{total} conds · no signal · {bias}{ti_str}")
 
         # ── Grid $50 strategy (multi-position) ───────────────────────────────
         grid_cfg = self._strategy_cfg("grid")
@@ -918,11 +1033,17 @@ class PersistentAgent:
         grid_level_key = f"grid_{cur_level}"
 
         if grid_cfg.get("enabled", True):
+            grid_ti = self.training_index.get("grid", {})
+            grid_conf_adj = grid_ti.get("conf_adj", 0)
+            grid_trust    = grid_ti.get("trust_score", 1.0)
+            grid_label    = grid_ti.get("label", "NORMAL")
+
             open_grid_count = sum(1 for k, v in self.positions.items() if k.startswith("grid_") and v)
 
             if grid_sig:
                 conf    = grid_sig.get("confidence", 0)
-                conf_ok = conf >= grid_cfg.get("min_confidence", 0.50)
+                adj_conf = min(0.95, grid_cfg.get("min_confidence", 0.50) + grid_conf_adj)
+                conf_ok = conf >= adj_conf
                 cond_ok = grid_met >= grid_cfg.get("min_conditions", 3)
                 already_open = self.positions.get(grid_level_key)
                 slot_ok = open_grid_count < MAX_GRID_POSITIONS
@@ -932,17 +1053,19 @@ class PersistentAgent:
                          "conf_fail" if not conf_ok else
                          "cond_fail" if not cond_ok else "")
 
-                self._log(f"[Grid $50] SIGNAL LONG · {grid_met}/5 conds · conf {conf*100:.0f}% "
-                          f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS} · {block or 'EXECUTING'}")
+                ti_str = f" · trust {grid_trust:.2f} {grid_label}" if grid_ti.get("total_trades", 0) > 0 else ""
+                self._log(f"[Grid $50] SIGNAL LONG · {grid_met}/5 conds · conf {conf*100:.0f}% (min {adj_conf*100:.0f}%) "
+                          f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS}{ti_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not already_open and slot_ok and grid_cfg.get("auto_execute", True):
                     self._open_position(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
                     any_signal = True
             elif self.scan_count % 5 == 0:
+                ti_str = f" · trust {grid_trust:.2f} {grid_label}" if grid_ti.get("total_trades", 0) > 0 else ""
                 self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
                           f"center ${grid_result.get('grid_center', 0):,} · "
                           f"range ${grid_result.get('grid_min', 0):,}–${grid_result.get('grid_max', 0):,} · "
-                          f"slots {open_grid_count}/{MAX_GRID_POSITIONS}")
+                          f"slots {open_grid_count}/{MAX_GRID_POSITIONS}{ti_str}")
 
         self._save_state()           # fast file cache
         await self._save_state_db()  # durable DB persist
@@ -1051,7 +1174,9 @@ class PersistentAgent:
 
         self.positions[key] = None
         self._log(f"[{pos['strategy_name']}] {reason.upper()} hit @ ${exit_price:.0f} · P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
-        # Persist immediately after every close — don't wait for scan-end save
+        # Immediately re-index training data so agent learns from this trade
+        self._rebuild_training_index()
+        # Persist immediately after every close
         self._save_state()
         self._schedule_db_save()
 
@@ -1069,9 +1194,10 @@ class PersistentAgent:
         self.trades     = []
         self.stats      = self._empty_stats()
         self.log        = []
-        self.grid_state = {}   # reset grid centre so it re-anchors on next scan
+        self.grid_state      = {}   # reset grid centre so it re-anchors on next scan
+        self.training_index  = {}   # clear training data — starts fresh
         self.scan_count = 0
-        self._log("Paper account reset — all positions cleared + grid re-anchored")
+        self._log("Paper account reset — all positions cleared + grid re-anchored + training index cleared")
         self._save_state()
         self._schedule_db_save()
 
@@ -1116,17 +1242,18 @@ class PersistentAgent:
         open_positions = [p for p in self.positions.values() if p]
         open_grid      = [p for k, p in self.positions.items() if k.startswith("grid_") and p]
         return {
-            "running":        self._running,
-            "config":         self.config,
-            "scan_count":     self.scan_count,
-            "last_scan":      self.last_scan,
-            "live_price":     price,
-            "open_positions": open_positions,
-            "trades":         self.trades[:200],   # send up to 200 most recent trades
-            "stats":          self.stats,          # always rebuilt from trade history
-            "log":            self.log[:100],
-            "grid_state":     self.grid_state,
-            "grid_positions": open_grid,
+            "running":          self._running,
+            "config":           self.config,
+            "scan_count":       self.scan_count,
+            "last_scan":        self.last_scan,
+            "live_price":       price,
+            "open_positions":   open_positions,
+            "trades":           self.trades[:200],
+            "stats":            self.stats,
+            "log":              self.log[:100],
+            "grid_state":       self.grid_state,
+            "grid_positions":   open_grid,
+            "training_index":   self.training_index,
         }
 
 
