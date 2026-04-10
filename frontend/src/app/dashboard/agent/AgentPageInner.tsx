@@ -1347,6 +1347,125 @@ function AgentContent() {
           )}
 
           {/* Paper trading panel — server is the ONLY source of truth */}
+          {/* ── BTC Price + Chart ────────────────────────────────────── */}
+          <div className="card p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <DollarSign size={13} className="text-orange-400" />
+              <span className="text-[13px] font-semibold text-white">BTC / USDT</span>
+              <span className="text-[9px] text-neutral-600 ml-1">1m candles</span>
+              <span className="ml-auto flex items-center gap-1.5 text-[9px] text-green-400">
+                <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live
+              </span>
+            </div>
+            {(() => {
+              const src = candles.length > 0 ? candles : candles1m;
+              if (src.length < 2) return (
+                <div className="flex items-center justify-center py-10 text-neutral-700 text-[11px] gap-2">
+                  <RefreshCw size={12} className="animate-spin" />Loading chart…
+                </div>
+              );
+              const last = src[src.length - 1];
+              const prev = src[src.length - 2];
+              const diff = last.close - prev.close;
+              const diffPct = (diff / prev.close) * 100;
+              const h24 = src.length >= 60 ? src[src.length - 60].close : src[0].close;
+              const change24 = last.close - h24;
+              const changePct24 = (change24 / h24) * 100;
+              const recent = src.slice(-120);
+              const closes = recent.map(c => c.close);
+              const hi = Math.max(...recent.map(c => c.high));
+              const lo = Math.min(...recent.map(c => c.low));
+              const range = hi - lo || 1;
+              const W = 720;
+              const H = 160;
+              const PAD = 2;
+              const bW = Math.max(1, (W - PAD * 2) / recent.length - 1);
+              return (
+                <>
+                  {/* Price header */}
+                  <div className="flex items-end gap-3 mb-3">
+                    <span className="text-2xl font-bold text-white font-mono tracking-tight">
+                      ${last.close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                    <span className={`text-[11px] font-bold font-mono ${diff >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {diff >= 0 ? "+" : ""}{diff.toFixed(2)} ({diffPct >= 0 ? "+" : ""}{diffPct.toFixed(2)}%)
+                    </span>
+                    <div className="ml-auto flex gap-4 text-[10px]">
+                      <div>
+                        <span className="text-neutral-600 mr-1">1h</span>
+                        <span className={`font-mono font-bold ${changePct24 >= 0 ? "text-green-400" : "text-red-400"}`}>
+                          {changePct24 >= 0 ? "+" : ""}{changePct24.toFixed(2)}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-600 mr-1">H</span>
+                        <span className="font-mono text-white">${hi.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-600 mr-1">L</span>
+                        <span className="font-mono text-white">${lo.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Candlestick chart */}
+                  <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-lg" style={{ background: "rgba(0,0,0,0.25)" }}>
+                    {recent.map((c, i) => {
+                      const x = PAD + i * ((W - PAD * 2) / recent.length) + bW / 2;
+                      const oY = H - PAD - ((c.open - lo) / range) * (H - PAD * 2);
+                      const cY = H - PAD - ((c.close - lo) / range) * (H - PAD * 2);
+                      const hY = H - PAD - ((c.high - lo) / range) * (H - PAD * 2);
+                      const lY = H - PAD - ((c.low - lo) / range) * (H - PAD * 2);
+                      const bull = c.close >= c.open;
+                      const col = bull ? "#22c55e" : "#ef4444";
+                      const bodyTop = Math.min(oY, cY);
+                      const bodyH = Math.max(Math.abs(cY - oY), 0.5);
+                      return (
+                        <g key={i}>
+                          <line x1={x} x2={x} y1={hY} y2={lY} stroke={col} strokeWidth={0.6} opacity={0.5} />
+                          <rect x={x - bW / 2} y={bodyTop} width={bW} height={bodyH} fill={col} rx={0.3} />
+                        </g>
+                      );
+                    })}
+                    {/* EMA line (simple 9-period) */}
+                    {(() => {
+                      if (closes.length < 9) return null;
+                      const ema: number[] = [];
+                      const k = 2 / 10;
+                      ema[0] = closes[0];
+                      for (let i = 1; i < closes.length; i++) ema[i] = closes[i] * k + ema[i - 1] * (1 - k);
+                      const pts = ema.map((v, i) => {
+                        const x = PAD + i * ((W - PAD * 2) / recent.length) + bW / 2;
+                        const y = H - PAD - ((v - lo) / range) * (H - PAD * 2);
+                        return `${x},${y}`;
+                      }).join(" ");
+                      return <polyline points={pts} fill="none" stroke="#0a84ff" strokeWidth={1.2} opacity={0.6} />;
+                    })()}
+                    {/* Current price line */}
+                    <line x1={0} x2={W} y1={H - PAD - ((last.close - lo) / range) * (H - PAD * 2)} y2={H - PAD - ((last.close - lo) / range) * (H - PAD * 2)} stroke="#fff" strokeWidth={0.5} strokeDasharray="3,3" opacity={0.25} />
+                  </svg>
+                  {/* Volume bars below */}
+                  <svg viewBox={`0 0 ${W} 30`} className="w-full mt-0.5 rounded-b-lg" style={{ background: "rgba(0,0,0,0.15)" }}>
+                    {(() => {
+                      const maxVol = Math.max(...recent.map(c => c.volume), 1);
+                      return recent.map((c, i) => {
+                        const x = PAD + i * ((W - PAD * 2) / recent.length);
+                        const h = (c.volume / maxVol) * 26;
+                        const bull = c.close >= c.open;
+                        return <rect key={i} x={x} y={30 - h} width={bW} height={h} fill={bull ? "#22c55e" : "#ef4444"} opacity={0.35} rx={0.3} />;
+                      });
+                    })()}
+                  </svg>
+                  {/* Time labels */}
+                  <div className="flex justify-between text-[8px] text-neutral-700 mt-1 px-0.5">
+                    <span>{new Date(recent[0].timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                    <span>{recent.length} candles · 1m</span>
+                    <span>{new Date(recent[recent.length - 1].timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
           {config.mode === "paper" && (
             server.loading ? (
               <div className="card p-6 flex items-center justify-center gap-3 text-neutral-600">
