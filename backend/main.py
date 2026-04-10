@@ -180,3 +180,38 @@ async def force_reseed():
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/reset-admin-password")
+async def reset_admin_password():
+    """Emergency: reset admin password to 'TradeOS2024!' so you can log in."""
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.core.security import hash_password
+        from app.models.user import User
+        from sqlalchemy import select
+
+        NEW_PASS = "TradeOS2024!"
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.username == settings.admin_username))
+            user = result.scalar_one_or_none()
+            if not user:
+                # Create fresh
+                user = User(
+                    username=settings.admin_username,
+                    hashed_password=hash_password(NEW_PASS),
+                    is_active=True,
+                    is_admin=True,
+                )
+                session.add(user)
+            else:
+                user.hashed_password = hash_password(NEW_PASS)
+            await session.commit()
+        return {
+            "ok":       True,
+            "username": settings.admin_username,
+            "password": NEW_PASS,
+            "message":  f"Login with username='{settings.admin_username}' password='{NEW_PASS}'. Change it after logging in.",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
