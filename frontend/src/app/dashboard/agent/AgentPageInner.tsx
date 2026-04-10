@@ -1517,7 +1517,88 @@ function AgentContent() {
             </div>
           )}
 
-          {/* Paper trading panel — server is the ONLY source of truth */}
+          {/* ── Master Brain Panel ───────────────────────────────────── */}
+          {server.brain && (
+            <div className="card p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Brain size={14} className="text-purple-400" />
+                <span className="text-[13px] font-semibold text-white">Master Brain</span>
+                <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 font-mono">
+                  {server.brain.regime.toUpperCase()} · {(server.brain.regime_confidence * 100).toFixed(0)}%
+                </span>
+                <span className="ml-auto text-[9px] text-neutral-600">
+                  Updated {server.brain.regime_updated || "—"}
+                </span>
+              </div>
+
+              {/* Portfolio + Risk strip */}
+              <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
+                {([
+                  ["Positions", `${server.brain.portfolio.position_count}`, "#0a84ff"],
+                  ["Bias", server.brain.portfolio.direction_bias, server.brain.portfolio.direction_bias === "LONG" ? "#22c55e" : server.brain.portfolio.direction_bias === "SHORT" ? "#ef4444" : "#6b7280"],
+                  ["Daily P&L", `${server.brain.portfolio.daily_pnl >= 0 ? "+" : ""}$${server.brain.portfolio.daily_pnl.toFixed(2)}`, server.brain.portfolio.daily_pnl >= 0 ? "#22c55e" : "#ef4444"],
+                  ["Trades", `${server.brain.portfolio.daily_wins}W / ${server.brain.portfolio.daily_losses}L`, "#f59e0b"],
+                  ["Loss Streak", `${server.brain.portfolio.consec_losses}`, server.brain.portfolio.consec_losses >= 3 ? "#ef4444" : "#22c55e"],
+                  ["Exposure", `$${server.brain.portfolio.gross_exposure.toFixed(0)}`, "#8b5cf6"],
+                ] as const).map(([label, val, color]) => (
+                  <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-center">
+                    <div className="text-[8px] text-neutral-600 mb-0.5">{label}</div>
+                    <div className="text-[11px] font-bold font-mono" style={{ color }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Strategy trust bars */}
+              <div>
+                <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Strategy Trust</div>
+                <div className="space-y-1.5">
+                  {Object.entries(server.brain.strategy_trust).map(([key, trust]) => {
+                    const pct = Math.min(100, Math.max(0, (trust / 2) * 100));
+                    const color = trust >= 1.2 ? "#22c55e" : trust <= 0.7 ? "#ef4444" : trust <= 0.9 ? "#f59e0b" : "#0a84ff";
+                    const stats = server.brain!.strategy_stats?.[key];
+                    return (
+                      <div key={key} className="flex items-center gap-2">
+                        <span className="text-[9px] text-neutral-500 w-16 text-right font-mono">{key}</span>
+                        <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
+                        </div>
+                        <span className="text-[9px] font-mono w-8 text-right" style={{ color }}>{trust.toFixed(2)}</span>
+                        {stats && (
+                          <span className="text-[8px] text-neutral-600 w-20 text-right">
+                            {stats.wins}W {stats.losses}L · {(stats.win_rate * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Recent decisions feed */}
+              {server.brain.recent_decisions.length > 0 && (
+                <div>
+                  <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Recent Decisions</div>
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {server.brain.recent_decisions.slice(0, 8).map((d, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1 border-b border-neutral-800/40">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${d.approved ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
+                          {d.action}
+                        </span>
+                        <span className="text-[9px] text-white font-semibold">{d.strategy_name}</span>
+                        <span className={`text-[8px] font-mono ${d.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                          {d.direction.toUpperCase()}
+                        </span>
+                        <span className="text-[8px] text-neutral-600 flex-1 truncate">{d.reasoning}</span>
+                        <span className="text-[8px] text-purple-400 font-mono flex-shrink-0">{(d.conviction * 100).toFixed(0)}%</span>
+                        <span className="text-[8px] text-neutral-700 flex-shrink-0">{d.timestamp}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── BTC Price + Chart ────────────────────────────────────── */}
           <div className="card p-4">
             <div className="flex items-center gap-2 mb-3">

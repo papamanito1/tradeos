@@ -606,6 +606,9 @@ class PersistentAgent:
         self.scan_count        = 0
         self.last_scan: Optional[str] = None
         self._live: Optional[object] = None   # LiveExecutor instance when mode == "live"
+        # Master Brain — central intelligence for trade decisions
+        from app.agents.master_brain import MasterBrain
+        self.brain = MasterBrain()
         self._load_state()
 
     def _get_live_executor(self):
@@ -636,7 +639,8 @@ class PersistentAgent:
         return {
             "config":          self.config,
             "positions":       self.positions,
-            "trades":          self.trades[-500:],   # persist up to 500 trades
+            "trades":          self.trades[-500:],
+            "brain":           self.brain.to_dict(),
             "stats":           self.stats,
             "log":             self.log[-100:],
             "grid_state":      self.grid_state,
@@ -659,6 +663,8 @@ class PersistentAgent:
         if stored and self.stats["total_trades"] > 0:
             self.stats["best_trade"]  = max(self.stats.get("best_trade",  stored.get("best_trade",  0)), stored.get("best_trade",  0))
             self.stats["worst_trade"] = min(self.stats.get("worst_trade", stored.get("worst_trade", 0)), stored.get("worst_trade", 0))
+        # Restore MasterBrain state
+        self.brain.from_dict(data.get("brain", {}))
 
     # ── File fallback (local dev / fast cache) ────────────────────────────────
 
@@ -1026,6 +1032,12 @@ class PersistentAgent:
         if self.scan_count % 10 == 0:
             self._rebuild_training_index()
 
+        # ── MasterBrain: detect market regime ────────────────────────────
+        self.brain.detect_regime(candles15m, candles1m)
+        if self.scan_count % 10 == 1:
+            self._log(f"🧠 Regime: {self.brain.current_regime.upper()} "
+                      f"({self.brain.regime_confidence:.0%} confidence)")
+
         any_signal = False
         for key, result in strategies:
             s_cfg = self._strategy_cfg(key)
@@ -1063,8 +1075,21 @@ class PersistentAgent:
                           f"conf {conf*100:.0f}% (min {adj_min_conf*100:.0f}%){ti_str}{cd_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not open_pos and not in_cooldown and s_cfg.get("auto_execute", True):
-                    self._open_position(key, name, sig, s_cfg, live_price)
-                    any_signal = True
+                    # ── MasterBrain gate: evaluate before executing ──
+                    decision = self.brain.evaluate_signal(
+                        strategy_key=key, strategy_name=name, signal=sig,
+                        open_positions=self.positions, live_price=live_price,
+                        portfolio_pnl=self.stats.get("total_pnl", 0),
+                    )
+                    if decision["approved"]:
+                        adjusted_cfg = {**s_cfg}
+                        adjusted_cfg["size_usdc"] = round(s_cfg["size_usdc"] * decision["size_multiplier"], 2)
+                        self._log(f"🧠 APPROVED {name} · conviction {decision['conviction']:.0%} "
+                                  f"· size {decision['size_multiplier']:.0%} · {decision['reasoning']}")
+                        self._open_position(key, name, sig, adjusted_cfg, live_price)
+                        any_signal = True
+                    else:
+                        self._log(f"🧠 BLOCKED {name} — {decision['reasoning']}")
             else:
                 if self.scan_count % 5 == 0:
                     ti_str = f" · trust {trust:.2f} {label}" if ti.get("total_trades", 0) > 0 else ""
@@ -1106,8 +1131,20 @@ class PersistentAgent:
                           f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS}{ti_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not already_open and slot_ok and grid_cfg.get("auto_execute", True):
-                    self._open_position(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
-                    any_signal = True
+                    decision = self.brain.evaluate_signal(
+                        strategy_key="grid", strategy_name="Grid $50", signal=grid_sig,
+                        open_positions=self.positions, live_price=live_price,
+                        portfolio_pnl=self.stats.get("total_pnl", 0),
+                    )
+                    if decision["approved"]:
+                        adjusted_cfg = {**grid_cfg}
+                        adjusted_cfg["size_usdc"] = round(grid_cfg["size_usdc"] * decision["size_multiplier"], 2)
+                        self._log(f"🧠 APPROVED Grid $50 · conviction {decision['conviction']:.0%} "
+                                  f"· size {decision['size_multiplier']:.0%}")
+                        self._open_position(grid_level_key, "Grid $50", grid_sig, adjusted_cfg, live_price)
+                        any_signal = True
+                    else:
+                        self._log(f"🧠 BLOCKED Grid $50 — {decision['reasoning']}")
             elif self.scan_count % 5 == 0:
                 ti_str = f" · trust {grid_trust:.2f} {grid_label}" if grid_ti.get("total_trades", 0) > 0 else ""
                 self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
@@ -1303,6 +1340,12 @@ class PersistentAgent:
         prefix = "[LIVE]" if is_live else ""
         self._log(f"{prefix} [{pos['strategy_name']}] {reason.upper()} @ ${exit_price:.0f} · "
                   f"P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
+
+        # Feed result to MasterBrain for learning
+        strat_key = key.split("_")[0] if key.startswith("grid_") else key
+        won = pnl > 0
+        self.brain.record_trade_result(strat_key, pnl, won)
+
         self._rebuild_training_index()
         self._save_state()
         self._schedule_db_save()
@@ -1393,6 +1436,7 @@ class PersistentAgent:
             "grid_positions":       open_grid,
             "training_index":       self.training_index,
             "live_executor":        live_executor_status,
+            "master_brain":         self.brain.get_status(self.positions, price),
         }
 
 

@@ -212,3 +212,25 @@ async def reset_circuit_breaker():
     agent._live._halted    = False
     agent._live._daily_pnl = 0.0
     return {"ok": True, "message": "Circuit breaker reset — trading resumed"}
+
+
+# ── Master Brain ──────────────────────────────────────────────────────────
+
+@router.get("/brain")
+async def get_brain_status():
+    """Full MasterBrain state — regime, trust, portfolio, decisions."""
+    agent = _get()
+    from app.agents.live_market_stream import LIVE_PRICES
+    price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0)
+    return agent.brain.get_status(agent.positions, price)
+
+
+@router.post("/brain/reset-trust")
+async def reset_brain_trust():
+    """Reset all strategy trust scores to neutral (1.0)."""
+    agent = _get()
+    agent.brain.strategy_trust = {k: 1.0 for k in agent.brain.strategy_trust}
+    agent.brain.consecutive_losses = 0
+    agent._save_state()
+    agent._schedule_db_save()
+    return {"ok": True, "trust": agent.brain.strategy_trust}

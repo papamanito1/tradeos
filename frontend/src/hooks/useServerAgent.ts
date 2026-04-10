@@ -95,6 +95,40 @@ export interface GridStateData {
   last_reset?:   string;
 }
 
+export interface MasterBrainStatus {
+  regime:             string;
+  regime_confidence:  number;
+  regime_updated:     string;
+  strategy_trust:     Record<string, number>;
+  portfolio:          {
+    position_count:   number;
+    long_exposure:    number;
+    short_exposure:   number;
+    net_exposure:     number;
+    gross_exposure:   number;
+    total_unrealized: number;
+    direction_bias:   string;
+    daily_pnl:        number;
+    daily_trades:     number;
+    daily_wins:       number;
+    daily_losses:     number;
+    consec_losses:    number;
+  };
+  recent_decisions:   Array<{
+    approved:        boolean;
+    action:          string;
+    conviction:      number;
+    size_multiplier: number;
+    reasoning:       string;
+    strategy_name:   string;
+    direction:       string;
+    regime:          string;
+    timestamp:       string;
+  }>;
+  strategy_stats:     Record<string, { trades: number; wins: number; losses: number; total_pnl: number; win_rate: number }>;
+  limits:             { max_daily_trades: number; max_consecutive_losses: number; max_open_positions: number; max_daily_loss: number };
+}
+
 export interface ServerStatus {
   running:          boolean;
   config:           ServerAgentConfig;
@@ -108,6 +142,7 @@ export interface ServerStatus {
   grid_state?:      GridStateData;
   grid_positions?:  ServerPosition[];
   live_executor?:   LiveExecutorStatus | null;
+  master_brain?:    MasterBrainStatus | null;
 }
 
 async function apiFetch(path: string, opts?: RequestInit) {
@@ -219,5 +254,6 @@ export function useServerAgent() {
     gridState:        status?.grid_state      ?? null,
     gridPositions:    status?.grid_positions  ?? [],
     liveExecutor:     status?.live_executor   ?? null,
+    brain:            status?.master_brain    ?? null,
   };
 }
