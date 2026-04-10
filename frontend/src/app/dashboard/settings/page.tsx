@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
-import { Zap, Shield, Server, Wallet } from "lucide-react";
+import { Zap, Shield, Server, Wallet, Bot, Activity } from "lucide-react";
+import { useSharedServerAgent } from "@/context/ServerAgentContext";
+import Link from "next/link";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
+  const serverAgent = useSharedServerAgent();
 
   useEffect(() => { settingsApi.get().then(setSettings).catch(() => {}); }, []);
 
@@ -85,6 +88,52 @@ export default function SettingsPage() {
         <p className="text-[10px] text-neutral-700 mt-3">
           Risk parameters are enforced by the frontend strategy engine on every bar close. Adjust them on the Live Agent page.
         </p>
+      </div>
+
+      {/* Live Agent Configuration */}
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Bot size={14} className="text-emerald-400" />
+            <h3 className="text-sm font-semibold text-white">Live Agent Parameters</h3>
+            {serverAgent.running && (
+              <span className="flex items-center gap-1 text-[9px] text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />LIVE
+              </span>
+            )}
+          </div>
+          <Link href="/dashboard/agent" className="text-[9px] text-blue-400 hover:text-blue-300 transition-colors">Configure →</Link>
+        </div>
+        {serverAgent.config ? (
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              ["Agent Enabled",   serverAgent.config.enabled ? "Yes" : "No"],
+              ["Auto Execute",    serverAgent.config.auto_execute ? "Yes" : "No"],
+              ["Min Confidence",  `${(serverAgent.config.min_confidence * 100).toFixed(0)}%`],
+              ["Min Conditions",  `${serverAgent.config.min_conditions} / 7`],
+              ["Position Size",   `$${serverAgent.config.size_usdc} USDC`],
+              ["Open Positions",  `${serverAgent.openPositions.length} currently open`],
+              ["Total P&L",       serverAgent.stats ? `${serverAgent.stats.total_pnl >= 0 ? "+" : ""}$${serverAgent.stats.total_pnl.toFixed(2)}` : "—"],
+              ["Win Rate",        serverAgent.stats && serverAgent.stats.total_trades > 0 ? `${serverAgent.stats.win_rate.toFixed(1)}%` : "—"],
+              ["Total Trades",    `${serverAgent.stats?.total_trades ?? 0}`],
+            ].map(([label, val]) => (
+              <div key={label} className="bg-neutral-900 rounded-lg p-3">
+                <div className="text-[9px] text-neutral-600 mb-1">{label}</div>
+                <div className="text-[12px] font-semibold text-white">{val}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-[11px] text-neutral-700 py-4 text-center">
+            {serverAgent.error ? `Server unreachable: ${serverAgent.error}` : "Loading agent config…"}
+          </div>
+        )}
+        <div className="mt-3 flex items-start gap-2 p-3 rounded-xl" style={{ background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.12)" }}>
+          <Activity size={11} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+          <p className="text-[10px] text-neutral-600 leading-relaxed">
+            The server agent runs 24/7 on Railway — browser-independent. All 5 strategies are active simultaneously. Changes made on the Live Agent page take effect within 20s.
+          </p>
+        </div>
       </div>
 
       {/* System */}

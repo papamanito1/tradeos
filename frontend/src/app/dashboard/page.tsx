@@ -6,7 +6,7 @@ import {
   BarChart2, ShieldCheck, RefreshCw, WifiOff,
   Zap, ArrowUpRight, ArrowDownRight, Bell, Bot, BookOpen,
   CheckCircle2, XCircle, Brain, Cpu, RotateCcw, X as XIcon,
-  Target, Shield, FileText, Send, MessageSquare,
+  Target, Shield, FileText, Send, MessageSquare, Square,
 } from "lucide-react";
 import { overviewApi } from "@/lib/api";
 import { Overview } from "@/types";
@@ -20,6 +20,7 @@ import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
 import { useHFTScalper, type HFTResult } from "@/hooks/useHFTScalper";
 import { useOBIScalper, type OBIResult } from "@/hooks/useOBIScalper";
 import { useGridStrategy } from "@/hooks/useGridStrategy";
+import { useSharedServerAgent } from "@/context/ServerAgentContext";
 import { useServerAgent } from "@/hooks/useServerAgent";
 import { useMasterAgent, type MasterSignal, type ConvictionGrade, type ChatMessage } from "@/hooks/useMasterAgent";
 
@@ -627,6 +628,51 @@ function AgentCard({
   );
 }
 
+// ─── Mini Agent Card (for HFT/ORB/OBI in AllAgentsPanel) ─────────────────────
+function MiniAgentCard({
+  name, timeframe, strategy, bias, metCount, total, hasSignal, ticker,
+}: {
+  name: string; timeframe: string; strategy: string;
+  bias: "long" | "short" | "neutral";
+  metCount: number; total: number; hasSignal: boolean;
+  ticker?: BinanceTicker | null;
+}) {
+  const isLong = bias === "long", isShort = bias === "short";
+  const biasRgb   = isLong ? "34,197,94" : isShort ? "239,68,68" : "55,65,81";
+  const biasColor = isLong ? "#22c55e"   : isShort ? "#ef4444"   : "#4b5563";
+  const pct = total > 0 ? (metCount / total) * 100 : 0;
+  return (
+    <div className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{ background: "rgba(255,255,255,0.025)", border: `1px solid rgba(${biasRgb},0.12)` }}>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-[11px] font-bold text-white">{name}</div>
+          <div className="text-[8px] text-neutral-600">{strategy} · {timeframe}</div>
+        </div>
+        <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full" style={{ background: hasSignal ? `rgba(${biasRgb},0.12)` : "rgba(34,197,94,0.06)", border: hasSignal ? `1px solid rgba(${biasRgb},0.3)` : "1px solid rgba(34,197,94,0.15)" }}>
+          <span className="w-1 h-1 rounded-full animate-pulse" style={{ background: hasSignal ? biasColor : "#22c55e" }} />
+          <span className="text-[7px] font-bold" style={{ color: hasSignal ? biasColor : "#22c55e" }}>{hasSignal ? "SIGNAL" : "LIVE"}</span>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <div className="flex justify-between text-[9px]">
+          <span className="text-neutral-700">Conditions met</span>
+          <span className="font-bold" style={{ color: biasColor }}>{metCount}/{total}</span>
+        </div>
+        <div className="h-1.5 bg-neutral-900 rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: biasColor }} />
+        </div>
+        <div className="flex justify-between text-[9px]">
+          <span className="font-bold capitalize" style={{ color: biasColor }}>
+            {isLong ? "▲ LONG" : isShort ? "▼ SHORT" : "FLAT"}
+          </span>
+          {ticker && <span className="text-neutral-600 font-mono">{formatUSD(ticker.last)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Master Agent Chat Interface ─────────────────────────────────────────────
 function ChatBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === "user";
@@ -1099,11 +1145,15 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
 }
 
 function AllAgentsPanel({
-  strategyResult, chartCandles, activity, btcTicker,
+  strategyResult, hftResult, obiResult, orbResult, chartCandles, activity, btcTicker, serverAgent, masterAgent,
 }: {
-  strategyResult: StrategyResult; chartCandles: BinanceCandle[];
+  strategyResult: StrategyResult; hftResult: HFTResult; obiResult: OBIResult; orbResult: ORBResult;
+  chartCandles: BinanceCandle[];
   activity: ActivityEvent[]; btcTicker: BinanceTicker | null;
+  serverAgent: ReturnType<typeof useServerAgent>;
+  masterAgent: ReturnType<typeof useMasterAgent>;
 }) {
+  const activeCount = [strategyResult, hftResult, obiResult, orbResult].filter(r => r.bias !== "neutral" || r.met_count >= 2).length + 1; // +1 for Grid always running
   return (
     <div className="space-y-3">
       {/* Section header */}
@@ -1115,18 +1165,24 @@ function AllAgentsPanel({
           <span className="text-[13px] font-bold text-white">Individual Agents</span>
           <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.18)" }}>
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-[8px] text-green-400 font-bold">3 RUNNING</span>
+            <span className="text-[8px] text-green-400 font-bold">5 RUNNING</span>
           </div>
+          {serverAgent.running && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.18)" }}>
+              <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[8px] text-emerald-400 font-bold">Server 24/7</span>
+            </div>
+          )}
         </div>
-        <a href="/dashboard/agent" className="text-[9px] text-neutral-600 hover:text-blue-400 transition-colors">View full agent →</a>
+        <a href="/dashboard/agent" className="text-[9px] text-neutral-600 hover:text-blue-400 transition-colors">Full control →</a>
       </div>
 
-      {/* Agent cards + activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+      {/* Agent cards — all 5 live */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
 
         {/* Momentum Velocity 15m agent */}
         <AgentCard
-          name="Momentum Velocity"
+          name="Momentum 15m"
           timeframe="15m"
           strategy="EMA50 · RSI · VWAP"
           result={strategyResult}
@@ -1134,140 +1190,134 @@ function AllAgentsPanel({
           ticker={btcTicker}
         />
 
-        {/* HFT VWAP Scalper agent */}
-        <div className="rounded-2xl p-4 flex flex-col gap-3"
-          style={{ background: "rgba(245,158,11,0.03)", border: "1px solid rgba(245,158,11,0.1)" }}>
+        {/* HFT VWAP Scalper — live data */}
+        <MiniAgentCard
+          name="HFT Scalper"
+          timeframe="1m"
+          strategy="VWAP · OBI · Microprice"
+          bias={hftResult.bias}
+          metCount={hftResult.met_count}
+          total={hftResult.total ?? 5}
+          hasSignal={hftResult.signal !== null}
+          ticker={btcTicker}
+        />
+
+        {/* ORB-30 — live data */}
+        <MiniAgentCard
+          name="ORB-30"
+          timeframe="1m"
+          strategy="Opening Range · EMA20"
+          bias={orbResult.bias}
+          metCount={orbResult.met_count}
+          total={orbResult.total ?? 4}
+          hasSignal={orbResult.signal !== null}
+          ticker={btcTicker}
+        />
+
+        {/* OBI Scalper — live data */}
+        <MiniAgentCard
+          name="OBI Scalper"
+          timeframe="1m"
+          strategy="Order Book Imbalance · RSI"
+          bias={obiResult.bias}
+          metCount={obiResult.met_count}
+          total={obiResult.total ?? 3}
+          hasSignal={obiResult.signal !== null}
+          ticker={btcTicker}
+        />
+
+        {/* Grid $50 — show server state */}
+        <div className="rounded-2xl p-4 flex flex-col gap-2"
+          style={{ background: "rgba(6,182,212,0.03)", border: `1px solid rgba(6,182,212,${masterAgent.votes.find(v => v.name === "Grid $50")?.signal ? "0.25" : "0.1"})` }}>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)" }}>
-                <Zap size={14} style={{ color: "#f59e0b" }} />
-              </div>
-              <div>
-                <div className="text-[12px] font-bold text-white leading-none">HFT VWAP Scalper</div>
-                <div className="text-[8px] text-neutral-600 mt-0.5">OBI · TFI · Microprice · 1m</div>
-              </div>
+            <div>
+              <div className="text-[11px] font-bold text-white">Grid $50</div>
+              <div className="text-[8px] text-neutral-600">±$50 levels · 5 slots</div>
             </div>
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
-              <span className="text-[8px] text-yellow-400 font-bold">LIVE</span>
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.2)" }}>
+              <span className="w-1 h-1 rounded-full bg-cyan-400 animate-pulse" />
+              <span className="text-[8px] text-cyan-400 font-bold">LIVE</span>
             </div>
           </div>
-          <div className="rounded-xl p-3" style={{ background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.1)" }}>
-            <div className="text-[9px] text-yellow-400 font-semibold mb-1">Order Flow Scalper</div>
-            <div className="text-[8px] text-neutral-600 leading-relaxed">Live Binance depth stream analysis. OBI/TFI/microprice on 1m bars, 5m EMA bias filter.</div>
-          </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {[["OBI","0.18"],["TFI","0.12"],["Spread","2 ticks"]].map(([l,v]) => (
-              <div key={l} className="rounded-xl p-2 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                <div className="text-[7px] text-neutral-700">{l}</div>
-                <div className="text-[10px] font-mono font-bold text-yellow-400">{v}</div>
+          <div className="space-y-1">
+            {[
+              ["Slots", `${serverAgent.openPositions.filter(p => p.strategy_name === "Grid $50").length}/5`, "text-cyan-400"],
+              ["Center", serverAgent.gridState?.center ? `$${serverAgent.gridState.center.toLocaleString()}` : "—", "text-neutral-300"],
+              ["Daily P&L", serverAgent.gridState?.daily_pnl != null ? `${serverAgent.gridState.daily_pnl >= 0 ? "+" : ""}$${serverAgent.gridState.daily_pnl.toFixed(2)}` : "—", (serverAgent.gridState?.daily_pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"],
+            ].map(([l, v, cls]) => (
+              <div key={l} className="flex items-center justify-between text-[9px]">
+                <span className="text-neutral-700">{l}</span>
+                <span className={`font-mono font-bold ${cls}`}>{v}</span>
               </div>
             ))}
           </div>
-          <div className="text-[8px] text-neutral-700 text-center mt-auto">
-            <a href="/dashboard/agent?strategy=hft" className="text-yellow-400/70 hover:text-yellow-400 transition-colors">Configure on Live Agent →</a>
-          </div>
-        </div>
-
-        {/* ORB-30 Breakout agent */}
-        <div className="rounded-2xl p-4 flex flex-col gap-3"
-          style={{ background: "rgba(251,191,36,0.03)", border: "1px solid rgba(251,191,36,0.1)" }}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "rgba(251,191,36,0.12)", border: "1px solid rgba(251,191,36,0.25)" }}>
-                <BarChart2 size={14} style={{ color: "#fbbf24" }} />
-              </div>
-              <div>
-                <div className="text-[12px] font-bold text-white leading-none">ORB-30 ★</div>
-                <div className="text-[8px] text-neutral-600 mt-0.5">EMA20 bias · 4h sessions · 1m</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.2)" }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              <span className="text-[8px] text-amber-400 font-bold">LIVE</span>
-            </div>
-          </div>
-
-          {/* 5-year stats */}
-          <div className="rounded-xl px-3 py-2.5 grid grid-cols-3 gap-2"
-            style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.12)" }}>
-            {[["5yr Return","+94.3%","text-green-400"],["Win Rate","55.3%","text-blue-400"],["R:R","2.25:1","text-amber-300"]].map(([l,v,cls]) => (
-              <div key={l} className="text-center">
-                <div className="text-[7px] text-neutral-700">{l}</div>
-                <div className={`text-[11px] font-bold ${cls}`}>{v}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            {[["Sharpe","1.74"],["PF","1.81"],["Max DD","−13.8%"],["Trades/mo","18.7"]].map(([l,v]) => (
-              <div key={l} className="rounded-xl p-2 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                <div className="text-[7px] text-neutral-700">{l}</div>
-                <div className="text-[10px] font-mono font-bold text-neutral-400">{v}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="text-[8px] text-neutral-700 text-center mt-auto">
-            <a href="/dashboard/agent?strategy=orb" className="text-amber-400/70 hover:text-amber-400 transition-colors">Full analysis on Live Agent →</a>
-          </div>
-        </div>
-
-        {/* Live activity feed */}
-        <div className="rounded-2xl overflow-hidden flex flex-col"
-          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <div className="flex items-center justify-between px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-            <div className="flex items-center gap-2">
-              <Bell size={11} className="text-neutral-600" />
-              <span className="text-[12px] font-bold text-white">Activity</span>
-              {activity.length > 0 && (
-                <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold" style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#22c55e" }}>
-                  {activity.length}
-                </span>
-              )}
-            </div>
-            <span className="flex items-center gap-1 text-[8px] text-neutral-700">
-              <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />live
-            </span>
-          </div>
-          <div className="overflow-y-auto flex-1 max-h-52">
-            {activity.length === 0
-              ? (
-                <div className="flex flex-col items-center justify-center py-8 gap-2">
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                    <Zap size={14} className="text-neutral-800" />
-                  </div>
-                  <p className="text-[10px] text-neutral-700">Waiting for signals…</p>
-                  <p className="text-[8px] text-neutral-800">Fires on every bar close</p>
-                </div>
-              )
-              : activity.map((ev, i) => <ActivityRow key={i} ev={ev} />)}
+          <div className="text-[8px] text-cyan-400/60 text-center mt-auto">
+            <a href="/dashboard/agent" className="hover:text-cyan-400 transition-colors">Configure →</a>
           </div>
         </div>
       </div>
+
+      {/* Last 5 trades from server */}
+      {serverAgent.trades.length > 0 && (
+        <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <div className="flex items-center gap-2">
+              <FileText size={11} className="text-neutral-600" />
+              <span className="text-[11px] font-bold text-white">Recent Executions</span>
+              <span className="text-[8px] text-emerald-400">persistent · server</span>
+            </div>
+            <a href="/dashboard/agent" className="text-[8px] text-neutral-700 hover:text-blue-400 transition-colors">Full history →</a>
+          </div>
+          <div className="divide-y divide-neutral-800/50">
+            {serverAgent.trades.slice(0, 5).map((t, i) => {
+              const pnl = t.pnl_usd ?? 0;
+              return (
+                <div key={i} className="flex items-center gap-3 px-4 py-2">
+                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${pnl >= 0 ? "bg-green-400" : "bg-red-400"}`} />
+                  <span className={`text-[9px] font-bold w-10 ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()}</span>
+                  <span className="text-[9px] text-neutral-600 flex-1 truncate">{t.strategy_name}</span>
+                  <span className="text-[8px] text-neutral-700 font-mono">${t.entry.toFixed(0)}→${(t.exit_price ?? 0).toFixed(0)}</span>
+                  <span className={`text-[9px] font-bold font-mono w-16 text-right ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                  </span>
+                  <span className={`text-[8px] font-bold w-8 text-right ${t.exit_reason === "tp" ? "text-green-400" : t.exit_reason === "sl" ? "text-red-400" : "text-neutral-500"}`}>
+                    {(t.exit_reason ?? "—").toUpperCase()}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Command Bar ──────────────────────────────────────────────────────────────
 function CommandBar({
-  ticker, agent, strategyResult, orbResult, streamConnected,
+  ticker, agent, strategyResult, orbResult, hftResult, obiResult, streamConnected, serverAgent,
 }: {
   ticker: BinanceTicker | null;
   agent: ReturnType<typeof useMasterAgent>;
   strategyResult: StrategyResult;
   orbResult: ORBResult;
+  hftResult: HFTResult;
+  obiResult: OBIResult;
   streamConnected: boolean;
+  serverAgent: ReturnType<typeof useServerAgent>;
 }) {
-  const { direction, conviction, grade, regime } = agent;
+  const { direction, conviction, grade, regime, sessionInfo } = agent as ReturnType<typeof useMasterAgent>;
   const gm = GRADE_META[grade];
   const isUp = (ticker?.change_pct ?? 0) >= 0;
 
   const strategies: { label: string; bias: string; met: number; total: number }[] = [
     { label: "MV 15m", bias: strategyResult.bias, met: strategyResult.met_count,  total: strategyResult.total ?? 7 },
     { label: "ORB",    bias: orbResult.bias,       met: orbResult.met_count,       total: orbResult.total ?? 6 },
-    { label: "HFT",    bias: "neutral",            met: 0,                         total: 5 },
-    { label: "OBI",    bias: "neutral",            met: 0,                         total: 3 },
+    { label: "HFT",    bias: hftResult.bias,       met: hftResult.met_count,       total: hftResult.total ?? 5 },
+    { label: "OBI",    bias: obiResult.bias,       met: obiResult.met_count,       total: obiResult.total ?? 3 },
+    { label: "Grid",   bias: agent.votes.find(v => v.name === "Grid $50")?.bias ?? "neutral",
+                       met: Math.round((agent.votes.find(v => v.name === "Grid $50")?.met_pct ?? 0) * 5),
+                       total: 5 },
   ];
 
   return (
@@ -1334,11 +1384,30 @@ function CommandBar({
         </div>
       </div>
 
-      {/* Right: stream status */}
-      <div className="ml-auto flex items-center gap-2">
+      {/* Session + server running indicator + Kill Switch */}
+      <div className="ml-auto flex items-center gap-3">
+        {sessionInfo && (
+          <span className={`text-[8px] font-semibold hidden lg:flex ${sessionInfo.peak ? "text-green-400" : "text-yellow-500"}`}>
+            {sessionInfo.peak ? "⚡" : "⏰"} {sessionInfo.label.split("—")[0].trim()}
+          </span>
+        )}
+        <div className="h-5 w-px bg-neutral-800 hidden sm:block" />
+        {serverAgent.running
+          ? <span className="flex items-center gap-1.5 text-[8px] text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Agent 24/7</span>
+          : <span className="flex items-center gap-1.5 text-[8px] text-neutral-600">Agent offline</span>}
+        <div className="h-5 w-px bg-neutral-800 hidden sm:block" />
         {streamConnected
           ? <span className="flex items-center gap-1.5 text-[8px] text-green-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />Binance LIVE</span>
           : <span className="flex items-center gap-1.5 text-[8px] text-neutral-600"><WifiOff size={9} />Connecting</span>}
+        <div className="h-5 w-px bg-neutral-800 hidden sm:block" />
+        <button
+          onClick={() => serverAgent.updateConfig({ enabled: false })}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[9px] font-bold transition-all hover:scale-105 active:scale-95"
+          style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
+          title="Stop all trading"
+        >
+          <Square size={9} />STOP ALL
+        </button>
       </div>
     </div>
   );
@@ -1346,16 +1415,15 @@ function CommandBar({
 
 // ─── Signal Command Center ─────────────────────────────────────────────────────
 function SignalCommandCenter({
-  agent, strategyResult, orbResult,
+  agent, strategyResult, orbResult, serverAgent,
 }: {
   agent: ReturnType<typeof useMasterAgent>;
   strategyResult: StrategyResult;
   orbResult: ORBResult;
+  serverAgent: ReturnType<typeof useServerAgent>;
 }) {
   const { direction, conviction, grade, signal, votes, consensus_count, regime,
-          paper_position, paper_stats, last_price } = agent;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { openPaperTrade, closePaperTrade, resetPaper } = agent as any;
+          paper_stats, last_price, strategyPerf } = agent as ReturnType<typeof useMasterAgent>;
   const gm = GRADE_META[grade];
   const isLong  = direction === "LONG";
   const isShort = direction === "SHORT";
@@ -1493,25 +1561,28 @@ function SignalCommandCenter({
           )}
         </div>
 
-        {/* RIGHT: Strategy votes + paper trading */}
+        {/* RIGHT: Strategy votes + live server positions */}
         <div className="col-span-12 lg:col-span-4 p-5 flex flex-col gap-4">
 
-          {/* Strategy votes */}
+          {/* Strategy votes with trust scores */}
           <div>
             <div className="text-[8px] text-neutral-700 uppercase tracking-widest mb-2 font-bold">
-              Strategy Alignment ({consensus_count}/3)
+              Strategy Alignment ({consensus_count}/5) · Trust
             </div>
             <div className="space-y-1.5">
               {votes.map(v => {
                 const aligned = direction !== "FLAT" && v.bias === direction.toLowerCase();
                 const vc = v.bias === "long" ? "#22c55e" : v.bias === "short" ? "#ef4444" : "#374151";
+                const perf = strategyPerf?.[v.name];
+                const lbl = perf?.label === "HOT" ? "🔥" : perf?.label === "COLD" ? "❄" : "";
                 return (
                   <div key={v.name} className="flex items-center gap-2 rounded-xl px-3 py-2"
                     style={{ background: aligned ? `rgba(${dirRgb},0.06)` : "rgba(255,255,255,0.025)", border: `1px solid rgba(${dirRgb},${aligned ? "0.15" : "0.04"})` }}>
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: vc }} />
-                    <span className="text-[9px] text-neutral-500 flex-1 truncate">{v.name}</span>
+                    <span className="text-[8px] text-neutral-500 flex-1 truncate">{v.name}{lbl}</span>
+                    <span className="text-[7px] font-mono text-neutral-700">{((v.weight ?? 1) * 100).toFixed(0)}%</span>
                     <span className="text-[9px] font-bold" style={{ color: vc }}>{v.bias === "long" ? "▲" : v.bias === "short" ? "▼" : "—"}</span>
-                    <div className="h-1 w-10 bg-neutral-900 rounded-full overflow-hidden">
+                    <div className="h-1 w-8 bg-neutral-900 rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${v.met_pct * 100}%`, background: vc }} />
                     </div>
                   </div>
@@ -1520,60 +1591,59 @@ function SignalCommandCenter({
             </div>
           </div>
 
-          {/* Paper trade */}
+          {/* Server live positions + all-time P&L */}
           <div className="flex-1">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-1.5">
-                <FileText size={10} className="text-violet-400" />
-                <span className="text-[10px] font-bold text-white">Paper Trade</span>
+                <Bot size={10} className="text-emerald-400" />
+                <span className="text-[10px] font-bold text-white">Live Positions</span>
+                <span className="text-[8px] text-emerald-400">24/7 · server</span>
               </div>
-              <button onClick={resetPaper} className="text-[8px] text-neutral-700 hover:text-red-400 flex items-center gap-0.5 transition-colors">
-                <RotateCcw size={8} />Reset
-              </button>
+              <a href="/dashboard/agent" className="text-[8px] text-neutral-700 hover:text-blue-400 transition-colors">Full control →</a>
             </div>
-            <div className="grid grid-cols-2 gap-1.5 mb-2">
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-1.5 mb-2">
               {([
-                ["P&L", `${paper_stats.total_pnl >= 0 ? "+" : ""}$${paper_stats.total_pnl.toFixed(2)}`, paper_stats.total_pnl >= 0 ? "text-green-400" : "text-red-400"],
+                ["All-time P&L", paper_stats.total_pnl >= 0 ? `+$${paper_stats.total_pnl.toFixed(2)}` : `$${paper_stats.total_pnl.toFixed(2)}`, paper_stats.total_pnl >= 0 ? "text-green-400" : "text-red-400"],
                 ["Win%", paper_stats.total_trades > 0 ? `${paper_stats.win_rate.toFixed(1)}%` : "—", "text-blue-400"],
+                ["Trades", `${paper_stats.total_trades}`, "text-neutral-300"],
               ] as [string, string, string][]).map(([l, v, cls]) => (
-                <div key={l} className="rounded-xl p-2.5 text-center" style={{ background: "rgba(139,92,246,0.04)", border: "1px solid rgba(139,92,246,0.1)" }}>
+                <div key={l} className="rounded-xl p-2 text-center" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
                   <div className="text-[7px] text-neutral-700 mb-0.5">{l}</div>
-                  <div className={`text-[13px] font-bold font-mono ${cls}`}>{v}</div>
+                  <div className={`text-[11px] font-bold font-mono ${cls}`}>{v}</div>
                 </div>
               ))}
             </div>
 
-            {paper_position?.open ? (
-              <div className="rounded-xl p-3" style={{ background: paper_position.direction === "LONG" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${paper_position.direction === "LONG" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}` }}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${paper_position.direction === "LONG" ? "bg-green-400" : "bg-red-400"}`} />
-                    <span className={`text-[10px] font-bold ${paper_position.direction === "LONG" ? "text-green-400" : "text-red-400"}`}>OPEN {paper_position.direction}</span>
-                  </div>
-                  <button onClick={closePaperTrade} className="text-[8px] text-neutral-600 hover:text-red-400 flex items-center gap-0.5 border border-neutral-800 rounded px-1.5 py-0.5 transition-colors">
-                    <XIcon size={7} />Close
-                  </button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[9px] text-neutral-600">Entry ${paper_position.entry?.toFixed(0)}</span>
-                  <span className={`text-[15px] font-bold font-mono ${pnlColor2(paper_position.pnl_usd ?? 0)}`}>
-                    {(paper_position.pnl_usd ?? 0) >= 0 ? "+" : ""}${(paper_position.pnl_usd ?? 0).toFixed(2)}
-                  </span>
-                </div>
+            {/* Open server positions */}
+            {serverAgent.openPositions.length > 0 ? (
+              <div className="space-y-1.5">
+                {serverAgent.openPositions.slice(0, 3).map((pos, i) => {
+                  const pnl = pos.unrealized_pnl ?? 0;
+                  return (
+                    <div key={i} className="rounded-xl px-3 py-2 flex items-center gap-2"
+                      style={{ background: pos.direction === "long" ? "rgba(34,197,94,0.05)" : "rgba(239,68,68,0.05)", border: `1px solid ${pos.direction === "long" ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"}` }}>
+                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse ${pos.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
+                      <span className="text-[8px] text-neutral-500 flex-1 truncate">{pos.strategy_name}</span>
+                      <span className="text-[8px] font-mono text-neutral-400">${pos.entry.toFixed(0)}</span>
+                      <span className={`text-[9px] font-bold font-mono ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
+                {serverAgent.openPositions.length > 3 && (
+                  <div className="text-[8px] text-neutral-700 text-center">+{serverAgent.openPositions.length - 3} more on agent page</div>
+                )}
               </div>
-            ) : signal ? (
-              <button onClick={() => openPaperTrade(signal)}
-                className="w-full py-2.5 rounded-xl text-[10px] font-bold transition-all hover:scale-[1.02] active:scale-95"
-                style={{ background: isLong ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", border: `1px solid ${isLong ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`, color: isLong ? "#22c55e" : "#ef4444" }}>
-                Paper {isLong ? "▲ Long" : "▼ Short"} · $500
-              </button>
             ) : (
               <div className="rounded-xl px-3 py-2.5 flex items-center gap-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                <Target size={10} className="text-neutral-700" />
-                <span className="text-[9px] text-neutral-700">Waiting for grade B+ signal</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-neutral-700 animate-pulse" />
+                <span className="text-[9px] text-neutral-700">
+                  {serverAgent.running ? "No open positions — scanning every 20s" : "Agent offline"}
+                </span>
               </div>
             )}
-            <div className="text-[8px] text-neutral-800 text-center mt-2">$500 per trade · auto TP/SL</div>
           </div>
         </div>
       </div>
@@ -1760,8 +1830,8 @@ export default function OverviewPage() {
   const hftResult       = useHFTScalper(candles1m, btcOrderBook, []); // aggTrades not subscribed on overview
   const obiResult       = useOBIScalper(candles1m, btcOrderBook);
 
-  // Server agent — 24/7 backend positions, trades, stats
-  const serverAgent = useServerAgent();
+  // Server agent — shared 24/7 backend positions, trades, stats (single poll for all routes)
+  const serverAgent = useSharedServerAgent();
 
   const gridResult      = useGridStrategy(
     candles1m,
@@ -1793,7 +1863,7 @@ export default function OverviewPage() {
   const authFetch = useCallback(async (url: string) => {
     try {
       const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}${url}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem("tradeos_token")}` },
       });
       return r.ok ? r.json() : null;
     } catch { return null; }
@@ -1998,11 +2068,14 @@ export default function OverviewPage() {
           agent={masterAgent}
           strategyResult={strategyResult}
           orbResult={orbResult}
+          hftResult={hftResult}
+          obiResult={obiResult}
           streamConnected={streamConnected}
+          serverAgent={serverAgent}
         />
 
         {/* ── 2. Signal Command Center ── */}
-        <SignalCommandCenter agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} />
+        <SignalCommandCenter agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} serverAgent={serverAgent} />
 
         {/* ── 3. Market Pulse Strip ── */}
         <MarketPulseStrip ticker={btcTicker} orderBook={btcOrderBook} chartCandles={chartCandles} />
@@ -2080,9 +2153,14 @@ export default function OverviewPage() {
           <div className="col-span-12 lg:col-span-8">
             <AllAgentsPanel
               strategyResult={strategyResult}
+              hftResult={hftResult}
+              obiResult={obiResult}
+              orbResult={orbResult}
               chartCandles={chartCandles}
               activity={activity}
               btcTicker={btcTicker}
+              serverAgent={serverAgent}
+              masterAgent={masterAgent}
             />
           </div>
 

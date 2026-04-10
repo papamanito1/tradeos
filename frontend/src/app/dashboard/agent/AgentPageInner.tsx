@@ -8,7 +8,9 @@ import {
   CheckCircle2, XCircle, TrendingUp, TrendingDown,
   AlertTriangle, Activity, ChevronRight, Trash2, Copy,
   FileText, RotateCcw, X, DollarSign, Save, Loader2,
+  Brain, MessageSquare, Send, ArrowUpRight, ArrowDownRight, Square,
 } from "lucide-react";
+import { useMasterAgent } from "@/hooks/useMasterAgent";
 import { SolanaProvider } from "@/providers/SolanaProvider";
 import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
 import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
@@ -18,6 +20,7 @@ import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
 import { useGridStrategy, GridResult } from "@/hooks/useGridStrategy";
 import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
 import { useServerAgent, type ServerAgentConfig } from "@/hooks/useServerAgent";
+import { useSharedServerAgent } from "@/context/ServerAgentContext";
 import { formatUSD } from "@/lib/utils";
 
 
@@ -351,6 +354,77 @@ function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
   };
 }
 
+// ─── Mini Master Agent Chat ───────────────────────────────────────────────────
+function MiniMasterAgentChat({ masterAgent }: { masterAgent: ReturnType<typeof useMasterAgent> }) {
+  const [input, setInput] = useState("");
+  const { chat: messages, sendMessage } = masterAgent;
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const GRADE_COL: Record<string, string> = {
+    "S+": "#fde68a", "S": "#fbbf24", "A+": "#34d399", "A": "#22c55e",
+    "B+": "#60a5fa", "B": "#3b82f6", "C": "#a78bfa", "X": "#374151",
+  };
+  const gradCol = GRADE_COL[masterAgent.grade] ?? "#60aaff";
+
+  const submit = () => {
+    const q = input.trim();
+    if (!q) return;
+    sendMessage(q);
+    setInput("");
+  };
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  return (
+    <div className="card overflow-hidden flex flex-col" style={{ minHeight: 280 }}>
+      <div className="flex items-center gap-2 px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <Brain size={12} style={{ color: gradCol }} />
+        <span className="text-[12px] font-bold text-white">Master Agent · Chat</span>
+        <span className="text-[8px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${gradCol}18`, color: gradCol, border: `1px solid ${gradCol}30` }}>
+          {masterAgent.grade} · {masterAgent.conviction}/100
+        </span>
+        <span className={`ml-auto text-[9px] font-bold ${masterAgent.direction === "LONG" ? "text-green-400" : masterAgent.direction === "SHORT" ? "text-red-400" : "text-neutral-600"}`}>
+          {masterAgent.direction === "LONG" ? "▲ LONG" : masterAgent.direction === "SHORT" ? "▼ SHORT" : "FLAT"}
+        </span>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 space-y-2" style={{ maxHeight: 220 }}>
+        {messages.slice(-10).map((m: { role: string; content: string }, i: number) => (
+          <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div className={`max-w-[85%] rounded-xl px-3 py-2 text-[10px] leading-relaxed ${m.role === "user" ? "bg-blue-500/10 border border-blue-500/20 text-blue-200" : "text-neutral-300"}`}
+              style={m.role !== "user" ? { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" } : {}}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {messages.length === 0 && (
+          <div className="text-center py-6 text-[10px] text-neutral-700">
+            Ask the Master Agent anything — signals, regime, strategies…
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+      <div className="flex items-center gap-2 px-3 py-2.5 flex-shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+        <input
+          className="flex-1 bg-transparent text-[10px] text-white placeholder-neutral-700 outline-none"
+          placeholder="Ask signal, regime, strategy performance…"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && submit()}
+        />
+        <button
+          onClick={submit}
+          disabled={!input.trim()}
+          className="w-6 h-6 rounded-lg flex items-center justify-center disabled:opacity-30 transition-opacity"
+          style={{ background: "rgba(10,132,255,0.2)", border: "1px solid rgba(10,132,255,0.3)" }}
+        >
+          <Send size={10} style={{ color: "#60aaff" }} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
 // ─── Config panel — draft state + Make Changes ────────────────────────────────
 function ConfigPanel({
@@ -558,7 +632,7 @@ function AgentContent() {
   const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
 
   // ── 24/7 backend agent — source of truth for positions/P&L/trades/log ──
-  const server = useServerAgent();
+  const server = useSharedServerAgent();
 
   // ── 15m candles (Momentum) ────────────────────────────────────────────
   const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
@@ -635,6 +709,21 @@ function AgentContent() {
     server.gridState,
   );
 
+  // ── Master agent (for mini chat + signal data) ────────────────────────
+  const lastClose = candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0;
+  const agentTicker: import("@/hooks/useBinanceStream").BinanceTicker | null = lastClose > 0 ? {
+    symbol: "BTC/USDT", last: lastClose, bid: lastClose, ask: lastClose,
+    open_24h: lastClose, high_24h: lastClose, low_24h: lastClose,
+    volume: 0, quote_volume: 0, change_pct: 0, updated_ms: Date.now(),
+  } : null;
+  const masterAgent = useMasterAgent(
+    momentumResult, orbResult, hftResult, obiResult, gridResult,
+    candles15m, candles1m,
+    agentTicker,
+    orderBook,
+    server.status,
+  );
+
   // ── Strategy slots for the multi-agent hook ──────────────────────────
   const strategies = useMemo(() => [
     { result: momentumResult,           name: "Momentum 15m", key: "momentum" },
@@ -684,7 +773,7 @@ function AgentContent() {
           <h1 className="text-xl font-semibold text-white flex items-center gap-2.5">
             <Bot size={22} className="text-blue-400" />
             Living Agent
-            <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-1">4 STRATEGIES LIVE</span>
+            <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-1">5 STRATEGIES LIVE</span>
             {server.running ? (
               <span className="flex items-center gap-1.5 text-[10px] font-normal px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -703,6 +792,16 @@ function AgentContent() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Kill Switch */}
+          {server.running && (
+            <button
+              onClick={() => server.updateConfig({ enabled: false })}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all hover:scale-105 active:scale-95"
+              style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: "#ef4444" }}
+            >
+              <Square size={10} />STOP ALL
+            </button>
+          )}
           <WalletInfo />
           <div className="phantom-btn-wrapper">
             <WalletMultiButton />
@@ -1373,6 +1472,60 @@ function AgentContent() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* ── Signal Timeline + Mini Chat ── */}
+      <div className="grid grid-cols-2 gap-3">
+
+        {/* Signal Timeline */}
+        <div className="card overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center gap-2">
+              <Activity size={12} className="text-blue-400" />
+              <span className="text-[12px] font-bold text-white">Signal Timeline</span>
+              <span className="text-[8px] text-neutral-600">Today</span>
+            </div>
+            <span className="text-[8px] text-neutral-700">{server.trades.length} trades</span>
+          </div>
+          <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
+            {server.trades.length === 0 ? (
+              <div className="text-center py-8 text-[10px] text-neutral-700">No signals yet — scanning every 20s</div>
+            ) : (
+              server.trades.slice(0, 20).map((t, i) => {
+                const pnl = t.pnl_usd ?? 0;
+                const isWin = pnl > 0;
+                const time = new Date(t.closed_at ?? t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                return (
+                  <div key={i} className="flex items-center gap-2.5 py-1.5 border-b border-neutral-800/40 last:border-0">
+                    <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
+                      {t.direction === "long"
+                        ? <ArrowUpRight size={10} className="text-green-400" />
+                        : <ArrowDownRight size={10} className="text-red-400" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()}</span>
+                        <span className="text-[8px] text-neutral-700 truncate">{t.strategy_name}</span>
+                      </div>
+                      <div className="text-[8px] text-neutral-700 font-mono">{time} · ${t.entry.toFixed(0)}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className={`text-[9px] font-bold font-mono ${isWin ? "text-green-400" : "text-red-400"}`}>
+                        {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                      </div>
+                      <div className={`text-[8px] font-bold ${t.exit_reason === "tp" ? "text-green-400/70" : t.exit_reason === "sl" ? "text-red-400/70" : "text-neutral-600"}`}>
+                        {(t.exit_reason ?? "—").toUpperCase()}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Mini Master Agent Chat */}
+        <MiniMasterAgentChat masterAgent={masterAgent} />
       </div>
 
       {/* Info footer */}

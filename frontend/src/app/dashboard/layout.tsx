@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 import { riskApi } from "@/lib/api";
 import { WSMessage } from "@/types";
 import { Logo } from "@/components/ui/Logo";
+import { ServerAgentProvider } from "@/context/ServerAgentContext";
 
 const PAGE_TITLES: Record<string, string> = {
   "/dashboard":            "Overview",
@@ -59,20 +60,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const title = PAGE_TITLES[pathname] || "TradeOS";
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "#08090f" }}>
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <TopBar
-          title={title}
-          wsConnected={connected}
-          mode={mode}
-          killSwitchActive={killSwitchActive}
-          onKillSwitchChange={setKillSwitchActive}
-        />
-        <main className="flex-1 overflow-y-auto" style={{ padding: "24px 28px" }}>
-          {children}
-        </main>
+    <ServerAgentProvider>
+      <div className="flex h-screen overflow-hidden" style={{ background: "#08090f" }}>
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <TopBar
+            title={title}
+            wsConnected={connected}
+            mode={mode}
+            killSwitchActive={killSwitchActive}
+            onKillSwitchChange={setKillSwitchActive}
+          />
+          <main className="flex-1 overflow-y-auto" style={{ padding: "24px 28px" }}>
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </ServerAgentProvider>
   );
 }

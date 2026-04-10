@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Logo } from "@/components/ui/Logo";
+import { useContext } from "react";
+import { ServerAgentContext } from "@/context/ServerAgentContext";
 
 const NAV_SECTIONS = [
   {
@@ -31,6 +33,7 @@ const NAV_SECTIONS = [
 export function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const serverAgent = useContext(ServerAgentContext);
 
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(href);
@@ -109,9 +112,15 @@ export function Sidebar() {
                   >
                     <Icon size={14} className="flex-shrink-0" style={{ color: active ? "#60aaff" : "inherit" }} />
                     {label}
-                    {active && (
-                      <div className="ml-auto w-1.5 h-1.5 rounded-full" style={{ background: "#0a84ff" }} />
-                    )}
+                    <div className="ml-auto flex items-center gap-1">
+                      {/* Agent running indicator */}
+                      {href === "/dashboard/agent" && serverAgent?.running && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="Agent running 24/7" />
+                      )}
+                      {active && (
+                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#0a84ff" }} />
+                      )}
+                    </div>
                   </Link>
                 );
               })}
