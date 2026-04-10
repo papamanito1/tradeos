@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     "enabled":        True,   # auto-start on server boot
     "size_usdc":      100,
     "min_confidence": 0.50,
-    "min_conditions": 3,
+    "min_conditions": 2,
     "mode":           "paper",
     "auto_execute":   True,
 }
@@ -156,38 +156,34 @@ def _run_momentum(candles15m: list[dict]) -> dict:
     body_ratio = body / bar_range if bar_range > 0 else 0
     ema50_slope = (ema50[i] - ema50[i - 5]) / ema50[i - 5]
 
-    rsi_window = rsi_a[max(0, i - 3):i + 1]
-    if any(_nan(v) for v in rsi_window):
-        return null
-
     long_conds = [
-        ema50_slope > 0.0002,
+        ema50_slope > 0.0001,
         cur["close"] > ema50[i],
-        rsi_a[i] >= 50 and (not rsi_window[:-1] or min(rsi_window[:-1]) < 50),
+        rsi_a[i] >= 50,
         cur["close"] > cur["open"],
-        abs(cur["low"] - ema21[i]) <= 2.0 * atr_a[i] or abs(cur["low"] - vwap_a[i]) <= 2.0 * atr_a[i],
-        vol_ratio >= 0.8,
-        0.0005 <= atr_pct <= 0.030,
+        abs(cur["low"] - ema21[i]) <= 2.5 * atr_a[i] or abs(cur["low"] - vwap_a[i]) <= 2.5 * atr_a[i],
+        vol_ratio >= 0.7,
+        0.0003 <= atr_pct <= 0.040,
     ]
     short_conds = [
-        ema50_slope < -0.0002,
+        ema50_slope < -0.0001,
         cur["close"] < ema50[i],
-        rsi_a[i] <= 50 and (not rsi_window[:-1] or max(rsi_window[:-1]) > 50),
+        rsi_a[i] <= 50,
         cur["close"] < cur["open"],
-        abs(cur["high"] - ema21[i]) <= 2.0 * atr_a[i] or abs(cur["high"] - vwap_a[i]) <= 2.0 * atr_a[i],
-        vol_ratio >= 0.8,
-        0.0005 <= atr_pct <= 0.030,
+        abs(cur["high"] - ema21[i]) <= 2.5 * atr_a[i] or abs(cur["high"] - vwap_a[i]) <= 2.5 * atr_a[i],
+        vol_ratio >= 0.7,
+        0.0003 <= atr_pct <= 0.040,
     ]
 
     long_met  = sum(1 for c in long_conds if c)
     short_met = sum(1 for c in short_conds if c)
     is_long_bias  = ema50_slope > 0
     is_short_bias = ema50_slope < 0
-    bias = "long" if long_met >= 4 else "short" if short_met >= 4 else "neutral"
+    bias = "long" if long_met >= 3 else "short" if short_met >= 3 else "neutral"
     met_count = long_met if is_long_bias else short_met
 
-    full_long  = long_met  >= 5 and is_long_bias
-    full_short = short_met >= 5 and is_short_bias
+    full_long  = long_met  >= 4 and is_long_bias
+    full_short = short_met >= 4 and is_short_bias
     signal = None
 
     if full_long or full_short:
@@ -247,9 +243,9 @@ def _run_obi(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
         total = bid_vol + ask_vol
         obi   = (bid_vol - ask_vol) / total if total > 0 else 0.0
 
-    long_obi  = obi  >  0.20;  short_obi = obi  < -0.20
+    long_obi  = obi  >  0.12;  short_obi = obi  < -0.12
     long_ema  = cur_e9 > cur_e21; short_ema = cur_e9 < cur_e21
-    long_rsi  = cur_rsi > 50;    short_rsi = cur_rsi < 50
+    long_rsi  = cur_rsi > 48;    short_rsi = cur_rsi < 52
 
     long_met  = sum([long_obi,  long_ema,  long_rsi])
     short_met = sum([short_obi, short_ema, short_rsi])
@@ -329,15 +325,15 @@ def _run_hft(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
         long_bias,
         cur1m["close"] > vwap1m,
         near_vwap,
-        obi > 0.08,
-        abs(obi) > 0.05,
+        obi > 0.05,
+        abs(obi) > 0.03,
     ]
     short_conds = [
         short_bias,
         cur1m["close"] < vwap1m,
         near_vwap,
-        obi < -0.08,
-        abs(obi) > 0.05,
+        obi < -0.05,
+        abs(obi) > 0.03,
     ]
 
     long_met  = sum(1 for c in long_conds if c)
@@ -346,7 +342,7 @@ def _run_hft(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
     met_count = long_met if long_bias else short_met
 
     signal = None
-    if long_met >= 4 or short_met >= 4:
+    if long_met >= 3 or short_met >= 3:
         d    = "long" if long_met >= 4 else "short"
         e    = cur1m["close"]
         sl_d = max(1.5 * atr1m, abs(e - vwap1m))
@@ -641,9 +637,21 @@ class PersistentAgent:
         price_data = LIVE_PRICES.get("BTC/USDT", {})
         live_price = price_data.get("last", 0.0)
 
+        # Diagnostic log every 10 scans
+        if self.scan_count % 10 == 1:
+            ob_bids = len(orderbook.get("bids", [])) if orderbook else 0
+            self._log(
+                f"DATA: 1m={len(candles1m)} bars · 15m={len(candles15m)} bars · "
+                f"OB={ob_bids} levels · price=${live_price:,.0f}"
+            )
+
+        # Guard: no price → skip scan but still update positions if we have data
+        if live_price <= 0:
+            self._log("⚠ No live price yet — waiting for market stream")
+            return
+
         # Update open position P&L
-        if live_price > 0:
-            self._update_positions(live_price)
+        self._update_positions(live_price)
 
         if not cfg.get("enabled", True):
             return
@@ -666,16 +674,18 @@ class PersistentAgent:
 
             if sig:
                 conf = sig.get("confidence", 0)
-                cond_ok = met >= cfg.get("min_conditions", 3)
+                cond_ok = met >= cfg.get("min_conditions", 2)
                 conf_ok = conf >= cfg.get("min_confidence", 0.50)
+                block   = "POS OPEN" if open_pos else ("conf_fail" if not conf_ok else ("cond_fail" if not cond_ok else ""))
 
-                self._log(f"[{name}] {met}/{total} conds · {sig['direction'].upper()} · conf {conf*100:.0f}% · {'POS OPEN' if open_pos else bias}")
+                self._log(f"[{name}] SIGNAL {sig['direction'].upper()} · {met}/{total} conds · conf {conf*100:.0f}% · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not open_pos and cfg.get("auto_execute", True):
                     self._open_position(key, name, sig, cfg, live_price)
                     any_signal = True
             else:
-                self._log(f"[{name}] {met}/{total} conds · no signal · {bias} · {'POS OPEN' if open_pos else 'flat'}")
+                if self.scan_count % 5 == 0:
+                    self._log(f"[{name}] {met}/{total} conds · no signal · {bias}")
 
         self._save_state()           # fast file cache
         await self._save_state_db()  # durable DB persist
@@ -708,7 +718,11 @@ class PersistentAgent:
         self.positions[key] = pos
         self._log(f"★ [{name}] OPENED {sig['direction'].upper()} @ ${entry:.0f} · SL ${sig['sl']:.0f} · TP ${sig['tp']:.0f} · conf {sig['confidence']*100:.0f}%")
 
+    # Max hold time in minutes per strategy before auto-close at market
+    MAX_HOLD_MINUTES = {"momentum": 240, "hft": 45, "orb": 180, "obi": 15}
+
     def _update_positions(self, price: float) -> None:
+        now_utc = datetime.now(timezone.utc)
         for key in list(self.positions.keys()):
             pos = self.positions.get(key)
             if not pos:
@@ -721,9 +735,19 @@ class PersistentAgent:
             hit_tp = (d == "long"  and tp and price >= tp) or (d == "short" and tp and price <= tp)
             hit_sl = (d == "long"  and sl and price <= sl) or (d == "short" and sl and price >= sl)
 
-            if hit_tp or hit_sl:
-                reason     = "tp" if hit_tp else "sl"
-                exit_price = (tp if hit_tp else sl) or price
+            # Auto-close if held past max hold time
+            timed_out = False
+            try:
+                opened_at = datetime.fromisoformat(pos["timestamp"].replace("Z", "+00:00"))
+                held_min  = (now_utc - opened_at).total_seconds() / 60
+                max_hold  = self.MAX_HOLD_MINUTES.get(key, 120)
+                timed_out = held_min > max_hold
+            except Exception:
+                pass
+
+            if hit_tp or hit_sl or timed_out:
+                reason     = "tp" if hit_tp else ("sl" if hit_sl else "timeout")
+                exit_price = (tp if hit_tp else (sl if hit_sl else price)) or price
                 self._close_position(key, exit_price, reason)
             else:
                 diff = (price - pos["entry"]) if d == "long" else (pos["entry"] - price)
