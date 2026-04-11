@@ -3,10 +3,16 @@ X Agent API — dashboard control for @Tradeous X posting.
 """
 from __future__ import annotations
 
+import random
+import time
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/x-agent", tags=["x-agent"])
+
+# In-memory queue of tweets to be posted by the local poster script
+_tweet_queue: list[dict] = []
+_posted_ids:  set[str]   = set()
 
 
 def _publisher():
@@ -29,85 +35,6 @@ async def get_status():
         return {"enabled": False, "recent_posts": [], "error": "Agent not running"}
     return pub.status()
 
-
-@router.get("/diagnose")
-async def diagnose():
-    """Check curl_cffi, credentials, and X API reachability."""
-    import os, httpx as _httpx
-    token = os.environ.get("X_AUTH_TOKEN", "")
-    ct0   = os.environ.get("X_CT0", "")
-
-    result = {
-        "X_AUTH_TOKEN_len": len(token),
-        "X_CT0_len": len(ct0),
-        "curl_cffi_available": False,
-        "x_api_status": None,
-        "x_api_error": None,
-    }
-
-    try:
-        from curl_cffi.requests import AsyncSession
-        result["curl_cffi_available"] = True
-    except Exception as e:
-        result["curl_cffi_import_error"] = str(e)
-
-    # Try actual X API call
-    BEARER = (
-        "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
-        "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-    )
-    QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
-    url = f"https://x.com/i/api/graphql/{QUERY_ID}/CreateTweet"
-    headers = {
-        "authorization": f"Bearer {BEARER}",
-        "x-csrf-token": ct0,
-        "cookie": f"auth_token={token}; ct0={ct0}",
-        "content-type": "application/json",
-        "x-twitter-active-user": "yes",
-        "x-twitter-auth-type": "OAuth2Session",
-        "x-twitter-client-language": "en",
-        "referer": "https://x.com/compose/post",
-        "origin": "https://x.com",
-    }
-    payload = {
-        "variables": {"tweet_text": "__diagnose__", "dark_request": False,
-                      "media": {"media_entities": [], "possibly_sensitive": False},
-                      "semantic_annotation_ids": []},
-        "features": {"tweetypie_unmention_optimization_enabled": True,
-                     "responsive_web_edit_tweet_api_enabled": True,
-                     "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-                     "view_counts_everywhere_api_enabled": True,
-                     "longform_notetweets_consumption_enabled": True,
-                     "responsive_web_twitter_article_tweet_consumption_enabled": False,
-                     "tweet_awards_web_tipping_enabled": False,
-                     "freedom_of_speech_not_reach_fetch_enabled": True,
-                     "standardized_nudges_misinfo": True,
-                     "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
-                     "rweb_video_timestamps_enabled": True,
-                     "longform_notetweets_rich_text_read_enabled": True,
-                     "longform_notetweets_inline_media_enabled": True,
-                     "responsive_web_graphql_exclude_directive_enabled": True,
-                     "verified_phone_label_enabled": False,
-                     "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-                     "responsive_web_graphql_timeline_navigation_enabled": True,
-                     "responsive_web_enhance_cards_enabled": False},
-        "queryId": QUERY_ID,
-    }
-
-    try:
-        if result["curl_cffi_available"]:
-            from curl_cffi.requests import AsyncSession
-            async with AsyncSession(impersonate="edge101") as s:
-                r = await s.post(url, json=payload, headers=headers, timeout=15)
-        else:
-            async with _httpx.AsyncClient(timeout=15) as s:
-                r = await s.post(url, json=payload, headers=headers)
-        result["x_api_status"] = r.status_code
-        result["x_api_body_preview"] = r.text[:150]
-    except Exception as e:
-        result["x_api_error"] = str(e)
-
-    return result
 
 
 
@@ -252,3 +179,89 @@ async def fire_all():
     results["fear_greed"] = "posted" if ok_fg else "failed"
 
     return {"ok": True, "results": results}
+
+
+# ── Local poster queue (bypasses datacenter IP block) ─────────────────────────
+# The local_poster.py script on the user's PC polls /next-post and posts via
+# Playwright with their real residential IP + Edge session.
+
+@router.get("/next-post")
+async def next_post():
+    """Return the next queued tweet for the local poster to send."""
+    import os
+    from app.agents import x_publisher as xp
+    from app.agents.x_publisher import (
+        HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS,
+        REGIME_QUIPS, NEWS_FEEDS,
+    )
+    from datetime import datetime, timezone
+
+    pub = _publisher()
+    now = time.time()
+
+    # Decide what to post based on cooldowns (default to always-ready if pub not available)
+    def _ok(key, cooldown):
+        return pub._cooldown_ok(key, cooldown) if pub else True
+
+    post_type = None
+    text = ""
+
+    if _ok("hourly", xp.HOURLY_COOLDOWN):
+        try:
+            from app.agents.live_market_stream import LIVE_PRICES
+            price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+        except Exception:
+            price = 0.0
+        utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        quip = random.choice(xp.REGIME_QUIPS.get("unknown", ["Watching the market."]))
+        price_str = f"${price:,.0f}" if price > 0 else "loading..."
+        text = (
+            f"\U0001f916 BTC HOURLY \u2014 {utc}\n\n"
+            f"Price: {price_str}\n"
+            f"No open positions. Watching.\n\n"
+            f"{quip}\n\n"
+            f"#Bitcoin #BTC #Crypto"
+        )
+        post_type = "hourly"
+
+    elif _ok("hot_take", xp.HOT_TAKE_COOLDOWN):
+        text = random.choice(HOT_TAKES)
+        post_type = "hot_take"
+
+    elif _ok("philosophy", xp.PHILOSOPHY_COOLDOWN):
+        text = random.choice(PHILOSOPHY_POSTS)
+        post_type = "philosophy"
+
+    elif _ok("engagement", xp.ENGAGEMENT_COOLDOWN):
+        text = random.choice(ENGAGEMENT_QUESTIONS)
+        post_type = "engagement"
+
+    if not post_type or not text:
+        return {"has_post": False}
+
+    qid = f"{post_type}_{int(now)}"
+    return {"has_post": True, "id": qid, "type": post_type, "text": text[:280]}
+
+
+class ConfirmRequest(BaseModel):
+    id: str
+    post_type: str
+    tweet_id: str = ""
+
+
+@router.post("/confirm-post")
+async def confirm_post(req: ConfirmRequest):
+    """Called by local poster after successfully posting — updates cooldowns."""
+    pub = _publisher()
+    if pub:
+        key = req.post_type.replace("-", "_")
+        if key in pub._last:
+            pub._last[key] = time.time()
+        pub._recent_posts.append({
+            "id": req.tweet_id or req.id,
+            "type": req.post_type,
+            "text": f"Posted via local poster ({req.post_type})",
+            "ts": time.time(),
+            "url": f"https://x.com/tradeous/status/{req.tweet_id}" if req.tweet_id else "",
+        })
+    return {"ok": True}
