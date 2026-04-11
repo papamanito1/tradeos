@@ -29,7 +29,7 @@ EDGE_USER_DATA = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
 EDGE_EXE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
 # How often to check for new content (seconds)
-CHECK_INTERVAL = 300   # 5 minutes
+CHECK_INTERVAL = 60   # 1 minute (catches manual queue fast, auto-posts on schedule)
 
 
 async def post_tweet(text: str) -> str:

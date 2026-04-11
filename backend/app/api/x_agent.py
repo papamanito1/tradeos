@@ -40,6 +40,15 @@ async def get_status():
 
 # ── Manual triggers ───────────────────────────────────────────────────────────
 
+def _queue_tweet(post_type: str, text: str) -> dict:
+    """Add tweet to local poster queue. Returns immediately — local_poster.py sends it."""
+    import uuid
+    qid = str(uuid.uuid4())[:8] + f"_{post_type}"
+    _tweet_queue.append({"id": qid, "type": post_type, "text": text[:280], "ts": time.time()})
+    return {"ok": True, "queued": True, "id": qid,
+            "message": "Queued — local_poster.py will send within 5 minutes"}
+
+
 def _check(pub) -> dict | None:
     if not pub:
         return {"ok": False, "error": "Agent not running"}
@@ -48,13 +57,47 @@ def _check(pub) -> dict | None:
     return None
 
 
+def _gen_hourly_text(pub) -> str:
+    import random
+    from datetime import datetime, timezone
+    from app.agents import x_publisher as xp
+    try:
+        from app.agents.live_market_stream import LIVE_PRICES
+        price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+    except Exception:
+        price = 0.0
+    utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    quip = random.choice(xp.REGIME_QUIPS.get("unknown", ["Watching the market."]))
+    price_str = f"${price:,.0f}" if price > 0 else "loading..."
+    return (
+        f"\U0001f916 BTC HOURLY \u2014 {utc}\n\n"
+        f"Price: {price_str}\n"
+        f"No open positions. Watching.\n\n"
+        f"{quip}\n\n"
+        f"#Bitcoin #BTC #Crypto"
+    )
+
+
 @router.post("/trigger/news")
 async def trigger_news():
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["news"] = 0
-    ok = await pub.post_news()
-    return {"ok": ok, "error": None if ok else "Post failed — check Railway logs"}
+    story = await pub._fetch_top_news()
+    if not story:
+        return {"ok": False, "error": "Could not fetch news"}
+    import random
+    hooks = ["My take:", "Translation for traders:", "Signal implication:", "Algo opinion:"]
+    comments = ["Watching for BTC reaction.", "Monitoring closely.", "Eyes on $BTC."]
+    text = (
+        f"\U0001f4f0 CRYPTO NEWS\n\n"
+        f"\u201c{story['title'][:120]}\u201d\n\n"
+        f"{random.choice(hooks)} {random.choice(comments)}\n\n"
+        f"#Bitcoin #BTC #CryptoNews"
+    )
+    if story.get("link"):
+        text += f"\n\n{story['link']}"
+    return _queue_tweet("news", text)
 
 
 @router.post("/trigger/fear-greed")
@@ -62,35 +105,46 @@ async def trigger_fear_greed():
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["fear_greed"] = 0
-    ok = await pub.post_fear_greed()
-    return {"ok": ok, "error": None if ok else "Post failed — check Railway logs"}
+    data = await pub._fetch_fear_greed()
+    if not data:
+        return {"ok": False, "error": "Could not fetch Fear & Greed"}
+    import random
+    from app.agents.x_publisher import FEAR_GREED_COMMENTARY
+    score = int(data.get("value", 50))
+    label = data.get("value_classification", "Neutral")
+    templates = FEAR_GREED_COMMENTARY.get(label, FEAR_GREED_COMMENTARY["Neutral"])
+    text = random.choice(templates).format(score=score, label=label)
+    return _queue_tweet("fear_greed", text)
 
 
 @router.post("/trigger/hot-take")
 async def trigger_hot_take():
+    import random
+    from app.agents.x_publisher import HOT_TAKES
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["hot_take"] = 0
-    pub.post_hot_take()
-    return {"ok": True}
+    return _queue_tweet("hot_take", random.choice(HOT_TAKES))
 
 
 @router.post("/trigger/philosophy")
 async def trigger_philosophy():
+    import random
+    from app.agents.x_publisher import PHILOSOPHY_POSTS
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["philosophy"] = 0
-    pub.post_philosophy()
-    return {"ok": True}
+    return _queue_tweet("philosophy", random.choice(PHILOSOPHY_POSTS))
 
 
 @router.post("/trigger/engagement")
 async def trigger_engagement():
+    import random
+    from app.agents.x_publisher import ENGAGEMENT_QUESTIONS
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["engagement"] = 0
-    pub.post_engagement()
-    return {"ok": True}
+    return _queue_tweet("engagement", random.choice(ENGAGEMENT_QUESTIONS))
 
 
 @router.post("/trigger/hourly")
@@ -98,14 +152,7 @@ async def trigger_hourly():
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["hourly"] = 0
-    try:
-        from app.agents.live_market_stream import LIVE_PRICES
-        price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-    except Exception:
-        price = 0.0
-    pub.post_hourly(btc_price=price, open_positions=[], daily_pnl=0.0,
-                    regime="unknown", regime_stability="unknown")
-    return {"ok": True}
+    return _queue_tweet("hourly", _gen_hourly_text(pub))
 
 
 # ── Manual compose ────────────────────────────────────────────────────────────
@@ -120,8 +167,7 @@ async def manual_post(req: ManualPostRequest):
     if err := _check(pub): return err
     if not req.text or len(req.text.strip()) < 3:
         return {"ok": False, "error": "Text too short"}
-    ok = await pub.post_manual(req.text.strip())
-    return {"ok": ok, "error": None if ok else "Post failed — X credentials may be expired"}
+    return _queue_tweet("manual", req.text.strip())
 
 
 # ── Reset cooldowns ───────────────────────────────────────────────────────────
@@ -187,19 +233,20 @@ async def fire_all():
 
 @router.get("/next-post")
 async def next_post():
-    """Return the next queued tweet for the local poster to send."""
-    import os
+    """Return the next tweet for the local poster to send.
+    Checks manual queue first, then auto-schedule by cooldown."""
     from app.agents import x_publisher as xp
-    from app.agents.x_publisher import (
-        HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS,
-        REGIME_QUIPS, NEWS_FEEDS,
-    )
-    from datetime import datetime, timezone
+    from app.agents.x_publisher import HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS
 
     pub = _publisher()
     now = time.time()
 
-    # Decide what to post based on cooldowns (default to always-ready if pub not available)
+    # 1. Manual queue (from dashboard "Post Now" buttons) — highest priority
+    if _tweet_queue:
+        item = _tweet_queue.pop(0)
+        return {"has_post": True, **item}
+
+    # 2. Auto-schedule based on cooldowns
     def _ok(key, cooldown):
         return pub._cooldown_ok(key, cooldown) if pub else True
 
@@ -207,21 +254,7 @@ async def next_post():
     text = ""
 
     if _ok("hourly", xp.HOURLY_COOLDOWN):
-        try:
-            from app.agents.live_market_stream import LIVE_PRICES
-            price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-        except Exception:
-            price = 0.0
-        utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
-        quip = random.choice(xp.REGIME_QUIPS.get("unknown", ["Watching the market."]))
-        price_str = f"${price:,.0f}" if price > 0 else "loading..."
-        text = (
-            f"\U0001f916 BTC HOURLY \u2014 {utc}\n\n"
-            f"Price: {price_str}\n"
-            f"No open positions. Watching.\n\n"
-            f"{quip}\n\n"
-            f"#Bitcoin #BTC #Crypto"
-        )
+        text = _gen_hourly_text(pub)
         post_type = "hourly"
 
     elif _ok("hot_take", xp.HOT_TAKE_COOLDOWN):

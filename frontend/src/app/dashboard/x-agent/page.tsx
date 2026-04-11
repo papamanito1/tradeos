@@ -77,7 +77,7 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, color, onTr
       const r = await fetch(`${API}${endpoint}`, { method: "POST" });
       const d = await r.json();
       if (d.ok) {
-        setResult("✅ Posted!");
+        setResult(d.queued ? "✅ Queued — posts in <5min" : "✅ Posted!");
         onTriggered();
       } else {
         const reason = d.error || "X credentials not set in Railway";
@@ -201,7 +201,7 @@ export default function XAgentPage() {
       });
       const d = await r.json();
       if (d.ok) {
-        setPostResult("✅ Tweet posted!");
+        setPostResult(d.queued ? "✅ Queued — local poster will send within 5 min" : "✅ Tweet posted!");
         setManualText("");
         setCharCount(0);
         fetchStatus();
