@@ -36,6 +36,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
+try:
+    from curl_cffi.requests import AsyncSession as CurlSession
+    _CURL_AVAILABLE = True
+except ImportError:
+    _CURL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +55,13 @@ PHILOSOPHY_COOLDOWN = 43200 # 12 h (2 × /day)
 ENGAGEMENT_COOLDOWN = 43200 # 12 h
 
 # ── X internal API ────────────────────────────────────────────────────────────
+_X_QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
 _X_CREATE_TWEET_URL = (
-    "https://x.com/i/api/graphql/oB-5XsHNAbjvARJEc8CZFw/CreateTweet"
+    f"https://x.com/i/api/graphql/{_X_QUERY_ID}/CreateTweet"
 )
 _X_BEARER = (
-    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I6xUEXAiL8%3D"
-    "fPT4g4LfWgPFE3TM9HWjn9aWIeqzDyvXh5ZFNPj55wQBRWLx"
+    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
+    "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 )
 
 # ── News RSS feeds (free, no key) ─────────────────────────────────────────────
@@ -242,15 +248,14 @@ class XPublisher:
             "x-csrf-token": self._ct0,
             "cookie": f"auth_token={self._auth_token}; ct0={self._ct0}",
             "content-type": "application/json",
-            "user-agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
             "x-twitter-active-user": "yes",
             "x-twitter-auth-type": "OAuth2Session",
             "x-twitter-client-language": "en",
             "referer": "https://x.com/compose/post",
             "origin": "https://x.com",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-ch-ua": '"Microsoft Edge";v="124", "Chromium";v="124"',
+            "sec-ch-ua-mobile": "?0",
         }
         payload = {
             "variables": {
@@ -279,14 +284,22 @@ class XPublisher:
                 "responsive_web_graphql_timeline_navigation_enabled": True,
                 "responsive_web_enhance_cards_enabled": False,
             },
-            "queryId": "oB-5XsHNAbjvARJEc8CZFw",
+            "queryId": _X_QUERY_ID,
         }
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
-            if resp.status_code == 200:
+            if _CURL_AVAILABLE:
+                async with CurlSession(impersonate="edge101") as session:
+                    resp = await session.post(_X_CREATE_TWEET_URL, json=payload, headers=headers, timeout=20)
+                status, body = resp.status_code, resp.text
+            else:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    r = await client.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
+                status, body = r.status_code, r.text
+
+            if status == 200:
+                import json as _json
                 tweet_id = (
-                    resp.json().get("data", {})
+                    _json.loads(body).get("data", {})
                         .get("create_tweet", {})
                         .get("tweet_results", {})
                         .get("result", {})
@@ -301,7 +314,7 @@ class XPublisher:
                 })
                 logger.info(f"[XPublisher] [{post_type}] Posted: {text[:60]}…")
                 return True
-            logger.warning(f"[XPublisher] HTTP {resp.status_code}: {resp.text[:200]}")
+            logger.warning(f"[XPublisher] HTTP {status}: {body[:200]}")
             return False
         except Exception as e:
             logger.warning(f"[XPublisher] Send error: {e}")
