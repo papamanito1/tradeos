@@ -132,10 +132,15 @@ class LiveExecutor:
             logger.error(f"[LiveExecutor] fetch_balance failed: {e}")
             return self._cached_balance if self._cached_balance["total"] > 0 else {"total": 0, "free": 0, "used": 0}
 
+    # BingX min order: 0.0001 BTC ≈ ~$7-10 at current prices.
+    # With 30x leverage, minimum margin is ~$0.25. But to be safe, floor at $5.
+    MIN_MARGIN_USD = 5.0
+
     def compute_trade_size(self, total_capital: float) -> float:
-        """2% of total capital — this is the margin (collateral) per trade."""
+        """2% of total capital — this is the margin (collateral) per trade.
+        Floor at MIN_MARGIN_USD to ensure trades meet exchange minimums."""
         size = round(total_capital * self.RISK_PER_TRADE_PCT, 2)
-        return max(1.0, size)  # at least $1
+        return max(self.MIN_MARGIN_USD, size)
 
     async def fetch_exchange_positions(self) -> list[dict]:
         """Return all open BTC perp positions from BingX."""
@@ -179,13 +184,16 @@ class LiveExecutor:
             logger.warning(f"[LiveExecutor] {self.last_error}")
             return None
 
-        # 2% of total capital = margin for this trade
+        # 2% of total capital = margin for this trade (floored at $5 min)
         risk_size = self.compute_trade_size(total_capital)
 
-        # Don't exceed free margin
-        capped_usdc = min(risk_size, free_capital * 0.95)  # keep 5% buffer
-        if capped_usdc < 1.0:
-            self.last_error = f"Insufficient free margin (free=${free_capital:.2f}, need=${risk_size:.2f})"
+        # Don't exceed free margin (keep 5% buffer, minimum $1)
+        max_available = max(1.0, free_capital * 0.95)
+        capped_usdc = min(risk_size, max_available)
+
+        # Ensure we can at least meet BingX minimum (0.0001 BTC)
+        if capped_usdc < self.MIN_MARGIN_USD and free_capital < self.MIN_MARGIN_USD:
+            self.last_error = f"Insufficient capital (free=${free_capital:.2f}, need=${self.MIN_MARGIN_USD:.0f})"
             logger.warning(f"[LiveExecutor] {self.last_error}")
             return None
 
