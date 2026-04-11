@@ -79,7 +79,7 @@ class MasterBrain:
         self.PAPER_CONVICTION_THRESHOLD = 0.40
 
         # ── Limits ───────────────────────────────────────────────────────
-        self.MAX_DAILY_TRADES = 30
+        self.MAX_DAILY_TRADES = 50
         self.MAX_CONSECUTIVE_LOSSES = 5
         self.MAX_OPEN_POSITIONS = 8   # across all strategies + shadows
         self.MAX_DAILY_LOSS = -300.0  # hard stop
@@ -503,12 +503,14 @@ class MasterBrain:
 
         if won:
             self.daily_wins += 1
-            self.consecutive_losses = 0
+            if was_live:
+                self.consecutive_losses = 0  # only live wins reset the streak
             cur = self.strategy_trust.get(strategy_key, 1.0)
             self.strategy_trust[strategy_key] = min(2.0, cur + 0.05)
         else:
             self.daily_losses_count += 1
-            self.consecutive_losses += 1
+            if was_live:
+                self.consecutive_losses += 1  # only live losses count toward the guard
             cur = self.strategy_trust.get(strategy_key, 1.0)
             penalty = 0.12 if was_live else 0.08  # live losses penalize harder
             self.strategy_trust[strategy_key] = max(0.3, cur - penalty)

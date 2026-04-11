@@ -1484,6 +1484,9 @@ class PersistentAgent:
                     else:
                         err_msg = getattr(executor, "last_error", None) or "unknown error"
                         self._log(f"✗ [LIVE] [{name}] BingX FAILED — {err_msg}")
+                        # Refund the daily trade counter — the trade never executed
+                        if self.brain.daily_trades > 0:
+                            self.brain.daily_trades -= 1
 
                 asyncio.create_task(_do_live_open())
                 return
@@ -1718,9 +1721,15 @@ class PersistentAgent:
         self.trades     = []
         self.stats      = self._empty_stats()
         self.log        = []
-        self.training_index  = {}   # clear training data — starts fresh
+        self.training_index  = {}
         self.scan_count = 0
-        self._log("Account reset — all positions cleared + training index cleared")
+        # Also reset brain daily counters so the trading lock is fully cleared
+        self.brain.daily_trades       = 0
+        self.brain.consecutive_losses = 0
+        self.brain.daily_pnl          = 0.0
+        self.brain.daily_wins         = 0
+        self.brain.daily_losses_count = 0
+        self._log("Account reset — positions, trades, training index, and brain daily counters cleared")
         self._save_state()
         self._schedule_db_save()
 
@@ -1782,6 +1791,7 @@ class PersistentAgent:
 
         return {
             "running":              self._running,
+            "mode":                 self.config.get("mode", "paper"),
             "config":               self.config,
             "scan_count":           self.scan_count,
             "last_scan":            self.last_scan,

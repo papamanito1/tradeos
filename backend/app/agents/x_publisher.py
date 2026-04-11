@@ -454,12 +454,7 @@ class XPublisher:
 
         text = text[:280]
 
-        # Method 1: X v1.1 client endpoint (more reliable from server IPs)
-        ok = await self._post_v1(text, post_type)
-        if ok:
-            return True
-
-        # Method 2: GraphQL CreateTweet (original method)
+        # GraphQL CreateTweet — v1.1 consistently returns 404 so skip it
         ok = await self._post_graphql(text, post_type)
         if ok:
             return True
