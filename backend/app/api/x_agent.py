@@ -30,6 +30,22 @@ async def get_status():
     return pub.status()
 
 
+@router.get("/debug-env")
+async def debug_env():
+    """Temporary: check what env vars the backend actually sees."""
+    import os
+    token = os.environ.get("X_AUTH_TOKEN", "")
+    ct0   = os.environ.get("X_CT0", "")
+    return {
+        "X_AUTH_TOKEN_set": bool(token),
+        "X_AUTH_TOKEN_len": len(token),
+        "X_AUTH_TOKEN_preview": token[:8] + "..." if token else "(empty)",
+        "X_CT0_set": bool(ct0),
+        "X_CT0_len": len(ct0),
+        "X_CT0_preview": ct0[:8] + "..." if ct0 else "(empty)",
+    }
+
+
 # ── Manual triggers ───────────────────────────────────────────────────────────
 
 def _check(pub) -> dict | None:
