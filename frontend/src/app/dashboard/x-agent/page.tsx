@@ -76,13 +76,18 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, color, onTr
     try {
       const r = await fetch(`${API}${endpoint}`, { method: "POST" });
       const d = await r.json();
-      setResult(d.ok ? "✅ Posted!" : `❌ ${d.error || "Failed"}`);
-      if (d.ok) onTriggered();
+      if (d.ok) {
+        setResult("✅ Posted!");
+        onTriggered();
+      } else {
+        const reason = d.error || "X credentials not set in Railway";
+        setResult(`❌ ${reason}`);
+      }
     } catch {
-      setResult("❌ Network error");
+      setResult("❌ Cannot reach backend");
     }
     setLoading(false);
-    setTimeout(() => setResult(null), 4000);
+    setTimeout(() => setResult(null), 6000);
   };
 
   const isReady = nextPost === "Ready now";
@@ -252,6 +257,21 @@ export default function XAgentPage() {
   return (
     <div className="text-white">
       <div className="max-w-5xl mx-auto space-y-6">
+
+        {/* Offline warning banner */}
+        {status && !status.enabled && (
+          <div className="bg-red-950 border border-red-700 rounded-xl p-4 flex items-start gap-3">
+            <span className="text-red-400 text-xl mt-0.5">⚠️</span>
+            <div>
+              <div className="text-red-300 font-semibold text-sm">X Agent is offline — missing credentials</div>
+              <div className="text-red-400 text-xs mt-1">
+                Set <code className="bg-red-900 px-1 rounded">X_AUTH_TOKEN</code> and{" "}
+                <code className="bg-red-900 px-1 rounded">X_CT0</code> in Railway environment variables,
+                then redeploy to enable posting.
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Header */}
         <div className="flex items-center justify-between">

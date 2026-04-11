@@ -32,31 +32,36 @@ async def get_status():
 
 # ── Manual triggers ───────────────────────────────────────────────────────────
 
+def _check(pub) -> dict | None:
+    if not pub:
+        return {"ok": False, "error": "Agent not running"}
+    if not pub.enabled:
+        return {"ok": False, "error": "X_AUTH_TOKEN / X_CT0 not set in Railway env vars"}
+    return None
+
+
 @router.post("/trigger/news")
 async def trigger_news():
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
-    pub._last["news"] = 0   # reset cooldown
+    if err := _check(pub): return err
+    pub._last["news"] = 0
     ok = await pub.post_news()
-    return {"ok": ok}
+    return {"ok": ok, "error": None if ok else "Post failed — check Railway logs"}
 
 
 @router.post("/trigger/fear-greed")
 async def trigger_fear_greed():
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
     pub._last["fear_greed"] = 0
     ok = await pub.post_fear_greed()
-    return {"ok": ok}
+    return {"ok": ok, "error": None if ok else "Post failed — check Railway logs"}
 
 
 @router.post("/trigger/hot-take")
 async def trigger_hot_take():
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
     pub._last["hot_take"] = 0
     pub.post_hot_take()
     return {"ok": True}
@@ -65,8 +70,7 @@ async def trigger_hot_take():
 @router.post("/trigger/philosophy")
 async def trigger_philosophy():
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
     pub._last["philosophy"] = 0
     pub.post_philosophy()
     return {"ok": True}
@@ -75,8 +79,7 @@ async def trigger_philosophy():
 @router.post("/trigger/engagement")
 async def trigger_engagement():
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
     pub._last["engagement"] = 0
     pub.post_engagement()
     return {"ok": True}
@@ -85,8 +88,7 @@ async def trigger_engagement():
 @router.post("/trigger/hourly")
 async def trigger_hourly():
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
     pub._last["hourly"] = 0
     try:
         from app.agents.live_market_stream import LIVE_PRICES
@@ -107,12 +109,11 @@ class ManualPostRequest(BaseModel):
 @router.post("/post")
 async def manual_post(req: ManualPostRequest):
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
     if not req.text or len(req.text.strip()) < 3:
         return {"ok": False, "error": "Text too short"}
     ok = await pub.post_manual(req.text.strip())
-    return {"ok": ok}
+    return {"ok": ok, "error": None if ok else "Post failed — X credentials may be expired"}
 
 
 # ── Reset cooldowns ───────────────────────────────────────────────────────────
@@ -133,8 +134,7 @@ async def reset_cooldowns():
 async def fire_all():
     """Reset all cooldowns and immediately post every content type."""
     pub = _publisher()
-    if not pub:
-        return {"ok": False, "error": "Agent not running"}
+    if err := _check(pub): return err
 
     results = {}
 
