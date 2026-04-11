@@ -609,6 +609,9 @@ class PersistentAgent:
         # Master Brain — central intelligence for trade decisions
         from app.agents.master_brain import MasterBrain
         self.brain = MasterBrain()
+        # X/Twitter publisher — gracefully disabled when env vars are absent
+        from app.agents.x_publisher import XPublisher
+        self.x_publisher = XPublisher()
         self._load_state()
 
     def _get_live_executor(self):
@@ -921,6 +924,7 @@ class PersistentAgent:
         self.config["auto_execute"] = True
         self._running = True
         self._task = asyncio.create_task(self._loop())
+        asyncio.create_task(self._x_scheduler())
         mode = self.config.get("mode", "paper")
         if mode == "live":
             self._log("Agent STARTED — DUAL MODE: paper shadow training + live BingX (qualified strategies only)")
@@ -939,6 +943,84 @@ class PersistentAgent:
         self._log("Agent STOPPED")
         self._save_state()
         await self._save_state_db()
+
+    # ── X / Twitter scheduled posts ───────────────────────────────────────────
+
+    async def _x_scheduler(self) -> None:
+        """
+        Background task that drives hourly, daily, and weekly X posts.
+        Runs independently of the main trading loop.
+        """
+        if not self.x_publisher.enabled:
+            return
+
+        last_hour_posted = -1
+        last_day_posted  = -1
+        last_week_posted = -1   # ISO week number
+
+        while self._running:
+            try:
+                now = datetime.now(timezone.utc)
+                regime = self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown"
+                _rh = getattr(self.brain, "_regime_history", [])
+                if len(_rh) >= 3 and len(set(_rh[-3:])) == 1:
+                    regime_stability = "stable"
+                elif len(_rh) >= 3:
+                    regime_stability = "shifting"
+                else:
+                    regime_stability = "unknown"
+
+                # ── Hourly (only when live positions are open) ────────────────
+                if now.hour != last_hour_posted:
+                    open_pos = [p for p in self.positions.values() if p]
+                    live_pnl = sum(
+                        p.get("unrealized_pnl", 0) for p in open_pos if p.get("mode") == "live"
+                    ) + self.stats.get("total_pnl", 0)
+                    self.x_publisher.post_hourly(
+                        open_positions=open_pos,
+                        daily_pnl=live_pnl,
+                        regime=regime,
+                        regime_stability=str(regime_stability),
+                    )
+                    last_hour_posted = now.hour
+
+                # ── Daily at midnight UTC ─────────────────────────────────────
+                if now.hour == 0 and now.day != last_day_posted:
+                    live_pnl = sum(
+                        t.get("pnl_usd", 0) for t in self.trades if t.get("is_live")
+                    )
+                    self.x_publisher.post_daily(
+                        stats=self.stats,
+                        strategy_stats=self.brain.strategy_stats,
+                        regime=regime,
+                        live_pnl=live_pnl,
+                    )
+                    last_day_posted = now.day
+
+                # ── Weekly on Sunday at 20:00 UTC ─────────────────────────────
+                iso_week = now.isocalendar()[1]
+                if now.weekday() == 6 and now.hour == 20 and iso_week != last_week_posted:
+                    acc_balance = 0.0
+                    executor = self._get_live_executor()
+                    if executor:
+                        try:
+                            bal = await executor.fetch_balance()
+                            acc_balance = bal.get("total", 0)
+                        except Exception:
+                            pass
+                    self.x_publisher.post_weekly(
+                        stats=self.stats,
+                        strategy_stats=self.brain.strategy_stats,
+                        account_balance=acc_balance,
+                    )
+                    last_week_posted = iso_week
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[XScheduler] Error: {e}")
+
+            await asyncio.sleep(60)   # check every minute
 
     async def _loop(self) -> None:
         while self._running:
@@ -1209,6 +1291,17 @@ class PersistentAgent:
                           f"· size {live_decision['size_multiplier']:.0%} "
                           f"· win rate {readiness['win_rate']:.0%} ({readiness['trades']} trades) "
                           f"· {live_decision['reasoning']}")
+                # Post signal to X if conviction meets threshold
+                self.x_publisher.post_signal(
+                    strategy_name=name,
+                    direction=sig.get("direction", "long"),
+                    entry_price=live_price,
+                    sl_price=sig.get("sl", 0),
+                    tp_price=sig.get("tp", 0),
+                    conviction=live_decision["conviction"],
+                    size_usdc=adjusted_cfg["size_usdc"],
+                    regime=self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown",
+                )
                 self._open_position(key, name, sig, adjusted_cfg, live_price)
                 return
 
@@ -1527,6 +1620,27 @@ class PersistentAgent:
         strat_key = key.split("_")[0] if key.startswith("grid_") else key
         won = pnl > 0
         self.brain.record_trade_result(strat_key, pnl, won, was_live=is_live)
+
+        # Post trade result to X for live closes
+        if is_live:
+            opened_at = pos.get("opened_at") or pos.get("timestamp", "")
+            duration_min: Optional[float] = None
+            if opened_at:
+                try:
+                    from datetime import datetime as _dt
+                    opened_dt = _dt.fromisoformat(opened_at.replace("Z", "+00:00"))
+                    duration_min = (datetime.now(timezone.utc) - opened_dt).total_seconds() / 60
+                except Exception:
+                    pass
+            self.x_publisher.post_result(
+                strategy_name=pos.get("strategy_name", ""),
+                direction=pos.get("direction", "long"),
+                entry_price=entry,
+                exit_price=exit_price,
+                pnl_usd=pnl,
+                reason=reason,
+                duration_min=duration_min,
+            )
 
         self._rebuild_training_index()
         self._save_state()
