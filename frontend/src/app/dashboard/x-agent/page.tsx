@@ -23,19 +23,19 @@ interface Status {
   last_hourly: number;
 }
 
-const TYPE_META: Record<string, { label: string; icon: string; color: string }> = {
-  signal:     { label: "Trade Signal",    icon: "🚨", color: "text-red-400" },
-  result:     { label: "Trade Result",    icon: "📊", color: "text-purple-400" },
-  hourly:     { label: "Hourly Update",  icon: "🤖", color: "text-blue-400" },
-  news:       { label: "Crypto News",    icon: "📰", color: "text-yellow-400" },
-  fear_greed: { label: "Fear & Greed",   icon: "😱", color: "text-orange-400" },
-  hot_take:   { label: "Hot Take",       icon: "🔥", color: "text-red-300" },
-  philosophy: { label: "Philosophy",     icon: "🧠", color: "text-cyan-400" },
-  engagement: { label: "Engagement",     icon: "💬", color: "text-green-400" },
-  daily:      { label: "Daily Summary",  icon: "📅", color: "text-indigo-400" },
-  weekly:     { label: "Weekly Recap",   icon: "📈", color: "text-pink-400" },
-  manual:     { label: "Manual",         icon: "✍️", color: "text-gray-400" },
-  intro:      { label: "Intro",          icon: "🎉", color: "text-emerald-400" },
+const TYPE_META: Record<string, { label: string; icon: string; accent: string; glow: string }> = {
+  signal:     { label: "Trade Signal",   icon: "⚡", accent: "text-red-400",    glow: "shadow-red-500/20" },
+  result:     { label: "Trade Result",   icon: "📊", accent: "text-violet-400", glow: "shadow-violet-500/20" },
+  hourly:     { label: "Hourly Update",  icon: "◉",  accent: "text-blue-400",   glow: "shadow-blue-500/20" },
+  news:       { label: "Crypto News",    icon: "◈",  accent: "text-amber-400",  glow: "shadow-amber-500/20" },
+  fear_greed: { label: "Fear & Greed",   icon: "◐",  accent: "text-orange-400", glow: "shadow-orange-500/20" },
+  hot_take:   { label: "Hot Take",       icon: "◆",  accent: "text-rose-400",   glow: "shadow-rose-500/20" },
+  philosophy: { label: "Philosophy",     icon: "◇",  accent: "text-cyan-400",   glow: "shadow-cyan-500/20" },
+  engagement: { label: "Engagement",     icon: "○",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
+  daily:      { label: "Daily Summary",  icon: "◉",  accent: "text-indigo-400", glow: "shadow-indigo-500/20" },
+  weekly:     { label: "Weekly Recap",   icon: "◈",  accent: "text-pink-400",   glow: "shadow-pink-500/20" },
+  manual:     { label: "Manual",         icon: "◌",  accent: "text-white/50",   glow: "" },
+  intro:      { label: "Intro",          icon: "◎",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
 };
 
 function timeAgo(ts: number): string {
@@ -47,13 +47,13 @@ function timeAgo(ts: number): string {
 }
 
 function nextIn(last: number, cooldown: number): string {
-  if (!last) return "Ready now";
+  if (!last) return "Ready";
   const remaining = cooldown - (Date.now() / 1000 - last);
-  if (remaining <= 0) return "Ready now";
+  if (remaining <= 0) return "Ready";
   const h = Math.floor(remaining / 3600);
   const m = Math.floor((remaining % 3600) / 60);
-  if (h > 0) return `in ${h}h ${m}m`;
-  return `in ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 interface TriggerCardProps {
@@ -62,13 +62,13 @@ interface TriggerCardProps {
   description: string;
   nextPost: string;
   endpoint: string;
-  color: string;
   onTriggered: () => void;
 }
 
-function TriggerCard({ icon, label, description, nextPost, endpoint, color, onTriggered }: TriggerCardProps) {
+function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered }: TriggerCardProps) {
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const isReady = nextPost === "Ready";
 
   const trigger = async () => {
     setLoading(true);
@@ -77,50 +77,68 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, color, onTr
       const r = await fetch(`${API}${endpoint}`, { method: "POST" });
       const d = await r.json();
       if (d.ok) {
-        setResult(d.queued ? "✅ Queued — posts in <5min" : "✅ Posted!");
+        setResult({ ok: true, msg: d.queued ? "Queued" : "Posted" });
         onTriggered();
       } else {
-        const reason = d.error || "X credentials not set in Railway";
-        setResult(`❌ ${reason}`);
+        setResult({ ok: false, msg: d.error || "Failed" });
       }
     } catch {
-      setResult("❌ Cannot reach backend");
+      setResult({ ok: false, msg: "Offline" });
     }
     setLoading(false);
-    setTimeout(() => setResult(null), 6000);
+    setTimeout(() => setResult(null), 5000);
   };
 
-  const isReady = nextPost === "Ready now";
-
   return (
-    <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex flex-col gap-3 hover:border-gray-600 transition-colors">
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-2xl">{icon}</span>
-          <div>
-            <div className={`font-semibold text-sm ${color}`}>{label}</div>
-            <div className="text-gray-400 text-xs mt-0.5">{description}</div>
+    <div className="group relative rounded-2xl bg-white/[0.04] border border-white/[0.07] p-5 hover:bg-white/[0.07] hover:border-white/[0.12] transition-all duration-300 overflow-hidden">
+      {/* Subtle shimmer on hover */}
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none bg-gradient-to-br from-white/[0.04] via-transparent to-transparent rounded-2xl" />
+
+      <div className="relative flex flex-col gap-4">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-white/[0.06] flex items-center justify-center text-lg shrink-0 border border-white/[0.08]">
+              {icon}
+            </div>
+            <div>
+              <div className="text-[13px] font-semibold text-white tracking-tight">{label}</div>
+              <div className="text-[11px] text-white/40 mt-0.5 leading-snug">{description}</div>
+            </div>
+          </div>
+          <div className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 ml-2 ${
+            isReady
+              ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+              : "bg-white/[0.05] text-white/30 border border-white/[0.06]"
+          }`}>
+            {isReady ? "● Ready" : nextPost}
           </div>
         </div>
-        <div className={`text-xs px-2 py-1 rounded-full border ${
-          isReady
-            ? "border-green-600 text-green-400 bg-green-950"
-            : "border-gray-600 text-gray-500"
-        }`}>
-          {nextPost}
-        </div>
+
+        <button
+          onClick={trigger}
+          disabled={loading}
+          className={`w-full py-2.5 rounded-xl text-[13px] font-medium transition-all duration-200 border ${
+            loading
+              ? "bg-white/[0.04] text-white/30 border-white/[0.06] cursor-wait"
+              : result
+                ? result.ok
+                  ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/20"
+                  : "bg-red-500/10 text-red-400 border-red-500/15"
+                : "bg-white/[0.06] text-white/80 border-white/[0.08] hover:bg-white/[0.1] hover:text-white cursor-pointer active:scale-[0.98]"
+          }`}
+        >
+          {loading ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="w-3 h-3 rounded-full border border-white/20 border-t-white/60 animate-spin" />
+              Queuing…
+            </span>
+          ) : result ? (
+            result.msg
+          ) : (
+            "Post Now"
+          )}
+        </button>
       </div>
-      <button
-        onClick={trigger}
-        disabled={loading}
-        className={`w-full py-2 rounded-lg text-sm font-medium transition-all ${
-          loading
-            ? "bg-gray-700 text-gray-500 cursor-wait"
-            : "bg-gray-700 hover:bg-gray-600 text-white cursor-pointer"
-        }`}
-      >
-        {loading ? "Posting…" : result || "Post Now"}
-      </button>
     </div>
   );
 }
@@ -136,30 +154,35 @@ function FireAllButton({ onDone }: { onDone: () => void }) {
       const r = await fetch(`${API}/api/x-agent/fire-all`, { method: "POST" });
       const d = await r.json();
       if (d.ok) {
-        const fired = Object.values(d.results || {}).filter((v) => v !== "failed").length;
-        setResult(`🔥 ${fired} posts fired!`);
+        const n = Object.values(d.results || {}).filter((v) => v !== "failed").length;
+        setResult(`${n} queued`);
         onDone();
       } else {
-        setResult(`❌ ${d.error}`);
+        setResult("Failed");
       }
     } catch {
-      setResult("❌ Error");
+      setResult("Error");
     }
     setLoading(false);
-    setTimeout(() => setResult(null), 5000);
+    setTimeout(() => setResult(null), 4000);
   };
 
   return (
     <button
       onClick={fireAll}
       disabled={loading}
-      className={`px-4 py-1.5 text-sm font-semibold rounded-lg border transition-all ${
+      className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-medium transition-all duration-200 border ${
         loading
-          ? "border-gray-600 text-gray-500 cursor-wait"
-          : "border-orange-500 text-orange-400 hover:bg-orange-500 hover:text-white cursor-pointer"
+          ? "bg-white/[0.04] text-white/30 border-white/[0.06] cursor-wait"
+          : "bg-white/[0.07] text-white/80 border-white/[0.1] hover:bg-white/[0.12] hover:text-white cursor-pointer"
       }`}
     >
-      {loading ? "Posting…" : result || "🔥 Post Everything Now"}
+      {loading ? (
+        <span className="w-3 h-3 rounded-full border border-white/20 border-t-white/60 animate-spin" />
+      ) : (
+        <span className="text-base">⚡</span>
+      )}
+      {result || "Post All"}
     </button>
   );
 }
@@ -168,8 +191,8 @@ export default function XAgentPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [manualText, setManualText] = useState("");
   const [posting, setPosting] = useState(false);
-  const [postResult, setPostResult] = useState<string | null>(null);
-  const [charCount, setCharCount] = useState(0);
+  const [postResult, setPostResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const charCount = manualText.length;
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -190,7 +213,7 @@ export default function XAgentPage() {
   };
 
   const postManual = async () => {
-    if (!manualText.trim() || manualText.length > 280) return;
+    if (!manualText.trim() || charCount > 280) return;
     setPosting(true);
     setPostResult(null);
     try {
@@ -201,128 +224,156 @@ export default function XAgentPage() {
       });
       const d = await r.json();
       if (d.ok) {
-        setPostResult(d.queued ? "✅ Queued — local poster will send within 5 min" : "✅ Tweet posted!");
+        setPostResult({ ok: true, msg: d.queued ? "Queued — posts within 60 seconds" : "Tweet posted!" });
         setManualText("");
-        setCharCount(0);
         fetchStatus();
       } else {
-        setPostResult(`❌ ${d.error || "Failed"}`);
+        setPostResult({ ok: false, msg: d.error || "Failed" });
       }
     } catch {
-      setPostResult("❌ Network error");
+      setPostResult({ ok: false, msg: "Network error" });
     }
     setPosting(false);
-    setTimeout(() => setPostResult(null), 5000);
+    setTimeout(() => setPostResult(null), 6000);
   };
+
+  const todayPosts = status?.recent_posts.filter(p => Date.now() / 1000 - p.ts < 86400).length ?? 0;
+  const totalPosts = status?.recent_posts.length ?? 0;
+  const nextHourly = nextIn(status?.last_hourly || 0, 3300);
 
   const triggers = [
     {
-      icon: "📰", label: "Crypto News", color: "text-yellow-400",
-      description: "Latest headline from CoinDesk / CoinTelegraph with sharp take",
+      icon: "◈", label: "Crypto News",
+      description: "CoinDesk / CoinTelegraph headline with sharp commentary",
       nextPost: nextIn(status?.last_news || 0, 7200),
       endpoint: "/api/x-agent/trigger/news",
     },
     {
-      icon: "😱", label: "Fear & Greed", color: "text-orange-400",
-      description: "Alternative.me index with market commentary",
+      icon: "◐", label: "Fear & Greed",
+      description: "Alternative.me index with market psychology take",
       nextPost: nextIn(status?.last_fear_greed || 0, 14400),
       endpoint: "/api/x-agent/trigger/fear-greed",
     },
     {
-      icon: "🔥", label: "Hot Take", color: "text-red-300",
-      description: "Spicy market opinion — engagement magnet",
+      icon: "◆", label: "Hot Take",
+      description: "Spicy market opinion engineered for engagement",
       nextPost: nextIn(status?.last_hot_take || 0, 28800),
       endpoint: "/api/x-agent/trigger/hot-take",
     },
     {
-      icon: "🧠", label: "Philosophy", color: "text-cyan-400",
-      description: "Trading wisdom from legends + algo twist",
+      icon: "◇", label: "Philosophy",
+      description: "Trading wisdom from legends, twisted by algorithm",
       nextPost: nextIn(status?.last_philosophy || 0, 43200),
       endpoint: "/api/x-agent/trigger/philosophy",
     },
     {
-      icon: "💬", label: "Engagement", color: "text-green-400",
-      description: "Question to the audience — boosts replies",
+      icon: "○", label: "Engagement",
+      description: "Audience question designed to drive replies",
       nextPost: nextIn(status?.last_engagement || 0, 43200),
       endpoint: "/api/x-agent/trigger/engagement",
     },
     {
-      icon: "🤖", label: "Hourly Update", color: "text-blue-400",
-      description: "BTC price + regime + witty commentary",
+      icon: "◉", label: "Hourly Update",
+      description: "Live BTC price, regime, and witty commentary",
       nextPost: nextIn(status?.last_hourly || 0, 3300),
       endpoint: "/api/x-agent/trigger/hourly",
     },
   ];
 
   return (
-    <div className="text-white">
-      <div className="max-w-5xl mx-auto space-y-6">
+    <div className="min-h-screen text-white">
+      <div className="max-w-5xl mx-auto px-1 py-2 space-y-8">
 
-        {/* Offline warning banner */}
+        {/* Offline banner */}
         {status && !status.enabled && (
-          <div className="bg-red-950 border border-red-700 rounded-xl p-4 flex items-start gap-3">
-            <span className="text-red-400 text-xl mt-0.5">⚠️</span>
-            <div>
-              <div className="text-red-300 font-semibold text-sm">X Agent is offline — missing credentials</div>
-              <div className="text-red-400 text-xs mt-1">
-                Set <code className="bg-red-900 px-1 rounded">X_AUTH_TOKEN</code> and{" "}
-                <code className="bg-red-900 px-1 rounded">X_CT0</code> in Railway environment variables,
-                then redeploy to enable posting.
+          <div className="rounded-2xl bg-red-500/[0.08] border border-red-500/20 p-4 flex items-center gap-4 backdrop-blur-sm">
+            <div className="w-8 h-8 rounded-full bg-red-500/15 flex items-center justify-center shrink-0">
+              <span className="text-red-400 text-sm">!</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold text-red-300">X Agent offline — credentials missing</div>
+              <div className="text-[12px] text-red-400/70 mt-0.5">
+                Add <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_AUTH_TOKEN</code> and{" "}
+                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_CT0</code>{" "}
+                to Railway environment variables
               </div>
             </div>
           </div>
         )}
 
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <span>🐦</span> X Agent
-              <span className="text-gray-400 font-normal text-lg">@tradeous</span>
-            </h1>
-            <p className="text-gray-400 text-sm mt-1">
-              AI-powered viral content engine — news, hot takes, philosophy, engagement
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border ${
-              status?.enabled
-                ? "border-green-600 text-green-400 bg-green-950"
-                : "border-red-600 text-red-400 bg-red-950"
-            }`}>
-              <span className={`w-2 h-2 rounded-full ${status?.enabled ? "bg-green-400 animate-pulse" : "bg-red-400"}`} />
-              {status?.enabled ? "LIVE" : "OFFLINE"}
+        {/* Hero Header */}
+        <div className="relative rounded-3xl overflow-hidden">
+          {/* Background gradient */}
+          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.05] via-transparent to-white/[0.02] rounded-3xl" />
+          <div className="absolute inset-0 border border-white/[0.08] rounded-3xl pointer-events-none" />
+
+          <div className="relative px-8 py-8 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-5">
+              {/* X logo area */}
+              <div className="relative w-14 h-14 rounded-2xl bg-white/[0.07] border border-white/[0.1] flex items-center justify-center shrink-0">
+                <span className="text-2xl font-bold tracking-tighter text-white">𝕏</span>
+                {status?.enabled && (
+                  <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#0d0d0d] animate-pulse" />
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-3">
+                  <h1 className="text-2xl font-bold tracking-tight text-white">X Agent</h1>
+                  <span className="text-[13px] text-white/40 font-medium">@tradeous</span>
+                </div>
+                <p className="text-[13px] text-white/40 mt-1 font-light">
+                  AI content engine · News · Hot takes · Philosophy · Engagement
+                </p>
+              </div>
             </div>
-            <FireAllButton onDone={fetchStatus} />
-            <button
-              onClick={resetCooldowns}
-              className="px-3 py-1.5 text-xs text-gray-400 border border-gray-600 rounded-lg hover:border-gray-400 hover:text-gray-200 transition-colors"
-            >
-              Reset Cooldowns
-            </button>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Status pill */}
+              <div className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-semibold border backdrop-blur-sm ${
+                status?.enabled
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                  : "bg-red-500/10 text-red-400 border-red-500/20"
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${status?.enabled ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
+                {status?.enabled ? "LIVE" : "OFFLINE"}
+              </div>
+
+              <FireAllButton onDone={fetchStatus} />
+
+              <button
+                onClick={resetCooldowns}
+                className="px-3.5 py-2 rounded-xl text-[12px] font-medium text-white/40 border border-white/[0.07] hover:bg-white/[0.06] hover:text-white/70 transition-all duration-200"
+              >
+                Reset
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Stats row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           {[
-            { label: "Posts Today", value: status?.recent_posts.filter(p => Date.now()/1000 - p.ts < 86400).length ?? "–" },
-            { label: "Total Posts", value: status?.recent_posts.length ?? "–" },
-            { label: "Intro Posted", value: status?.intro_posted ? "Yes ✅" : "No" },
-            { label: "Next Hourly", value: nextIn(status?.last_hourly || 0, 3300) },
+            { value: todayPosts, label: "Posts today", sub: "last 24 hours" },
+            { value: totalPosts, label: "Total posts", sub: "this session" },
+            { value: nextHourly === "Ready" ? "Now" : nextHourly, label: "Next hourly", sub: "BTC update" },
           ].map((s) => (
-            <div key={s.label} className="bg-gray-800 border border-gray-700 rounded-xl p-4 text-center">
-              <div className="text-2xl font-bold text-white">{s.value}</div>
-              <div className="text-gray-400 text-xs mt-1">{s.label}</div>
+            <div key={s.label} className="rounded-2xl bg-white/[0.04] border border-white/[0.07] p-5 relative overflow-hidden group hover:bg-white/[0.06] transition-all duration-300">
+              <div className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none rounded-2xl" />
+              <div className="relative">
+                <div className="text-3xl font-bold tracking-tight text-white tabular-nums">{s.value}</div>
+                <div className="text-[12px] font-medium text-white/60 mt-1">{s.label}</div>
+                <div className="text-[11px] text-white/25 mt-0.5">{s.sub}</div>
+              </div>
             </div>
           ))}
         </div>
 
-        {/* Content type triggers */}
+        {/* Content Triggers */}
         <div>
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
-            Content Triggers
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-[11px] font-semibold text-white/30 uppercase tracking-[0.12em]">Content Triggers</h2>
+            <span className="text-[11px] text-white/20">Queued posts sent via local poster</span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {triggers.map((t) => (
               <TriggerCard key={t.endpoint} {...t} onTriggered={fetchStatus} />
@@ -330,96 +381,126 @@ export default function XAgentPage() {
           </div>
         </div>
 
-        {/* Manual compose */}
-        <div className="bg-gray-800 border border-gray-700 rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-            ✍️ Manual Compose
-          </h2>
-          <div className="relative">
-            <textarea
-              value={manualText}
-              onChange={(e) => {
-                setManualText(e.target.value);
-                setCharCount(e.target.value.length);
-              }}
-              placeholder="Write a tweet as @tradeous…"
-              maxLength={280}
-              rows={4}
-              className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500 transition-colors"
-            />
-            <div className={`absolute bottom-3 right-3 text-xs ${charCount > 260 ? "text-red-400" : "text-gray-500"}`}>
-              {charCount}/280
+        {/* Compose + Recent Posts side by side on large screens */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+          {/* Manual Compose */}
+          <div className="rounded-2xl bg-white/[0.04] border border-white/[0.07] p-6 flex flex-col gap-4">
+            <div>
+              <h2 className="text-[11px] font-semibold text-white/30 uppercase tracking-[0.12em] mb-0.5">Compose</h2>
+              <p className="text-[11px] text-white/20">Post manually as @tradeous</p>
             </div>
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <div className="text-xs text-gray-500">
-              Tip: keep it under 200 chars for better engagement
+
+            <div className="relative flex-1">
+              <textarea
+                value={manualText}
+                onChange={(e) => setManualText(e.target.value)}
+                placeholder="What's happening in the market…"
+                maxLength={280}
+                rows={5}
+                className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl p-4 text-[13px] text-white placeholder-white/20 resize-none focus:outline-none focus:border-white/20 focus:bg-white/[0.06] transition-all duration-200 leading-relaxed"
+              />
+              {/* Char ring */}
+              <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+                <svg className="w-5 h-5 -rotate-90" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="7" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                  <circle
+                    cx="10" cy="10" r="7" fill="none"
+                    stroke={charCount > 260 ? "rgb(239 68 68)" : charCount > 200 ? "rgb(251 191 36)" : "rgba(255,255,255,0.4)"}
+                    strokeWidth="2"
+                    strokeDasharray={`${2 * Math.PI * 7}`}
+                    strokeDashoffset={`${2 * Math.PI * 7 * (1 - charCount / 280)}`}
+                    strokeLinecap="round"
+                    className="transition-all duration-150"
+                  />
+                </svg>
+                <span className={`text-[10px] font-mono ${charCount > 260 ? "text-red-400" : "text-white/25"}`}>
+                  {280 - charCount}
+                </span>
+              </div>
             </div>
+
+            {postResult && (
+              <div className={`text-[12px] text-center py-2.5 rounded-xl border ${
+                postResult.ok
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/15"
+                  : "bg-red-500/10 text-red-400 border-red-500/15"
+              }`}>
+                {postResult.msg}
+              </div>
+            )}
+
             <button
               onClick={postManual}
               disabled={posting || !manualText.trim() || charCount > 280}
-              className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`py-3 rounded-xl text-[13px] font-semibold tracking-tight transition-all duration-200 border ${
                 posting || !manualText.trim() || charCount > 280
-                  ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-                  : "bg-blue-600 hover:bg-blue-500 text-white cursor-pointer"
+                  ? "bg-white/[0.03] text-white/20 border-white/[0.05] cursor-not-allowed"
+                  : "bg-white text-black border-white hover:bg-white/90 cursor-pointer active:scale-[0.98]"
               }`}
             >
-              {posting ? "Posting…" : "Post Tweet"}
+              {posting ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-3 h-3 rounded-full border border-black/20 border-t-black/70 animate-spin" />
+                  Queuing…
+                </span>
+              ) : "Post Tweet"}
             </button>
           </div>
-          {postResult && (
-            <div className={`mt-3 text-sm text-center py-2 rounded-lg ${
-              postResult.startsWith("✅") ? "bg-green-950 text-green-400" : "bg-red-950 text-red-400"
-            }`}>
-              {postResult}
-            </div>
-          )}
-        </div>
 
-        {/* Recent posts feed */}
-        <div>
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
-            Recent Posts
-          </h2>
-          {!status?.recent_posts.length ? (
-            <div className="bg-gray-800 border border-gray-700 rounded-xl p-8 text-center text-gray-500">
-              No posts yet. Use the triggers above or the agent will post automatically.
+          {/* Recent Posts */}
+          <div className="rounded-2xl bg-white/[0.04] border border-white/[0.07] p-6 flex flex-col gap-4 min-h-[300px]">
+            <div>
+              <h2 className="text-[11px] font-semibold text-white/30 uppercase tracking-[0.12em] mb-0.5">Activity</h2>
+              <p className="text-[11px] text-white/20">Recent posts from @tradeous</p>
             </div>
-          ) : (
-            <div className="space-y-2">
-              {[...status.recent_posts].reverse().map((post, i) => {
-                const meta = TYPE_META[post.type] || TYPE_META.manual;
-                return (
-                  <div key={`${post.id}-${i}`} className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex gap-3 hover:border-gray-600 transition-colors">
-                    <span className="text-xl mt-0.5 shrink-0">{meta.icon}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-xs font-semibold ${meta.color}`}>{meta.label}</span>
-                        <span className="text-gray-600 text-xs">·</span>
-                        <span className="text-gray-500 text-xs">{timeAgo(post.ts)}</span>
-                        {post.url && (
-                          <>
-                            <span className="text-gray-600 text-xs">·</span>
+
+            {!status?.recent_posts.length ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center py-8">
+                <div className="w-10 h-10 rounded-2xl bg-white/[0.04] border border-white/[0.07] flex items-center justify-center text-xl">
+                  𝕏
+                </div>
+                <div className="text-[12px] text-white/30">No posts this session</div>
+                <div className="text-[11px] text-white/15">Trigger a post or wait for the scheduler</div>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-2 -mr-1 pr-1 max-h-[380px] scrollbar-thin">
+                {[...status.recent_posts].reverse().map((post, i) => {
+                  const meta = TYPE_META[post.type] || TYPE_META.manual;
+                  return (
+                    <div
+                      key={`${post.id}-${i}`}
+                      className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3.5 hover:bg-white/[0.06] transition-all duration-200 group"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[11px] font-semibold ${meta.accent}`}>
+                            {meta.icon} {meta.label}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-white/25">{timeAgo(post.ts)}</span>
+                          {post.url && (
                             <a
                               href={post.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-blue-400 text-xs hover:underline"
+                              className="text-[10px] text-white/25 hover:text-blue-400 transition-colors"
                             >
-                              View on X ↗
+                              ↗
                             </a>
-                          </>
-                        )}
+                          )}
+                        </div>
                       </div>
-                      <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap break-words">
+                      <p className="text-[12px] text-white/50 leading-relaxed whitespace-pre-wrap break-words line-clamp-3">
                         {post.text}
                       </p>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
       </div>
