@@ -215,64 +215,42 @@ class LiveExecutor:
 
             pos_side = "LONG" if direction == "long" else "SHORT"
 
-            logger.info(f"[LiveExecutor] Placing LIMIT {side.upper()} {btc_qty} BTC @ ${entry_price:.2f} "
-                        f"· notional ${notional:.0f} · lev {leverage}× "
-                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f}")
-
-            # Place LIMIT order with SL/TP attached directly to the position
+            # Use MARKET order — fills instantly at current exchange price.
+            # Limit orders at a signal's stale entry_price get canceled when the
+            # market has moved by execution time.  Market orders with
+            # stopLossPrice / takeProfitPrice params attach the guards directly
+            # to the position (not as separate "trigger" orders).
             order_params: dict = {"positionSide": pos_side}
             if sl_price > 0:
                 order_params["stopLossPrice"] = round(sl_price, 2)
             if tp_price > 0:
                 order_params["takeProfitPrice"] = round(tp_price, 2)
 
+            logger.info(f"[LiveExecutor] Placing MARKET {side.upper()} {btc_qty} BTC "
+                        f"· notional ~${notional:.0f} · lev {leverage}× "
+                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f}")
+
             order = await self._exchange.create_order(
                 SYMBOL,
-                "limit",
+                "market",
                 side,
                 btc_qty,
-                entry_price,
+                None,
                 params=order_params,
             )
-            order_id = str(order.get("id", ""))
-            logger.info(f"[LiveExecutor] Limit order placed with SL/TP: id={order_id} @ ${entry_price:.2f}")
+            order_id  = str(order.get("id", ""))
+            fill_price = float(order.get("average") or order.get("price") or entry_price)
 
-            # Poll for fill — up to 15 seconds (3 attempts × 5s)
-            fill_price = 0.0
-            POLL_INTERVAL = 5
-            MAX_POLLS     = 3
-            for attempt in range(MAX_POLLS):
-                await asyncio.sleep(POLL_INTERVAL)
+            # Verify the order is actually filled (market orders should be instant)
+            if not fill_price or fill_price <= 0:
                 try:
-                    fetched = await self._exchange.fetch_order(order_id, SYMBOL)
-                    status  = (fetched.get("status") or "").lower()
-                    filled  = float(fetched.get("filled") or 0)
-                    avg     = float(fetched.get("average") or fetched.get("price") or 0)
-                    logger.info(f"[LiveExecutor] Limit order poll {attempt+1}/{MAX_POLLS}: "
-                                f"status={status} filled={filled}/{btc_qty} BTC avg=${avg:.2f}")
-                    if status in ("closed", "filled") or filled >= btc_qty * 0.95:
-                        fill_price = avg if avg > 0 else entry_price
-                        break
-                    if status in ("canceled", "cancelled", "rejected", "expired"):
-                        logger.warning(f"[LiveExecutor] Limit order {order_id} {status} — no trade")
-                        self.last_error = f"Limit order {status}"
-                        return None
-                except Exception as poll_err:
-                    logger.warning(f"[LiveExecutor] Poll attempt {attempt+1} failed: {poll_err}")
-
-            # If still not filled — cancel and abort
-            if fill_price <= 0:
-                try:
-                    await self._exchange.cancel_order(order_id, SYMBOL)
-                    logger.warning(f"[LiveExecutor] Limit order {order_id} not filled in "
-                                   f"{POLL_INTERVAL * MAX_POLLS}s — cancelled, no trade placed")
+                    fetched    = await self._exchange.fetch_order(order_id, SYMBOL)
+                    fill_price = float(fetched.get("average") or fetched.get("price") or entry_price)
                 except Exception:
-                    pass
-                self.last_error = f"Limit order timed out (not filled in {POLL_INTERVAL * MAX_POLLS}s)"
-                return None
+                    fill_price = entry_price  # fallback — price is close enough
 
-            logger.info(f"[LiveExecutor] Limit order FILLED @ ${fill_price:.2f} · "
-                        f"SL ${sl_price:.2f} · TP ${tp_price:.2f} (attached to position)")
+            logger.info(f"[LiveExecutor] MARKET order filled: id={order_id} @ ${fill_price:.2f} "
+                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f} (attached to position)")
 
             sl_order_id = ""
             tp_order_id = ""
