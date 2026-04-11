@@ -102,11 +102,35 @@ _X_BEARER = (
 )
 
 # ── News RSS feeds (free, no key) ──────────────────────────────────────────────
+# 20+ sources shuffled on every fetch so no single outlet dominates
 NEWS_FEEDS = [
+    # Tier 1 — high volume, BTC-heavy
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
+    "https://bitcoinmagazine.com/.rss/full/",
+    "https://www.newsbtc.com/feed/",
+    "https://bitcoinist.com/feed/",
+    "https://cryptopotato.com/feed/",
+    # Tier 2 — macro + markets angle
+    "https://cryptoslate.com/feed/",
+    "https://ambcrypto.com/feed/",
+    "https://u.today/rss",
+    "https://cryptobriefing.com/feed/",
+    "https://thedefiant.io/api/feed",
+    "https://blockworks.co/feed",
+    "https://protos.com/feed/",
+    # Tier 3 — on-chain / research slant
+    "https://www.theblock.co/rss.xml",
+    "https://rss.app/feeds/BTC.xml",           # BTC-filtered aggregator
+    "https://feeds.feedburner.com/CryptoCoinsNews",
+    # Tier 4 — broad macro news relevant to BTC
+    "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "https://www.zerohedge.com/fullrss2.xml",
 ]
+
+# Headline dedup window — headlines seen within this many hours are never re-posted
+_HEADLINE_SEEN_TTL_HOURS = 96   # 4 days
 
 # ── Content banks — @mistor style: BTC-only, short, lowercase, punchy ─────────
 # Style rules:
@@ -464,6 +488,9 @@ class XPublisher:
         self._last_grok_refresh: float = 0.0
         # Shared httpx client — reused across all API calls (connection pooling, lower overhead)
         self._http = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+        # In-memory set of seen headline fingerprints (loaded from DB on first use)
+        self._seen_headlines: set[str] = set()
+        self._seen_headlines_loaded: bool = False
         self._init_client()
 
     def _init_client(self) -> None:
@@ -498,6 +525,8 @@ class XPublisher:
             await self._load_history_from_db()
             self._db_initialized = True
             logger.info("[XPublisher] Tweet history DB ready")
+            # Pre-load seen headlines so they're ready before the first news post
+            asyncio.get_running_loop().create_task(self._ensure_headline_db())
         except Exception as e:
             logger.debug(f"[XPublisher] DB init error: {e}")
 
@@ -538,6 +567,64 @@ class XPublisher:
         if not recent:
             return "None yet."
         return "\n---\n".join(f"• {t[:120]}" for t in recent)
+
+    # ── Seen-headlines deduplication (persistent across restarts) ────────────
+
+    @staticmethod
+    def _headline_fp(title: str) -> str:
+        """Normalised fingerprint — strip punctuation, lowercase, first 80 chars."""
+        import re
+        clean = re.sub(r"[^a-z0-9 ]", "", title.lower())
+        return " ".join(clean.split())[:80]
+
+    async def _ensure_headline_db(self) -> None:
+        if self._seen_headlines_loaded or not _SQLITE_AVAILABLE:
+            return
+        try:
+            async with _aiosqlite.connect(_HEADLINE_DB_PATH) as db:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS seen_headlines (
+                        fp   TEXT PRIMARY KEY,
+                        seen_at REAL NOT NULL
+                    )
+                """)
+                await db.commit()
+                # Load recent fingerprints into memory
+                cutoff = time.time() - _HEADLINE_SEEN_TTL_HOURS * 3600
+                async with db.execute(
+                    "SELECT fp FROM seen_headlines WHERE seen_at > ?", (cutoff,)
+                ) as cur:
+                    rows = await cur.fetchall()
+                self._seen_headlines = {r[0] for r in rows}
+                # Prune old entries while we're here
+                await db.execute(
+                    "DELETE FROM seen_headlines WHERE seen_at <= ?", (cutoff,)
+                )
+                await db.commit()
+            self._seen_headlines_loaded = True
+            logger.info(f"[XPublisher] Headline dedup DB ready — {len(self._seen_headlines)} seen headlines loaded")
+        except Exception as e:
+            logger.debug(f"[XPublisher] Headline DB init error: {e}")
+            self._seen_headlines_loaded = True  # don't retry forever
+
+    async def _mark_headline_seen(self, title: str) -> None:
+        fp = self._headline_fp(title)
+        self._seen_headlines.add(fp)
+        if not _SQLITE_AVAILABLE:
+            return
+        try:
+            async with _aiosqlite.connect(_HEADLINE_DB_PATH) as db:
+                await db.execute(
+                    "INSERT OR REPLACE INTO seen_headlines (fp, seen_at) VALUES (?, ?)",
+                    (fp, time.time())
+                )
+                await db.commit()
+        except Exception as e:
+            logger.debug(f"[XPublisher] Headline DB save error: {e}")
+
+    def _headline_is_new(self, title: str) -> bool:
+        """Return True only if this headline has NOT been posted before."""
+        return self._headline_fp(title) not in self._seen_headlines
 
     # ── Live context (injected by PersistentAgent each scan) ─────────────────
 
@@ -724,22 +811,27 @@ class XPublisher:
     # ── Trending topics from RSS ──────────────────────────────────────────────
 
     async def _get_trending_context(self) -> str:
-        """Pull top 3 headlines from RSS for AI context injection."""
+        """Pull 3 fresh headlines from shuffled RSS feeds for AI context injection."""
         feeds = NEWS_FEEDS.copy()
         random.shuffle(feeds)
         headlines = []
-        for feed_url in feeds[:2]:
+        for feed_url in feeds[:5]:   # sample 5 feeds for better variety
+            if len(headlines) >= 3:
+                break
             try:
-                resp = await self._http.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = await self._http.get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5.0)
                 if resp.status_code != 200:
                     continue
-                root = ET.fromstring(resp.text)
-                for item in root.findall(".//item")[:3]:
+                try:
+                    root = ET.fromstring(resp.text)
+                except ET.ParseError:
+                    continue
+                for item in root.findall(".//item")[:5]:
                     t = (item.findtext("title") or "").strip()
                     if t and len(t) > 15:
                         headlines.append(t[:80])
-                if len(headlines) >= 3:
-                    break
+                        if len(headlines) >= 3:
+                            break
             except Exception:
                 pass
         return " | ".join(headlines[:3]) if headlines else ""
@@ -1378,29 +1470,80 @@ class XPublisher:
         ok = await self._send_tweet(text[:280], "news")
         if ok:
             self._touch("news")
+            # Permanently mark this headline so it's never posted again
+            await self._mark_headline_seen(story["title"])
         return ok
 
     async def _fetch_top_news(self) -> Optional[dict]:
+        """
+        Scan all 20+ RSS feeds (shuffled) and return the freshest headline
+        that hasn't been posted before.  Falls back to oldest unseen item if
+        no truly new story is found after exhausting all feeds.
+        """
+        # Ensure seen-headline DB is loaded before checking
+        await self._ensure_headline_db()
+
         feeds = NEWS_FEEDS.copy()
         random.shuffle(feeds)
+
+        candidates: list[dict] = []   # unseen headlines collected across all feeds
+
         for feed_url in feeds:
             try:
-                resp = await self._http.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = await self._http.get(
+                    feed_url,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; TradingBot/1.0)"},
+                    timeout=8.0,
+                )
                 if resp.status_code != 200:
                     continue
-                root = ET.fromstring(resp.text)
-                items = root.findall(".//item")
-                if not items:
+
+                try:
+                    root = ET.fromstring(resp.text)
+                except ET.ParseError:
                     continue
-                # Pick from top 5 to add variety
-                item = random.choice(items[:5])
-                title = (item.findtext("title") or "").strip()
-                link  = (item.findtext("link") or "").strip()
-                if title and len(title) > 10:
-                    return {"title": title, "link": link}
+
+                items = root.findall(".//item")
+                for item in items[:15]:      # check up to 15 items per feed
+                    title = (item.findtext("title") or "").strip()
+                    link  = (item.findtext("link") or "").strip()
+                    desc  = (item.findtext("description") or "").strip()[:200]
+
+                    if not title or len(title) < 12:
+                        continue
+
+                    # Filter to BTC/crypto-relevant headlines
+                    low = title.lower()
+                    btc_keywords = {
+                        "bitcoin", "btc", "crypto", "blockchain", "satoshi",
+                        "halving", "lightning", "taproot", "etf", "coinbase",
+                        "blackrock", "federal reserve", "fed ", "inflation",
+                        "dollar", "usd", "treasury", "macro", "interest rate",
+                    }
+                    if not any(kw in low for kw in btc_keywords):
+                        continue   # skip non-relevant headlines
+
+                    if self._headline_is_new(title):
+                        candidates.append({"title": title, "link": link, "desc": desc})
+
+                    if len(candidates) >= 20:  # enough to choose from — stop early
+                        break
+
             except Exception as e:
                 logger.debug(f"[XPublisher] RSS fetch error ({feed_url}): {e}")
-        return None
+
+            if len(candidates) >= 20:
+                break
+
+        if not candidates:
+            logger.info("[XPublisher] All news headlines already seen — skipping news post")
+            return None
+
+        # Prefer shorter, punchier headlines that work better as tweets
+        candidates.sort(key=lambda c: len(c["title"]))
+        # Pick randomly from the top 5 shortest to keep variety
+        chosen = random.choice(candidates[:5])
+        return chosen
 
     # ── 7. Fear & Greed ────────────────────────────────────────────────────────
 
