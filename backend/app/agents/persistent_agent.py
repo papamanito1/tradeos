@@ -849,6 +849,7 @@ class PersistentAgent:
         self._task = asyncio.create_task(self._loop())
         asyncio.create_task(self._x_scheduler())
         asyncio.create_task(self._market_context_loop())
+        asyncio.create_task(self._grok_warmup())
         # Fire intro post once on first startup
         self.x_publisher.post_intro()
         mode = self.config.get("mode", "paper")
@@ -979,8 +980,15 @@ class PersistentAgent:
                     await asyncio.sleep(random.uniform(60, 300))
                     continue
 
+                # ── Background Grok trend refresh (non-blocking) ───────────
+                await self.x_publisher.refresh_grok_trends()
+
                 # ── Regular content: one post at a time, randomly chosen ───────
-                # Build map: key → async/sync post function for cooldown-ready types
+                # Grok-powered types get priority when Grok is enabled (more reach)
+                grok_enabled = (
+                    self.x_publisher.grok is not None
+                    and getattr(self.x_publisher.grok, "enabled", False)
+                )
                 content_map: dict[str, any] = {
                     "hourly": lambda: self.x_publisher.post_hourly(
                         btc_price=btc_price,
@@ -989,15 +997,32 @@ class PersistentAgent:
                         regime=regime,
                         regime_stability=regime_stability,
                     ),
-                    "fear_greed":  self.x_publisher.post_fear_greed,
-                    "hot_take":    self.x_publisher.post_hot_take,
-                    "philosophy":  self.x_publisher.post_philosophy,
-                    "engagement":  self.x_publisher.post_engagement,
-                    "algo_insight": self.x_publisher.post_algo_insight,
+                    "fear_greed":        self.x_publisher.post_fear_greed,
+                    "hot_take":          self.x_publisher.post_hot_take,
+                    "philosophy":        self.x_publisher.post_philosophy,
+                    "engagement":        self.x_publisher.post_engagement,
+                    "algo_insight":      self.x_publisher.post_algo_insight,
+                    # Grok-powered posts — only included when Grok key is set
+                    **({"trending_hook":    self.x_publisher.post_trending_hook,
+                        "viral_commentary": self.x_publisher.post_viral_commentary,
+                        "bold_prediction":  lambda: self.x_publisher.post_bold_prediction(
+                            macro_trend=self.brain.macro_trend,
+                            fear_greed=self.brain.fear_greed_score,
+                        )} if grok_enabled else {}),
                 }
                 available = self.x_publisher.available_post_types()
                 # Remove news/btc_move (handled separately above)
                 candidates = [k for k in available if k in content_map]
+
+                # Grok posts get weighted higher in random selection (2× chance)
+                if grok_enabled:
+                    grok_types = {"trending_hook", "viral_commentary", "bold_prediction"}
+                    weighted_candidates = []
+                    for c in candidates:
+                        weighted_candidates.append(c)
+                        if c in grok_types:
+                            weighted_candidates.append(c)   # double-weight Grok posts
+                    candidates = weighted_candidates
 
                 # Enforce max-silence guarantee: if no post in 30 min, force one
                 time_since_any = time.time() - self.x_publisher.last_any_post_ts()
@@ -1077,6 +1102,19 @@ class PersistentAgent:
                     logger.debug(f"[ContextLoop] Fear & Greed fetch failed: {e}")
 
             await asyncio.sleep(60)  # check every minute, act based on intervals above
+
+    async def _grok_warmup(self) -> None:
+        """
+        Fetch initial Grok trend intelligence on startup so the first
+        trending_hook post is immediately data-rich.
+        """
+        try:
+            if self.x_publisher.grok and getattr(self.x_publisher.grok, "enabled", False):
+                await self.x_publisher.grok.fetch_btc_trends()
+                await self.x_publisher.grok.fetch_viral_formats()
+                logger.info("[Agent] Grok intelligence warmed up on startup")
+        except Exception as e:
+            logger.debug(f"[Agent] Grok warmup failed: {e}")
 
     async def _loop(self) -> None:
         while self._running:

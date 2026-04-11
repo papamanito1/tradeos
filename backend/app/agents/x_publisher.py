@@ -62,6 +62,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ── Grok intelligence (lazy import — avoids circular) ─────────────────────────
+try:
+    from app.agents.grok_intelligence import GrokIntelligence as _GrokIntelligence
+    _GROK_AVAILABLE = True
+except ImportError:
+    _GrokIntelligence = None   # type: ignore[assignment,misc]
+    _GROK_AVAILABLE = False
+
 # ── Timing constants ──────────────────────────────────────────────────────────
 SIGNAL_MIN_CONVICTION  = 0.70
 SIGNAL_COOLDOWN        = 900      # 15 min
@@ -74,8 +82,11 @@ ENGAGEMENT_COOLDOWN    = 7200     # 2 h
 BTC_MOVE_COOLDOWN      = 1800     # 30 min
 ALGO_INSIGHT_COOLDOWN  = 10800    # 3 h
 TRENDING_COOLDOWN      = 5400     # 90 min — Grok X-trend post
+VIRAL_COMMENTARY_COOLDOWN = 7200  # 2 h — Grok viral commentary
+BOLD_PREDICTION_COOLDOWN  = 14400 # 4 h — Grok bold prediction
 PREDICTION_COOLDOWN    = 14400    # 4 h
 MILESTONE_COOLDOWN     = 3600     # 1 h (but only fires when milestone reached)
+GROK_TREND_REFRESH     = 2700     # 45 min — background Grok trend refresh
 
 # Headline dedup window: 72 hours
 NEWS_SEEN_TTL_HOURS = 72
@@ -430,6 +441,7 @@ class XPublisher:
             "signal": 0, "hourly": 0, "news": 0,
             "fear_greed": 0, "hot_take": 0, "philosophy": 0,
             "engagement": 0, "btc_move": 0, "algo_insight": 0,
+            "trending_hook": 0, "viral_commentary": 0, "bold_prediction": 0,
         }
         self._intro_posted = False
         self._recent_posts: list[dict] = []
@@ -444,6 +456,10 @@ class XPublisher:
         self._full_history: collections.deque = collections.deque(maxlen=100)
         # DB init happens lazily on first write (safe for both sync and async contexts)
         self._db_initialized: bool = False
+        # Grok real-time X intelligence engine
+        self.grok: Optional[object] = _GrokIntelligence() if _GROK_AVAILABLE else None
+        # Last time background Grok trend refresh ran
+        self._last_grok_refresh: float = 0.0
         self._init_client()
 
     def _init_client(self) -> None:
@@ -560,13 +576,36 @@ class XPublisher:
     )
 
     async def _ai_generate(self, user_prompt: str, max_chars: int = 260) -> Optional[str]:
-        """Try Groq (free), then Gemini Flash (free). Returns None if both fail."""
+        """
+        AI generation pipeline (priority order):
+        1. Grok (xAI) — real-time X awareness, best for virality
+        2. Groq (Llama-3) — fast, free
+        3. Gemini Flash — free fallback
+        """
+        # 1. Grok (xAI) — primary when XAI_API_KEY is set
+        xai_key = os.environ.get("XAI_API_KEY", "").strip()
+        if xai_key and self.grok:
+            from app.agents.grok_intelligence import _GROK_WRITER_PROMPT, _MODEL_FAST
+            result = await self.grok._call_grok(
+                system=_GROK_WRITER_PROMPT,
+                user=user_prompt,
+                model=_MODEL_FAST,
+                temperature=0.88,
+                max_tokens=120,
+                live_search=False,   # for fast generation we skip search; trend context is in prompt
+            )
+            if result:
+                result = result.strip().strip('"').strip("'")
+                return result[:max_chars]
+
+        # 2. Groq (Llama-3) — free fallback
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
         if groq_key:
             result = await self._call_groq(groq_key, user_prompt, max_chars)
             if result:
                 return result[:max_chars]
 
+        # 3. Gemini Flash — last resort
         gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
         if gemini_key:
             result = await self._call_gemini(gemini_key, user_prompt, max_chars)
@@ -632,6 +671,11 @@ class XPublisher:
         cl        = ctx.get('consecutive_losses', 0)
         positions = ctx.get('open_positions', 0)
 
+        # Inject Grok live trend intelligence if available
+        grok_trend_ctx = ""
+        if self.grok and hasattr(self.grok, "get_trend_context_string"):
+            grok_trend_ctx = self.grok.get_trend_context_string()
+
         context_block = (
             f"RIGHT NOW:\n"
             f"- BTC price: {price}\n"
@@ -640,6 +684,8 @@ class XPublisher:
             f"- Consecutive losses: {cl} | Open positions: {positions}\n"
             f"- Your current mood/tone: {self.mood.tone}\n"
         )
+        if grok_trend_ctx:
+            context_block += f"- Live X intelligence: {grok_trend_ctx}\n"
         if trending:
             context_block += f"- Trending in crypto right now: {trending}\n"
 
@@ -704,25 +750,32 @@ class XPublisher:
         return self._recent_posts[-30:]
 
     def status(self) -> dict:
-        groq_key    = bool(os.environ.get("GROQ_API_KEY", "").strip())
-        gemini_key  = bool(os.environ.get("GEMINI_API_KEY", "").strip())
+        xai_key    = bool(os.environ.get("XAI_API_KEY",   "").strip())
+        groq_key   = bool(os.environ.get("GROQ_API_KEY",  "").strip())
+        gemini_key = bool(os.environ.get("GEMINI_API_KEY","").strip())
+        ai_brain   = "grok" if xai_key else ("groq" if groq_key else ("gemini" if gemini_key else "none"))
+        grok_status = self.grok.status() if self.grok and hasattr(self.grok, "status") else {}
         return {
-            "enabled":          self._enabled,
-            "intro_posted":     self._intro_posted,
-            "mood":             self.mood.current,
-            "ai_brain":         "groq" if groq_key else ("gemini" if gemini_key else "none"),
-            "last_signal":      self._last["signal"],
-            "last_hourly":      self._last["hourly"],
-            "last_news":        self._last["news"],
-            "last_fear_greed":  self._last["fear_greed"],
-            "last_hot_take":    self._last["hot_take"],
-            "last_philosophy":  self._last["philosophy"],
-            "last_engagement":  self._last["engagement"],
-            "recent_posts":     self.recent_posts,
-            "posts_per_hour":   self.memory.posts_per_hour(),
-            "total_posts":      self.memory.total_posts(),
-            "next_post_in_sec": max(0, HOURLY_COOLDOWN - (time.time() - self._last.get("hourly", 0))),
-            "last_error":       self._last_error,
+            "enabled":            self._enabled,
+            "intro_posted":       self._intro_posted,
+            "mood":               self.mood.current,
+            "ai_brain":           ai_brain,
+            "grok_intelligence":  grok_status,
+            "last_signal":        self._last["signal"],
+            "last_hourly":        self._last["hourly"],
+            "last_news":          self._last["news"],
+            "last_fear_greed":    self._last["fear_greed"],
+            "last_hot_take":      self._last["hot_take"],
+            "last_philosophy":    self._last["philosophy"],
+            "last_engagement":    self._last["engagement"],
+            "last_trending_hook": self._last.get("trending_hook", 0),
+            "last_viral_commentary": self._last.get("viral_commentary", 0),
+            "last_bold_prediction":  self._last.get("bold_prediction", 0),
+            "recent_posts":       self.recent_posts,
+            "posts_per_hour":     self.memory.posts_per_hour(),
+            "total_posts":        self.memory.total_posts(),
+            "next_post_in_sec":   max(0, HOURLY_COOLDOWN - (time.time() - self._last.get("hourly", 0))),
+            "last_error":         self._last_error,
         }
 
     # ── Core send (tries multiple methods) ────────────────────────────────────
@@ -1006,14 +1059,17 @@ class XPublisher:
 
     # Per-key cooldown durations (seconds) — used by the external scheduler
     _COOLDOWNS: dict[str, float] = {
-        "hourly":      HOURLY_COOLDOWN,
-        "fear_greed":  FEAR_GREED_COOLDOWN,
-        "hot_take":    HOT_TAKE_COOLDOWN,
-        "philosophy":  PHILOSOPHY_COOLDOWN,
-        "engagement":  ENGAGEMENT_COOLDOWN,
-        "btc_move":    BTC_MOVE_COOLDOWN,
-        "algo_insight": ALGO_INSIGHT_COOLDOWN,
-        "news":        NEWS_COOLDOWN,
+        "hourly":           HOURLY_COOLDOWN,
+        "fear_greed":       FEAR_GREED_COOLDOWN,
+        "hot_take":         HOT_TAKE_COOLDOWN,
+        "philosophy":       PHILOSOPHY_COOLDOWN,
+        "engagement":       ENGAGEMENT_COOLDOWN,
+        "btc_move":         BTC_MOVE_COOLDOWN,
+        "algo_insight":     ALGO_INSIGHT_COOLDOWN,
+        "news":             NEWS_COOLDOWN,
+        "trending_hook":    TRENDING_COOLDOWN,
+        "viral_commentary": VIRAL_COMMENTARY_COOLDOWN,
+        "bold_prediction":  BOLD_PREDICTION_COOLDOWN,
     }
 
     def _cooldown_ok(self, key: str, seconds: float) -> bool:
@@ -1479,6 +1535,145 @@ class XPublisher:
         text = self.memory.pick("algo_insight", ALGO_INSIGHTS)
         self._fire(text, "algo_insight")
         self._touch("algo_insight")
+
+    # ── 13. Trending Hook (Grok-powered) ──────────────────────────────────────
+
+    def post_trending_hook(self) -> None:
+        """
+        Grok searches X live → finds what's trending in BTC space right now
+        → generates a viral post that taps into the current narrative.
+        The highest-reach post type: uses real-time X data.
+        """
+        if not self._enabled or not self._cooldown_ok("trending_hook", TRENDING_COOLDOWN):
+            return
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            # Fallback to AI-generated hot take
+            self.post_hot_take()
+            return
+
+        ctx = self._live_context
+
+        async def _gen():
+            try:
+                # Refresh trends first if cache is stale
+                await self.grok.fetch_btc_trends()
+
+                text = await self.grok.generate_viral_post(
+                    angle=self.grok.get_random_viral_angle(),
+                    btc_price=ctx.get("price", 0),
+                    regime=ctx.get("regime", ""),
+                    daily_pnl=ctx.get("daily_pnl", 0),
+                    mood_tone=self.mood.tone,
+                    recent_posts=self._recent_texts_for_ai(6),
+                    post_type="trending_hook",
+                )
+                if not text:
+                    # Fallback: use trend context in regular AI generate
+                    trend_ctx = self.grok.get_trend_context_string()
+                    text = await self._ai_generate(
+                        self._build_ai_prompt("trending hook", f"tap into what's viral on X now: {trend_ctx}")
+                    )
+                if text:
+                    await self._send_tweet(text[:280], "trending_hook")
+                    logger.info(f"[XPublisher] Grok trending hook posted: {text[:60]}…")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_trending_hook error: {e}")
+
+        self._fire_async(_gen())
+        self._touch("trending_hook")
+
+    # ── 14. Viral Commentary (Grok-powered) ───────────────────────────────────
+
+    def post_viral_commentary(self) -> None:
+        """
+        Grok finds ONE specific tweet or topic going viral on BTC twitter right now,
+        then generates a sharp commentary that rides the wave for discovery/reach.
+        Replies and QRTs on viral content = massive follower growth.
+        """
+        if not self._enabled or not self._cooldown_ok("viral_commentary", VIRAL_COMMENTARY_COOLDOWN):
+            return
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            return
+
+        ctx = self._live_context
+
+        async def _gen():
+            try:
+                text = await self.grok.generate_viral_commentary(
+                    btc_price=ctx.get("price", 0),
+                    mood_tone=self.mood.tone,
+                    recent_posts=self._recent_texts_for_ai(6),
+                )
+                if text:
+                    await self._send_tweet(text[:280], "viral_commentary")
+                    logger.info(f"[XPublisher] Grok viral commentary posted: {text[:60]}…")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_viral_commentary error: {e}")
+
+        self._fire_async(_gen())
+        self._touch("viral_commentary")
+
+    # ── 15. Bold Prediction (Grok-powered) ────────────────────────────────────
+
+    def post_bold_prediction(self, macro_trend: str = "", fear_greed: int = 50) -> None:
+        """
+        Grok analyzes current market + X sentiment + news to produce a specific,
+        bold BTC price prediction. Controversial predictions drive massive engagement.
+        """
+        if not self._enabled or not self._cooldown_ok("bold_prediction", BOLD_PREDICTION_COOLDOWN):
+            return
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            # Fallback: deterministic prediction from content bank
+            fallback_preds = [
+                "btc is going higher\n\nnot a question of if\n\njust when",
+                "every dip has been bought\n\nthis one will be too\n\njust watch",
+                "the people who sold here are going to regret it\n\nthey always do",
+                "if btc closes this week above here we're going to see a serious move\n\nmark it",
+            ]
+            self._fire(random.choice(fallback_preds), "bold_prediction")
+            self._touch("bold_prediction")
+            return
+
+        ctx = self._live_context
+
+        async def _gen():
+            try:
+                text = await self.grok.generate_bold_prediction(
+                    btc_price=ctx.get("price", 0),
+                    regime=ctx.get("regime", ""),
+                    macro_trend=macro_trend,
+                    fear_greed=fear_greed,
+                )
+                if text:
+                    await self._send_tweet(text[:280], "bold_prediction")
+                    logger.info(f"[XPublisher] Grok bold prediction posted: {text[:60]}…")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_bold_prediction error: {e}")
+
+        self._fire_async(_gen())
+        self._touch("bold_prediction")
+
+    async def refresh_grok_trends(self) -> None:
+        """
+        Background refresh of Grok trend intelligence.
+        Called by PersistentAgent's market context loop periodically.
+        Keeps viral intelligence fresh without blocking the main scan.
+        """
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            return
+        now = time.time()
+        if now - self._last_grok_refresh < GROK_TREND_REFRESH:
+            return
+        try:
+            await self.grok.fetch_btc_trends()
+            await self.grok.fetch_viral_formats()
+            self._last_grok_refresh = now
+            logger.info(
+                f"[XPublisher] Grok trends refreshed — "
+                f"narrative: {getattr(self.grok, 'current_narrative', '')[:60]}"
+            )
+        except Exception as e:
+            logger.debug(f"[XPublisher] Grok refresh error: {e}")
 
     # ── Manual post (from dashboard) ──────────────────────────────────────────
 
