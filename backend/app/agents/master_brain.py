@@ -6,23 +6,25 @@ BingX execution. No strategy can trade directly — every signal must pass
 through the Brain's decision pipeline.
 
 Pipeline:
-  1. MACRO TREND    — 1h/4h multi-timeframe bias (new)
-  2. SESSION GATE   — time-of-day affinity (new)
+  1. MACRO TREND    — 1h/4h multi-timeframe bias
+  2. SESSION GATE   — time-of-day affinity
   3. CONFLUENCE     — how many strategies agree?
   4. REGIME         — 15m market regime
   5. PORTFOLIO      — exposure / correlation risk
-  6. RISK GATE      — daily loss, consecutive losses, drawdown (new)
-  7. MARKET CONTEXT — funding rate + Fear & Greed bias (new)
-  8. SIZING         — Kelly + ATR-adjusted + drawdown-scaled (new)
-  9. DECISION       — final APPROVE / REJECT / REDUCE with reasoning
+  6. RISK GATE      — daily loss, consecutive losses, drawdown
+  7. MARKET CONTEXT — funding rate + Fear & Greed bias
+  8. FIB LEVELS     — Fibonacci retracement bias (new)
+  9. SIZING         — Kelly + ATR-adjusted + drawdown-scaled
+ 10. DECISION       — final APPROVE / REJECT / REDUCE with reasoning
 
 Learning from every trade:
-  • Strategy trust via exponential EMA (recent results dominate)  [new]
+  • Strategy trust via exponential EMA (recent results dominate)
   • Regime affinity (what works in each regime)
-  • Session affinity (what works at each UTC hour)                [new]
-  • Profit factor tracking per strategy                           [new]
-  • Max drawdown tracking per strategy                            [new]
-  • Trade duration intelligence                                   [new]
+  • Session affinity (what works at each UTC hour)
+  • Profit factor tracking per strategy
+  • Max drawdown tracking per strategy
+  • Trade duration intelligence
+  • Fibonacci level hit-rate per level (new)
 """
 
 from __future__ import annotations
@@ -75,6 +77,14 @@ class MasterBrain:
         self._baseline_atr_pct: float = 0.5     # rolling 50-bar average
         self.funding_rate: float = 0.0          # BTC perp 8h funding rate
         self.fear_greed_score: int = 50         # 0-100 (alternative.me)
+
+        # ── Fibonacci levels (computed from swing high/low on 15m candles) ─
+        # Key retracement levels: 23.6%, 38.2%, 50%, 61.8%, 78.6%
+        self._fib_levels: dict[str, float] = {}   # e.g. {"23.6": 84210.5, ...}
+        self._fib_swing_high: float = 0.0
+        self._fib_swing_low: float = 0.0
+        self._fib_trend: str = "up"              # "up" (measuring retracement from high) or "down"
+        self._fib_updated_at: float = 0.0
 
         # ── Strategy trust scores (0.0 – 2.0, 1.0 = neutral) ────────────
         # Updated via exponential EMA — recent results dominate old history
@@ -280,6 +290,148 @@ class MasterBrain:
             self.funding_rate = round(funding_rate, 5)
         if fear_greed_score is not None:
             self.fear_greed_score = int(max(0, min(100, fear_greed_score)))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  FIBONACCI LEVEL DETECTION
+    # ══════════════════════════════════════════════════════════════════════
+
+    FIB_RATIOS = {
+        "23.6": 0.236,
+        "38.2": 0.382,
+        "50.0": 0.500,
+        "61.8": 0.618,   # "golden ratio" — highest-probability reversal
+        "78.6": 0.786,
+    }
+    FIB_TOLERANCE_ATR_MULT = 0.8  # within 0.8× ATR = "near" a level
+
+    def compute_fib_levels(self, candles: list[dict], lookback: int = 100) -> None:
+        """
+        Detect swing high/low over the last `lookback` candles and compute
+        Fibonacci retracement levels. Called by PersistentAgent every 15 min.
+
+        Trend direction is set by whether the most recent candle is closer
+        to the swing high (uptrend in progress, measuring pullback levels)
+        or the swing low (downtrend, measuring bounce levels).
+        """
+        if len(candles) < 20:
+            return
+
+        bars = candles[-lookback:] if len(candles) >= lookback else candles
+        highs  = [c["high"]  for c in bars]
+        lows   = [c["low"]   for c in bars]
+        closes = [c["close"] for c in bars]
+
+        swing_high = max(highs)
+        swing_low  = min(lows)
+        rng = swing_high - swing_low
+
+        if rng <= 0:
+            return
+
+        current = closes[-1]
+
+        # Determine trend: if price is in the upper half → uptrend, measure pullbacks FROM high
+        # If in the lower half → downtrend, measure bounces FROM low
+        upper_half = current > (swing_low + rng * 0.5)
+        self._fib_trend = "up" if upper_half else "down"
+
+        if self._fib_trend == "up":
+            # Retracement levels below swing high (support on pullback)
+            self._fib_levels = {
+                k: round(swing_high - r * rng, 2)
+                for k, r in self.FIB_RATIOS.items()
+            }
+        else:
+            # Retracement levels above swing low (resistance on bounce)
+            self._fib_levels = {
+                k: round(swing_low + r * rng, 2)
+                for k, r in self.FIB_RATIOS.items()
+            }
+
+        self._fib_swing_high = swing_high
+        self._fib_swing_low  = swing_low
+        self._fib_updated_at = time.time()
+
+        logger.debug(
+            f"[MasterBrain] Fib levels ({self._fib_trend}trend) — "
+            f"high ${swing_high:,.0f} / low ${swing_low:,.0f} / range ${rng:,.0f} — "
+            f"61.8%: ${self._fib_levels.get('61.8', 0):,.0f}"
+        )
+
+    def _fib_bias(self, live_price: float, direction: str, atr_usd: float) -> tuple[float, str]:
+        """
+        Return (score_multiplier, reason_string) based on proximity to Fib levels.
+
+        Logic:
+        • Uptrend: price near 38.2/50/61.8 support → long bias ✅ | short bias ❌
+        • Downtrend: price near 38.2/50/61.8 resistance → short bias ✅ | long bias ❌
+        • 61.8% (golden ratio) gets the strongest weight
+        • 78.6% is a deep retracement — extra caution on both sides
+        • 23.6% is shallow — mild bonus if trading with trend
+        """
+        if not self._fib_levels or live_price <= 0 or atr_usd <= 0:
+            return 1.0, ""
+
+        tol = atr_usd * self.FIB_TOLERANCE_ATR_MULT
+
+        # Level weights: golden ratio strongest
+        weights = {"23.6": 0.5, "38.2": 1.0, "50.0": 1.0, "61.8": 1.5, "78.6": 0.7}
+        nearest_level: Optional[str] = None
+        nearest_dist  = float("inf")
+
+        for lvl_name, lvl_price in self._fib_levels.items():
+            dist = abs(live_price - lvl_price)
+            if dist < nearest_dist:
+                nearest_dist  = dist
+                nearest_level = lvl_name
+
+        if nearest_level is None or nearest_dist > tol * 3:
+            return 1.0, ""   # too far from any level
+
+        w = weights.get(nearest_level, 1.0)
+        proximity = max(0.0, 1.0 - (nearest_dist / (tol * 3)))  # 1.0 = exact, 0 = at 3×ATR
+        effect_mag = proximity * w * 0.15   # max ±15% per level at exact hit, weighted
+
+        trend_up = self._fib_trend == "up"
+
+        # Uptrend: Fib levels are support → favour longs near levels, penalise shorts
+        # Downtrend: Fib levels are resistance → favour shorts near levels, penalise longs
+        if nearest_dist <= tol:  # within tolerance — strong effect
+            if trend_up and direction == "long":
+                mult = 1.0 + effect_mag
+                reason = f"Fib {nearest_level}% support ${self._fib_levels[nearest_level]:,.0f} — long confluence ✅"
+                return round(mult, 3), reason
+            elif trend_up and direction == "short":
+                mult = 1.0 - effect_mag
+                reason = f"shorting at Fib {nearest_level}% support — counter-trend ⚠️"
+                return round(mult, 3), reason
+            elif not trend_up and direction == "short":
+                mult = 1.0 + effect_mag
+                reason = f"Fib {nearest_level}% resistance ${self._fib_levels[nearest_level]:,.0f} — short confluence ✅"
+                return round(mult, 3), reason
+            elif not trend_up and direction == "long":
+                mult = 1.0 - effect_mag
+                reason = f"longing at Fib {nearest_level}% resistance — counter-trend ⚠️"
+                return round(mult, 3), reason
+
+        # Near but not within tight tolerance — mild proximity effect
+        if trend_up and direction == "long" and nearest_dist <= tol * 2:
+            return round(1.0 + effect_mag * 0.5, 3), f"approaching Fib {nearest_level}% support"
+        if not trend_up and direction == "short" and nearest_dist <= tol * 2:
+            return round(1.0 + effect_mag * 0.5, 3), f"approaching Fib {nearest_level}% resistance"
+
+        return 1.0, ""
+
+    def fib_status(self) -> dict:
+        """Return current Fibonacci levels for API/dashboard display."""
+        age_min = round((time.time() - self._fib_updated_at) / 60, 1) if self._fib_updated_at else None
+        return {
+            "levels":      self._fib_levels,
+            "swing_high":  self._fib_swing_high,
+            "swing_low":   self._fib_swing_low,
+            "trend":       self._fib_trend,
+            "updated_min_ago": age_min,
+        }
 
     # ══════════════════════════════════════════════════════════════════════
     #  CORE DECISION: should we take this trade?
@@ -573,6 +725,20 @@ class MasterBrain:
             size_mult *= 0.80
             reasons.append(f"losses held {avg_loss_dur:.0f}m vs wins {avg_win_dur:.0f}m — size trimmed")
 
+        # ── FEATURE 11: Fibonacci level bias ─────────────────────────────
+        # Use ATR in USD to define "near" tolerance for each Fib level
+        atr_usd = live_price * (self.current_atr_pct / 100) if live_price > 0 else 0
+        fib_mult, fib_reason = self._fib_bias(live_price, direction, atr_usd)
+        if fib_reason:
+            score *= fib_mult
+            reasons.append(fib_reason)
+            # Hard reject for live: don't short at key Fib support or long at key resistance
+            if is_live and fib_mult < 0.88 and "counter-trend" in fib_reason:
+                return self._reject(
+                    strategy_key, strategy_name, signal,
+                    f"Fib counter-trend: {fib_reason}",
+                )
+
         # ── Final decision ────────────────────────────────────────────────
         conviction = min(1.0, max(0.0, score))
         threshold  = self.LIVE_CONVICTION_THRESHOLD if is_live else self.PAPER_CONVICTION_THRESHOLD
@@ -615,6 +781,8 @@ class MasterBrain:
                 "total_trades":   total_trades,
                 "win_rate":       round(win_rate, 3),
                 "current_dd":     round(current_dd, 2),
+                "fib_mult":       round(fib_mult, 3),
+                "fib_level":      fib_reason[:60] if fib_reason else "none",
             },
         }
 
@@ -981,6 +1149,7 @@ class MasterBrain:
                 "baseline_atr":    round(self._baseline_atr_pct, 4),
                 "funding_rate":    round(self.funding_rate, 5),
                 "fear_greed":      self.fear_greed_score,
+                "fib":             self.fib_status(),
             },
             "strategy_trust":      {k: round(v, 2) for k, v in self.strategy_trust.items()},
             "live_readiness":      live_readiness,
@@ -1044,6 +1213,10 @@ class MasterBrain:
             "_learned_affinity":   self._learned_affinity,
             "_hour_stats":         self._hour_stats,
             "_session_stats":      self._session_stats,
+            "_fib_levels":         self._fib_levels,
+            "_fib_swing_high":     self._fib_swing_high,
+            "_fib_swing_low":      self._fib_swing_low,
+            "_fib_trend":          self._fib_trend,
         }
 
     def from_dict(self, data: dict) -> None:
@@ -1084,6 +1257,13 @@ class MasterBrain:
         stored_sess = data.get("_session_stats", {})
         for s, v in stored_sess.items():
             self._session_stats[s] = v
+
+        # Restore Fibonacci state
+        if data.get("_fib_levels"):
+            self._fib_levels     = data["_fib_levels"]
+            self._fib_swing_high = data.get("_fib_swing_high", 0.0)
+            self._fib_swing_low  = data.get("_fib_swing_low",  0.0)
+            self._fib_trend      = data.get("_fib_trend",  "up")
 
     # ── Math helpers ──────────────────────────────────────────────────────
 

@@ -1334,7 +1334,16 @@ class PersistentAgent:
         self.brain.detect_regime(candles15m, candles1m)
         if candles1h or candles4h:
             self.brain.detect_macro_trend(candles1h, candles4h)
+
+        # ── MasterBrain: Fibonacci levels (every 15 scans ≈ 5 min) ─────
+        if self.scan_count % 15 == 0 and len(candles15m) >= 20:
+            self.brain.compute_fib_levels(candles15m, lookback=100)
+
         if self.scan_count % 10 == 1:
+            fib_info = ""
+            if self.brain._fib_levels:
+                fib_618 = self.brain._fib_levels.get("61.8", 0)
+                fib_info = f" · Fib 61.8%=${fib_618:,.0f}({self.brain._fib_trend})"
             stability = self.brain._regime_stability()
             self._log(
                 f"🧠 Regime: {self.brain.current_regime.upper()} "
@@ -1342,7 +1351,7 @@ class PersistentAgent:
                 f"Macro: {self.brain.macro_trend.upper()} ({self.brain.macro_confidence:.0%}) · "
                 f"ATR {self.brain.current_atr_pct:.3%} · "
                 f"F&G {self.brain.fear_greed_score} · "
-                f"Funding {self.brain.funding_rate:+.4%}"
+                f"Funding {self.brain.funding_rate:+.4%}{fib_info}"
             )
 
             # Log live readiness summary
