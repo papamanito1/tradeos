@@ -57,7 +57,10 @@ DEFAULT_CONFIG = {
     },
 }
 
-STRATEGY_KEYS = ["momentum", "hft", "orb", "obi"]
+STRATEGY_KEYS = ["momentum", "hft", "orb", "obi", "fusion"]
+
+# Max hold time (minutes) for always-on shadow paper positions
+SHADOW_MAX_HOLD = {"momentum": 90, "hft": 20, "orb": 60, "obi": 10, "grid": 45}
 
 # ── Indicator helpers ─────────────────────────────────────────────────────────
 
@@ -611,6 +614,8 @@ class PersistentAgent:
         # Master Brain — central intelligence for trade decisions
         from app.agents.master_brain import MasterBrain
         self.brain = MasterBrain()
+        # Ensure fusion strategy slot exists in brain trust scores
+        self.brain.strategy_trust.setdefault("fusion", 1.0)
         # X/Twitter publisher — gracefully disabled when env vars are absent
         from app.agents.x_publisher import XPublisher
         self.x_publisher = XPublisher()
@@ -651,12 +656,19 @@ class PersistentAgent:
             "grid_state":      self.grid_state,
             "training_index":  self.training_index,
             "saved_at":        datetime.now(timezone.utc).isoformat(),
+            # Shadow positions survive restarts so training data is continuous
+            "shadow_positions": {k: v for k, v in self.positions.items()
+                                 if k.startswith("shadow_") and v},
         }
 
     def _apply_state(self, data: dict) -> None:
         loaded_cfg      = data.get("config", {})
         self.config     = {**DEFAULT_CONFIG.copy(), **loaded_cfg}   # merge so new keys always exist
         self.positions  = data.get("positions",  {})
+        # Restore shadow positions into the main positions dict
+        for k, v in data.get("shadow_positions", {}).items():
+            if k not in self.positions:
+                self.positions[k] = v
         self.trades     = data.get("trades",     [])[-500:]   # keep up to 500 trades in memory
         self.log        = data.get("log",        [])[-100:]
         self.grid_state      = data.get("grid_state", {})
@@ -684,6 +696,8 @@ class PersistentAgent:
                         f"(Brain had {brain_total})")
             for t in reversed(self.trades):
                 sk = t.get("strategy_key", "")
+                if sk.startswith("shadow_"):
+                    sk = sk.replace("shadow_", "")
                 if sk.startswith("grid_"):
                     sk = "grid"
                 if not sk:
@@ -1256,6 +1270,76 @@ class PersistentAgent:
                     ti_str = f" · trust {trust:.2f} {label}" if ti.get("total_trades", 0) > 0 else ""
                     self._log(f"[{name}] {met}/{total} conds · no signal · {bias}{ti_str}")
 
+        # ── Always-on shadow paper training ──────────────────────────────────
+        # Every strategy that fires a signal also opens a shadow paper position
+        # regardless of live/paper mode. This generates continuous training data
+        # so the Brain never stops learning, even when a strategy is going live.
+        for key, result in strategies:
+            s_cfg = self._strategy_cfg(key)
+            if not s_cfg.get("enabled", True):
+                continue
+            sig = result.get("signal")
+            if not sig:
+                continue
+            shadow_key = f"shadow_{key}"
+            if self.positions.get(shadow_key):
+                continue  # shadow already open for this strategy
+            # Lower bar for shadow — we want maximum training data
+            min_conf = max(0.40, s_cfg.get("min_confidence", 0.50) - 0.08)
+            if sig.get("confidence", 0) >= min_conf:
+                self._open_shadow(shadow_key, result.get("name", key), sig, s_cfg, live_price)
+
+        # ── Fusion strategy — ONE unified meta-signal from all sub-strategies ─
+        # The MasterBrain acts as an ensemble learner: it weights each strategy's
+        # signal by trust × learned_regime_affinity × signal_confidence, then
+        # fuses them into a single directional conviction.  Only ONE fusion
+        # position is open at a time; it uses the same SL/TP/leverage config as
+        # individual strategies.
+        results_dict = {key: result for key, result in strategies}
+        fusion_pos = self.positions.get("fusion")
+
+        if not fusion_pos and cfg.get("enabled", True) and cfg.get("auto_execute", True):
+            fusion_sig = self.brain.fuse_signals(results_dict, live_price)
+            if fusion_sig:
+                fusion_cfg = {
+                    "enabled":        True,
+                    "size_usdc":      cfg.get("size_usdc", 5),
+                    "leverage":       cfg.get("leverage", 60),
+                    "min_confidence": 0.40,
+                    "min_conditions": 1,
+                    "mode":           cfg.get("mode", "paper"),
+                    "auto_execute":   True,
+                }
+                f_decision = self.brain.evaluate_signal(
+                    strategy_key="fusion",
+                    strategy_name="Fusion Strategy",
+                    signal=fusion_sig,
+                    open_positions=self.positions,
+                    live_price=live_price,
+                    portfolio_pnl=self.stats.get("total_pnl", 0),
+                    is_live=self._is_live_mode(),
+                )
+                contributors = fusion_sig.get("contributors", [])
+                n_strats     = len(results_dict)
+                consensus    = fusion_sig.get("consensus", 0)
+                self._log(
+                    f"🎯 FUSION {fusion_sig['direction'].upper()} · "
+                    f"{len(contributors)}/{n_strats} agree · "
+                    f"consensus {consensus:.0%} · "
+                    f"conf {fusion_sig['confidence']:.0%} · "
+                    f"[{', '.join(contributors)}] · "
+                    f"{'✅ EXECUTING' if f_decision['approved'] else '❌ ' + f_decision['reasoning'][:50]}"
+                )
+                if f_decision["approved"]:
+                    adj_cfg = dict(fusion_cfg)
+                    adj_cfg["size_usdc"] = round(
+                        fusion_cfg["size_usdc"] * f_decision["size_multiplier"], 2
+                    )
+                    self._open_position("fusion", "Fusion Strategy", fusion_sig, adj_cfg, live_price)
+                    any_signal = True
+            elif self.scan_count % 5 == 0:
+                self._log(f"🎯 FUSION: no consensus · regime={self.brain.current_regime}")
+
         # ── Grid $50 strategy (multi-position) ───────────────────────────────
         grid_cfg = self._strategy_cfg("grid")
         MAX_GRID_POSITIONS = 5
@@ -1421,6 +1505,56 @@ class PersistentAgent:
         self.positions[key] = pos
         self._log(f"📋 [SHADOW] [{name}] {d.upper()} @ ${entry:.0f} · paper training while building live confidence")
 
+    # ── Always-on shadow training position ───────────────────────────────────
+
+    def _open_shadow(self, shadow_key: str, name: str, sig: dict, cfg: dict, price: float) -> None:
+        """
+        Open a lightweight paper shadow position for continuous training.
+        Shadow positions NEVER go live — they exist purely to generate training data
+        for the MasterBrain regardless of the current trading mode.
+        """
+        if self.positions.get(shadow_key):
+            return
+        entry  = price if price > 0 else sig.get("entry", price)
+        d      = sig["direction"]
+        sig_e  = sig.get("entry", entry) or entry
+
+        # Preserve SL/TP distances from signal, shift to actual fill price
+        sl_dist = abs(sig_e - (sig.get("sl") or sig_e)) if sig.get("sl") else entry * 0.004
+        tp_dist = abs((sig.get("tp") or sig_e) - sig_e) if sig.get("tp") else entry * 0.008
+        sl = (entry - sl_dist) if d == "long" else (entry + sl_dist)
+        tp = (entry + tp_dist) if d == "long" else (entry - tp_dist)
+
+        strat_key = shadow_key.replace("shadow_", "")
+        size_usd  = min(cfg.get("size_usdc", 5), 5.0)  # shadow uses small fixed size
+        btc_size  = size_usd / entry if entry > 0 else 0
+
+        pos = {
+            "id":             f"{shadow_key}-{int(time.time()*1000)}",
+            "strategy_key":   shadow_key,
+            "strategy_name":  f"[SHADOW] {name}",
+            "direction":      d,
+            "entry":          round(entry, 2),
+            "sl":             round(sl, 2),
+            "tp":             round(tp, 2),
+            "size_usdc":      size_usd,
+            "leverage":       1,
+            "confidence":     sig.get("confidence", 0.5),
+            "reasoning":      sig.get("reasoning", ""),
+            "rr":             sig.get("rr", "1:2"),
+            "timestamp":      datetime.now(timezone.utc).isoformat(),
+            "current_price":  entry,
+            "unrealized_pnl": 0.0,
+            "unrealized_pct": 0.0,
+            "btc_size":       btc_size,
+            "is_paper":       True,
+            "is_shadow":      True,
+            "mode":           "shadow",
+            "strat_key_ref":  strat_key,   # which strategy this shadow tracks
+        }
+        self.positions[shadow_key] = pos
+        self._log(f"📋 [SHADOW] {name} {d.upper()} @ ${entry:.0f} · training always on")
+
     # ── Position management ───────────────────────────────────────────────────
 
     def _open_position(self, key: str, name: str, sig: dict, cfg: dict, price: float) -> None:
@@ -1515,11 +1649,18 @@ class PersistentAgent:
                   f"conf {sig['confidence']*100:.0f}%{lev_str}{slip_str}")
 
     # Max hold time in minutes per strategy before auto-close at market
-    MAX_HOLD_MINUTES = {"momentum": 240, "hft": 45, "orb": 180, "obi": 15, "grid": 120}
+    MAX_HOLD_MINUTES = {
+        "momentum": 240, "hft": 45, "orb": 180, "obi": 15, "grid": 120,
+        "fusion": 120,
+    }
 
     def _max_hold_for_key(self, key: str) -> int:
         if key.startswith("grid_"):
             return self.MAX_HOLD_MINUTES["grid"]
+        if key.startswith("shadow_"):
+            # Shadow positions have shorter hold so training cycles faster
+            strat = key.replace("shadow_", "")
+            return SHADOW_MAX_HOLD.get(strat, 30)
         return self.MAX_HOLD_MINUTES.get(key, 120)
 
     async def _sync_exchange_positions(self, live_price: float) -> None:
@@ -1603,6 +1744,14 @@ class PersistentAgent:
         if not pos:
             return
 
+        # Shadow positions are always paper — never touch the exchange
+        if pos.get("is_shadow") or key.startswith("shadow_"):
+            d    = pos["direction"]
+            diff = (exit_price - pos["entry"]) if d == "long" else (pos["entry"] - exit_price)
+            pnl  = round(diff * pos["btc_size"], 2)
+            self._record_trade_closure(key, pos, pnl, exit_price, reason, is_live=False)
+            return
+
         # ── LIVE MODE: close on BingX exchange ────────────────────────────────
         if pos.get("mode") == "live" and self._live:
             async def _do_live_close():
@@ -1659,7 +1808,15 @@ class PersistentAgent:
         self._log(f"{prefix} [{pos['strategy_name']}] {reason.upper()} @ ${exit_price:.0f} · "
                   f"P&L {'+' if pnl>=0 else ''}${pnl:.2f}")
 
-        strat_key = key.split("_")[0] if key.startswith("grid_") else key
+        # Resolve canonical strategy key for brain learning
+        if key.startswith("shadow_"):
+            strat_key = key.replace("shadow_", "")
+            if strat_key.startswith("grid_"):
+                strat_key = "grid"
+        elif key.startswith("grid_"):
+            strat_key = "grid"
+        else:
+            strat_key = key
         won = pnl > 0
         self.brain.record_trade_result(strat_key, pnl, won, was_live=is_live)
 
@@ -1747,7 +1904,11 @@ class PersistentAgent:
     def get_status(self) -> dict:
         from app.agents.live_market_stream import LIVE_PRICES
         price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0)
-        open_positions = [p for p in self.positions.values() if p]
+        # Separate live/paper positions from shadow training positions
+        open_positions = [p for k, p in self.positions.items()
+                          if p and not k.startswith("shadow_")]
+        shadow_positions = [p for k, p in self.positions.items()
+                            if p and k.startswith("shadow_")]
         open_grid      = [p for k, p in self.positions.items() if k.startswith("grid_") and p]
 
         live_executor_status = None
@@ -1767,6 +1928,7 @@ class PersistentAgent:
             "last_scan":            self.last_scan,
             "live_price":           price,
             "open_positions":       open_positions,
+            "shadow_positions":     shadow_positions,
             "trades":               self.trades[:200],
             "stats":                self.stats,
             "log":                  self.log[:100],

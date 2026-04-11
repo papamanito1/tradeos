@@ -57,13 +57,19 @@ class MasterBrain:
         # ── Decision log ─────────────────────────────────────────────────
         self.decisions: list[dict] = []  # last 50 decisions
 
-        # ── Regime-strategy affinity map ─────────────────────────────────
+        # ── Regime-strategy affinity map (base priors) ───────────────────
         self.REGIME_AFFINITY = {
-            "trending_up":   {"momentum": 1.4, "hft": 0.7, "orb": 1.2, "obi": 0.8, "grid": 0.6},
-            "trending_down": {"momentum": 1.3, "hft": 0.7, "orb": 1.1, "obi": 0.9, "grid": 0.5},
-            "ranging":       {"momentum": 0.5, "hft": 1.3, "orb": 0.6, "obi": 1.2, "grid": 1.5},
-            "volatile":      {"momentum": 0.8, "hft": 1.1, "orb": 0.9, "obi": 1.0, "grid": 0.4},
-            "unknown":       {"momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0, "grid": 1.0},
+            "trending_up":   {"momentum": 1.4, "hft": 0.7, "orb": 1.2, "obi": 0.8, "grid": 0.6, "fusion": 1.0},
+            "trending_down": {"momentum": 1.3, "hft": 0.7, "orb": 1.1, "obi": 0.9, "grid": 0.5, "fusion": 1.0},
+            "ranging":       {"momentum": 0.5, "hft": 1.3, "orb": 0.6, "obi": 1.2, "grid": 1.5, "fusion": 1.0},
+            "volatile":      {"momentum": 0.8, "hft": 1.1, "orb": 0.9, "obi": 1.0, "grid": 0.4, "fusion": 1.0},
+            "unknown":       {"momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0, "grid": 1.0, "fusion": 1.0},
+        }
+
+        # ── Learned affinity — updated from every trade result ────────────
+        # Starts as a copy of REGIME_AFFINITY; drifts toward what actually works.
+        self._learned_affinity: dict[str, dict[str, float]] = {
+            regime: dict(vals) for regime, vals in self.REGIME_AFFINITY.items()
         }
 
         # ── Live readiness thresholds ─────────────────────────────────────
@@ -75,7 +81,7 @@ class MasterBrain:
         # ── Limits ───────────────────────────────────────────────────────
         self.MAX_DAILY_TRADES = 30
         self.MAX_CONSECUTIVE_LOSSES = 5
-        self.MAX_OPEN_POSITIONS = 6   # across all strategies
+        self.MAX_OPEN_POSITIONS = 8   # across all strategies + shadows
         self.MAX_DAILY_LOSS = -300.0  # hard stop
         self.CORRELATION_PENALTY = 0.5  # reduce size if same-direction positions open
 
@@ -356,6 +362,130 @@ class MasterBrain:
         return decision
 
     # ══════════════════════════════════════════════════════════════════════
+    #  FUSION: combine all strategy signals into one unified meta-signal
+    # ══════════════════════════════════════════════════════════════════════
+
+    def fuse_signals(
+        self,
+        strategy_results: dict,   # {key: {signal, met_count, bias, name, ...}}
+        live_price: float,
+    ) -> Optional[dict]:
+        """
+        Trust × learned-affinity × confidence weighted voting across all strategies.
+        Returns one unified signal or None if no consensus.
+        """
+        if live_price <= 0:
+            return None
+
+        long_signals:  list[tuple[str, dict, float]] = []
+        short_signals: list[tuple[str, dict, float]] = []
+        long_w = short_w = 0.0
+
+        for key, result in strategy_results.items():
+            sig = result.get("signal")
+            if not sig:
+                continue
+            direction = sig.get("direction", "")
+            if direction not in ("long", "short"):
+                continue
+
+            confidence = sig.get("confidence", 0.5)
+            trust      = self.strategy_trust.get(key, 1.0)
+            # Use learned affinity (what actually worked) blended with base prior
+            base_aff   = self.REGIME_AFFINITY.get(self.current_regime, {}).get(key, 1.0)
+            learn_aff  = self._learned_affinity.get(self.current_regime, {}).get(key, 1.0)
+            affinity   = (base_aff + learn_aff) / 2          # blend priors + experience
+            weight     = confidence * trust * affinity
+
+            if direction == "long":
+                long_w += weight
+                long_signals.append((key, sig, weight))
+            else:
+                short_w += weight
+                short_signals.append((key, sig, weight))
+
+        total_w = long_w + short_w
+        if total_w < 0.05 or (not long_signals and not short_signals):
+            return None
+
+        if long_w >= short_w:
+            direction, signals, win_w = "long",  long_signals,  long_w
+        else:
+            direction, signals, win_w = "short", short_signals, short_w
+
+        consensus = win_w / total_w
+        # Require consensus AND at least 1 contributing strategy
+        if consensus < 0.40 or not signals:
+            return None
+
+        # Weighted SL/TP from contributing strategies
+        sl_sum = tp_sum = w_sum = 0.0
+        contributors: list[str] = []
+        for key, sig, w in signals:
+            sl = sig.get("sl") or 0.0
+            tp = sig.get("tp") or 0.0
+            if sl > 0 and tp > 0:
+                sl_sum += sl * w
+                tp_sum += tp * w
+                w_sum  += w
+            contributors.append(key)
+
+        if w_sum > 0:
+            fused_sl = sl_sum / w_sum
+            fused_tp = tp_sum / w_sum
+        else:
+            sl_dist  = live_price * 0.004
+            tp_dist  = live_price * 0.009
+            fused_sl = (live_price - sl_dist) if direction == "long" else (live_price + sl_dist)
+            fused_tp = (live_price + tp_dist) if direction == "long" else (live_price - tp_dist)
+
+        # Confidence: normalised weight × consensus bonus
+        n = max(len(strategy_results), 1)
+        confidence = min(0.97, (win_w / n) * (0.5 + consensus * 0.5))
+
+        rr = abs(fused_tp - live_price) / max(abs(live_price - fused_sl), 1)
+
+        return {
+            "direction":    direction,
+            "entry":        round(live_price, 2),
+            "sl":           round(fused_sl, 2),
+            "tp":           round(fused_tp, 2),
+            "confidence":   round(confidence, 3),
+            "rr":           f"1:{rr:.1f}",
+            "reasoning":    (
+                f"FUSION {direction.upper()} · {len(contributors)}/{n} agree · "
+                f"consensus {consensus:.0%} · weight {win_w:.2f} · "
+                f"regime {self.current_regime} · [{', '.join(contributors)}]"
+            ),
+            "contributors": contributors,
+            "long_weight":  round(long_w, 3),
+            "short_weight": round(short_w, 3),
+            "consensus":    round(consensus, 3),
+        }
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  ADAPTIVE LEARNING: update regime affinity from every trade result
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _adapt_affinity(self, strategy_key: str, regime: str, won: bool) -> None:
+        """
+        Nudge learned regime affinity based on trade outcome.
+        Winning strategies in a regime get boosted; losing ones get penalised.
+        Converges toward the true affinity over hundreds of trades.
+        """
+        if not regime or regime not in self._learned_affinity:
+            # Initialise regime bucket if missing (e.g. after schema upgrade)
+            self._learned_affinity[regime] = {
+                k: 1.0 for k in list(self.strategy_trust.keys()) + ["fusion"]
+            }
+
+        current = self._learned_affinity[regime].get(strategy_key, 1.0)
+        # Small learning rate so affinity changes are gradual
+        delta   = +0.04 if won else -0.06
+        updated = round(max(0.20, min(2.50, current + delta)), 3)
+        self._learned_affinity[regime][strategy_key] = updated
+
+    # ══════════════════════════════════════════════════════════════════════
     #  LEARNING: update trust after trade closes
     # ══════════════════════════════════════════════════════════════════════
 
@@ -402,11 +532,16 @@ class MasterBrain:
             s["avg_loss"] = sum(s["loss_pnls"]) / len(s["loss_pnls"]) if s["loss_pnls"] else 0
         s["win_rate"] = s["wins"] / s["trades"] if s["trades"] > 0 else 0.5
 
+        # ── Adaptive regime affinity — learns what works in each market type ──
+        self._adapt_affinity(strategy_key, self.current_regime, won)
+
         mode_tag = "LIVE" if was_live else "PAPER"
+        learned_aff = self._learned_affinity.get(self.current_regime, {}).get(strategy_key, 1.0)
         logger.info(f"[MasterBrain] [{mode_tag}] {strategy_key} {'WIN' if won else 'LOSS'} "
                     f"${pnl:+.2f} · trust {self.strategy_trust[strategy_key]:.2f} "
                     f"· win rate {s['win_rate']:.0%} ({s['trades']} trades) "
-                    f"· streak {self.consecutive_losses} losses")
+                    f"· streak {self.consecutive_losses} losses "
+                    f"· regime_aff[{self.current_regime}]={learned_aff:.2f}")
 
     # ══════════════════════════════════════════════════════════════════════
     #  PORTFOLIO ANALYSIS
@@ -479,6 +614,10 @@ class MasterBrain:
         portfolio = self.portfolio_summary(positions, live_price)
         live_readiness = {k: self.is_strategy_live_ready(k)
                          for k in self.strategy_trust}
+        learned_aff_rounded = {
+            regime: {k: round(v, 2) for k, v in affs.items()}
+            for regime, affs in self._learned_affinity.items()
+        }
         return {
             "regime":             self.current_regime,
             "regime_confidence":  self.regime_confidence,
@@ -490,6 +629,7 @@ class MasterBrain:
             "recent_decisions":   self.decisions[:10],
             "strategy_stats":     {k: {kk: vv for kk, vv in v.items() if kk not in ("win_pnls", "loss_pnls")}
                                    for k, v in self.strategy_stats.items()},
+            "learned_affinity":   learned_aff_rounded,
             "limits": {
                 "max_daily_trades":      self.MAX_DAILY_TRADES,
                 "max_consecutive_losses": self.MAX_CONSECUTIVE_LOSSES,
@@ -527,6 +667,7 @@ class MasterBrain:
             "daily_losses_count": self.daily_losses_count,
             "_day_str":           self._day_str,
             "decisions":          self.decisions[:20],
+            "_learned_affinity":  self._learned_affinity,
         }
 
     def from_dict(self, data: dict) -> None:
@@ -544,6 +685,12 @@ class MasterBrain:
         self.daily_losses_count = data.get("daily_losses_count", 0)
         self._day_str           = data.get("_day_str", self._day_str)
         self.decisions          = data.get("decisions", [])
+        # Restore learned affinity — merge stored values over default priors
+        stored_aff = data.get("_learned_affinity", {})
+        for regime, affinities in stored_aff.items():
+            if regime not in self._learned_affinity:
+                self._learned_affinity[regime] = {}
+            self._learned_affinity[regime].update(affinities)
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
