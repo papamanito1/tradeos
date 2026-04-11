@@ -2,7 +2,12 @@
 Persistent Agent API
 ====================
 REST endpoints for controlling and monitoring the 24/7 trading agent.
-All endpoints require a valid JWT — Authorization: Bearer <token>.
+
+Read endpoints (status, live/status, brain, paper-trader) are open so
+the dashboard can poll freely without a token.
+
+All write/control endpoints require a valid JWT:
+  Authorization: Bearer <token>
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -19,8 +24,8 @@ def _get():
 
 
 @router.get("/status")
-async def get_status(_: dict = Depends(get_current_user)):
-    """Full agent state snapshot — positions, trades, log, config."""
+async def get_status():
+    """Full agent state snapshot — positions, trades, log, config. Open for dashboard polling."""
     return _get().get_status()
 
 
@@ -93,7 +98,7 @@ async def close_position(strategy_key: str, _: dict = Depends(get_current_user))
 
 
 @router.get("/net-test")
-async def network_test(_: dict = Depends(get_current_user)):
+async def network_test():
     """
     Test outbound HTTP from Railway — call this endpoint to see which price
     sources are reachable. Visit: <your-railway-url>/api/agent/net-test
@@ -156,7 +161,7 @@ async def force_scan(_: dict = Depends(get_current_user)):
 # ── Live Trading (BingX) ───────────────────────────────────────────────────────
 
 @router.get("/live/status")
-async def live_status(_: dict = Depends(get_current_user)):
+async def live_status():
     """Return live executor status — open BingX positions, daily P&L, circuit breaker."""
     agent = _get()
     if not agent._live:
@@ -227,7 +232,7 @@ async def cancel_orphaned_orders(_: dict = Depends(get_current_user)):
 # ── Master Brain ──────────────────────────────────────────────────────────
 
 @router.get("/brain")
-async def get_brain_status(_: dict = Depends(get_current_user)):
+async def get_brain_status():
     """Full MasterBrain state — regime, trust, portfolio, decisions."""
     agent = _get()
     from app.agents.live_market_stream import LIVE_PRICES
@@ -249,7 +254,7 @@ async def reset_brain_trust(_: dict = Depends(get_current_user)):
 # ── Paper Trader ──────────────────────────────────────────────────────────
 
 @router.get("/paper-trader")
-async def get_paper_trader(_: dict = Depends(get_current_user)):
+async def get_paper_trader():
     """Full paper trader status — balance, positions, trades, equity curve."""
     return _get().paper_trader.get_status()
 
