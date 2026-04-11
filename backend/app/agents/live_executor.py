@@ -30,8 +30,9 @@ class LiveExecutor:
     One instance shared by PersistentAgent.
     """
 
-    FIXED_MARGIN_USD = 5.0       # fixed $5 margin per trade
-    MAX_LEVERAGE = 60            # hard cap on leverage
+    FIXED_MARGIN_USD    = 5.0    # fixed $5 margin per trade
+    MAX_LEVERAGE        = 60     # hard cap on leverage
+    RISK_PER_TRADE_PCT  = 0.02   # 2% risk per trade (display / logging only)
 
     def __init__(
         self,
