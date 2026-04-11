@@ -56,8 +56,8 @@ async def fetch_creds():
             r = await s.get(f"{RAILWAY_URL}/api/x-agent/creds", timeout=15)
             data = r.json()
             if data.get("ok"):
-                _auth_token = data["a"]
-                _ct0 = data["c"]
+                _auth_token = data["a"].strip()
+                _ct0 = data["c"].strip()
                 log.info(f"Got X cookies from Railway (auth_token: {_auth_token[:12]}...)")
                 return True
             else:

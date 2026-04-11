@@ -409,8 +409,8 @@ class XPublisher:
         self._init_client()
 
     def _init_client(self) -> None:
-        self._auth_token = os.environ.get("X_AUTH_TOKEN", "")
-        self._ct0        = os.environ.get("X_CT0", "")
+        self._auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
+        self._ct0        = os.environ.get("X_CT0", "").strip()
         if self._auth_token and self._ct0:
             self._enabled = True
             logger.info("[XPublisher] Cookie auth ready — X posting enabled")
