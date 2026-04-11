@@ -927,7 +927,7 @@ function MasterAgentPanel({ agent, strategyResult, orbResult }: {
                 {gm.label}
               </span>
             </div>
-            <div className="text-[9px] text-neutral-600 mt-0.5">{gm.desc} · Self-learning · 5 strategies · {sessionInfo?.label?.split("—")[0]?.trim() ?? "Scanning"}</div>
+            <div className="text-[9px] text-neutral-600 mt-0.5">{gm.desc} · Self-learning · 4 strategies + Fusion · {sessionInfo?.label?.split("—")[0]?.trim() ?? "Scanning"}</div>
           </div>
         </div>
 
@@ -1960,7 +1960,12 @@ export default function OverviewPage() {
     </div>
   );
 
-  const d = data!;
+  const d = data ?? {
+    equity: 0, available_balance: 0, unrealized_pnl: 0, daily_pnl: 0,
+    daily_pnl_pct: 0, win_rate: 0, total_trades: 0, active_strategies: 0,
+    open_positions: 0, kill_switch_active: false, trading_mode: "paper" as const,
+    exchange_connected: false, positions: [], recent_orders: [],
+  };
 
   return (
     <>
@@ -2056,8 +2061,8 @@ export default function OverviewPage() {
                 <BookOpen size={11} className="text-neutral-500" />
                 <span className="text-[11px] font-bold text-white">BTC Market</span>
               </div>
-              {streamConnected
-                ? <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />Binance</span>
+              {effectiveTicker
+                ? <span className="flex items-center gap-1 text-[8px] text-green-400"><span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />BingX</span>
                 : <span className="flex items-center gap-1 text-[8px] text-neutral-600"><WifiOff size={8} />Connecting</span>}
             </div>
             <div className="p-4">
@@ -2124,7 +2129,7 @@ export default function OverviewPage() {
         <div className="flex items-center justify-between px-1 pb-2">
           <div className="flex items-center gap-2 text-[8px] text-neutral-800">
             <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
-            <span>TradeOS · BTC/USDT live · Binance WebSocket · 5 strategies active</span>
+            <span>TradeOS · BTC/USDT live · BingX · 4 strategies + Fusion AI active</span>
           </div>
           {lastUpdate && <span className="text-[8px] text-neutral-800">Updated {lastUpdate.toLocaleTimeString()}</span>}
         </div>

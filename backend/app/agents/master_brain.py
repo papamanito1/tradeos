@@ -234,9 +234,9 @@ class MasterBrain:
             return self._reject(strategy_key, strategy_name, signal,
                                 f"Max {self.MAX_OPEN_POSITIONS} positions reached ({total_open} open)")
 
-        if self.daily_trades >= self.MAX_DAILY_TRADES:
+        if is_live and self.daily_trades >= self.MAX_DAILY_TRADES:
             return self._reject(strategy_key, strategy_name, signal,
-                                f"Daily trade limit ({self.daily_trades}/{self.MAX_DAILY_TRADES})")
+                                f"Daily live trade limit ({self.daily_trades}/{self.MAX_DAILY_TRADES})")
 
         if self.consecutive_losses >= self.MAX_CONSECUTIVE_LOSSES:
             score *= 0.3
@@ -334,8 +334,8 @@ class MasterBrain:
 
         self.decisions = [decision] + self.decisions[:49]
 
-        if approved:
-            self.daily_trades += 1
+        if approved and is_live:
+            self.daily_trades += 1  # only live executions count against the daily limit
 
         mode_tag = "LIVE" if is_live else "PAPER"
         log_emoji = "✅" if approved else "❌"
