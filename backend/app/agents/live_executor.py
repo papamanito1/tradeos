@@ -231,42 +231,49 @@ class LiveExecutor:
 
             logger.info(f"[LiveExecutor] Market order filled: id={order_id} @ ${fill_price:.2f}")
 
-            # Step 2: Place SL/TP as separate stop orders (more reliable than params)
+            # Step 2: Place SL/TP as separate stop orders, track their IDs
+            sl_order_id = ""
+            tp_order_id = ""
+            pos_side = "LONG" if direction == "long" else "SHORT"
+            close_side = "sell" if direction == "long" else "buy"
+
             try:
                 if sl_price > 0:
-                    sl_side = "sell" if direction == "long" else "buy"
-                    await self._exchange.create_order(
-                        SYMBOL, "market", sl_side, btc_qty, None,
+                    sl_order = await self._exchange.create_order(
+                        SYMBOL, "market", close_side, btc_qty, None,
                         params={
                             "stopPrice": round(sl_price, 2),
-                            "positionSide": "LONG" if direction == "long" else "SHORT",
+                            "positionSide": pos_side,
                             "reduceOnly": True,
                             "triggerType": "MARK_PRICE",
                         },
                     )
-                    logger.info(f"[LiveExecutor] SL placed @ ${sl_price:.2f}")
+                    sl_order_id = str(sl_order.get("id", ""))
+                    logger.info(f"[LiveExecutor] SL placed @ ${sl_price:.2f} (order_id={sl_order_id})")
             except Exception as sl_err:
                 logger.warning(f"[LiveExecutor] SL order failed (position still open): {sl_err}")
 
             try:
                 if tp_price > 0:
-                    tp_side = "sell" if direction == "long" else "buy"
-                    await self._exchange.create_order(
-                        SYMBOL, "market", tp_side, btc_qty, None,
+                    tp_order = await self._exchange.create_order(
+                        SYMBOL, "market", close_side, btc_qty, None,
                         params={
                             "stopPrice": round(tp_price, 2),
-                            "positionSide": "LONG" if direction == "long" else "SHORT",
+                            "positionSide": pos_side,
                             "reduceOnly": True,
                             "triggerType": "MARK_PRICE",
                         },
                     )
-                    logger.info(f"[LiveExecutor] TP placed @ ${tp_price:.2f}")
+                    tp_order_id = str(tp_order.get("id", ""))
+                    logger.info(f"[LiveExecutor] TP placed @ ${tp_price:.2f} (order_id={tp_order_id})")
             except Exception as tp_err:
                 logger.warning(f"[LiveExecutor] TP order failed (position still open): {tp_err}")
 
             pos = {
                 "id":               f"{strategy_key}-live-{int(time.time()*1000)}",
                 "exchange_order_id": order_id,
+                "sl_order_id":      sl_order_id,
+                "tp_order_id":      tp_order_id,
                 "strategy_key":     strategy_key,
                 "strategy_name":    strategy_name,
                 "direction":        direction,
@@ -296,14 +303,48 @@ class LiveExecutor:
             logger.error(f"[LiveExecutor] open_position FAILED for {strategy_key}: {self.last_error}")
             return None
 
-    # ── Cancel all orphaned SL/TP stop orders ───────────────────────────────
+    # ── Cancel SL/TP orders for a specific position ─────────────────────────
 
-    async def cancel_all_open_orders(self) -> None:
+    async def cancel_position_orders(self, strategy_key: str) -> None:
         """
-        Cancel every open/pending order on SYMBOL.
-        Called after any position close so the counterpart SL or TP order
-        doesn't remain as an orphaned trigger that could fire on a flat book.
+        Cancel only the SL and TP orders belonging to a specific trade.
+        Uses stored order IDs so other trades' SL/TP are not touched.
+        Falls back to cancelling all orders only if no other positions are open.
         """
+        pos = self.live_positions.get(strategy_key)
+        order_ids_to_cancel: list[str] = []
+
+        if pos:
+            if pos.get("sl_order_id"):
+                order_ids_to_cancel.append(pos["sl_order_id"])
+            if pos.get("tp_order_id"):
+                order_ids_to_cancel.append(pos["tp_order_id"])
+
+        if order_ids_to_cancel:
+            for oid in order_ids_to_cancel:
+                try:
+                    await self._exchange.cancel_order(oid, SYMBOL)
+                    logger.info(f"[LiveExecutor] Cancelled order {oid} for {strategy_key}")
+                except Exception as ce:
+                    err_str = str(ce).lower()
+                    if any(kw in err_str for kw in ["not exist", "not found", "already", "cancelled"]):
+                        logger.info(f"[LiveExecutor] Order {oid} already gone (SL/TP fired)")
+                    else:
+                        logger.warning(f"[LiveExecutor] Failed to cancel order {oid}: {ce}")
+        else:
+            # No stored IDs (legacy position) — only safe to cancel all if no other live positions
+            other_positions = {k: v for k, v in self.live_positions.items() if k != strategy_key}
+            if not other_positions:
+                await self._cancel_all_open_orders()
+            else:
+                logger.warning(
+                    f"[LiveExecutor] No stored order IDs for {strategy_key} and "
+                    f"{len(other_positions)} other position(s) open — skipping blanket cancel "
+                    f"to protect other trades' SL/TP"
+                )
+
+    async def _cancel_all_open_orders(self) -> None:
+        """Cancel every open order on SYMBOL. Only used when no other positions are open."""
         try:
             open_orders = await self._exchange.fetch_open_orders(SYMBOL)
             if not open_orders:
@@ -319,7 +360,7 @@ class LiveExecutor:
                     except Exception as ce:
                         logger.warning(f"[LiveExecutor] Failed to cancel order {oid}: {ce}")
         except Exception as e:
-            logger.warning(f"[LiveExecutor] cancel_all_open_orders failed: {e}")
+            logger.warning(f"[LiveExecutor] _cancel_all_open_orders failed: {e}")
 
     # ── Core: close a live position ──────────────────────────────────────────
 
@@ -357,10 +398,10 @@ class LiveExecutor:
             pnl        = round(diff * btc_qty * pos["leverage"], 2)
 
             self.record_pnl(pnl)
-            del self.live_positions[strategy_key]
 
-            # Cancel any remaining SL/TP orders so neither fires on a flat position
-            await self.cancel_all_open_orders()
+            # Cancel only THIS trade's remaining SL/TP (not other trades')
+            await self.cancel_position_orders(strategy_key)
+            del self.live_positions[strategy_key]
 
             trade = {
                 **pos,
@@ -384,13 +425,13 @@ class LiveExecutor:
             ])
             if already_closed:
                 logger.info(f"[LiveExecutor] Position {strategy_key} already closed on exchange "
-                            f"(SL/TP fired) — cleaning up locally and cancelling orphaned orders")
+                            f"(SL/TP fired) — cancelling counterpart order")
                 diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
                 pnl  = round(diff * btc_qty * pos["leverage"], 2)
                 self.record_pnl(pnl)
+                # Cancel only THIS trade's counterpart order (e.g. TP when SL fired)
+                await self.cancel_position_orders(strategy_key)
                 del self.live_positions[strategy_key]
-                # Cancel the counterpart order that didn't fire (e.g. TP when SL closed it)
-                await self.cancel_all_open_orders()
                 return {
                     **pos,
                     "exit_price":  exit_price,
@@ -438,13 +479,13 @@ class LiveExecutor:
             }
 
         # If we have local positions but the exchange has NONE, the SL/TP orders
-        # already fired and closed everything. Cancel the orphaned counterpart and clean up.
+        # already fired and closed everything. Cancel only the counterpart orders per trade.
         if self.live_positions and not exchange_has_btc:
-            # Cancel orphaned SL or TP order (whichever didn't fire)
-            await self.cancel_all_open_orders()
             for key in list(self.live_positions.keys()):
+                # Cancel only this trade's orphaned counterpart order
+                await self.cancel_position_orders(key)
                 logger.info(f"[LiveExecutor] Position {key} gone from exchange — "
-                            f"SL/TP closed it. Orphaned orders cancelled. Cleaning up.")
+                            f"SL/TP closed it. Counterpart order cancelled. Cleaning up.")
                 closed_keys.append(key)
 
         return closed_keys
