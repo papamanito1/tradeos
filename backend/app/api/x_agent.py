@@ -279,10 +279,19 @@ async def fire_all(_: dict = Depends(get_current_user)):
 # The local_poster.py script on the user's PC polls /next-post and posts via
 # Playwright with their real residential IP + Edge session.
 
+def _check_poster_secret(secret: str) -> None:
+    import os
+    from fastapi import HTTPException
+    expected = os.environ.get("POSTER_SECRET", "")
+    if not expected or secret != expected:
+        raise HTTPException(status_code=403, detail="Invalid poster secret")
+
+
 @router.get("/next-post")
-async def next_post():
+async def next_post(secret: str = ""):
     """Return the next tweet for the local poster to send.
-    Checks manual queue first, then auto-schedule by cooldown."""
+    Requires POSTER_SECRET query param to prevent queue draining."""
+    _check_poster_secret(secret)
     from app.agents import x_publisher as xp
     from app.agents.x_publisher import (
         HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS,
@@ -333,8 +342,10 @@ class ConfirmRequest(BaseModel):
 
 
 @router.post("/confirm-post")
-async def confirm_post(req: ConfirmRequest):
-    """Called by local poster after successfully posting — updates cooldowns."""
+async def confirm_post(req: ConfirmRequest, secret: str = ""):
+    """Called by local poster after successfully posting — updates cooldowns.
+    Requires POSTER_SECRET query param."""
+    _check_poster_secret(secret)
     pub = _publisher()
     if pub:
         key = req.post_type.replace("-", "_")

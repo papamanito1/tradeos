@@ -196,8 +196,10 @@ class MasterBrain:
         elif trust > 1.2:
             reasons.append(f"high trust ({trust:.2f})")
 
-        # ── Factor 2: Regime affinity ────────────────────────────────────
-        affinity = self.REGIME_AFFINITY.get(self.current_regime, {}).get(strategy_key, 1.0)
+        # ── Factor 2: Regime affinity — blend static base with learned ──
+        base_affinity    = self.REGIME_AFFINITY.get(self.current_regime, {}).get(strategy_key, 1.0)
+        learned_affinity = self._learned_affinity.get(self.current_regime, {}).get(strategy_key, 1.0)
+        affinity = round(0.5 * base_affinity + 0.5 * learned_affinity, 4)
         score *= affinity
         if affinity < 0.7:
             reasons.append(f"{strategy_key} weak in {self.current_regime} regime")
@@ -405,12 +407,19 @@ class MasterBrain:
 
         if approved and is_live:
             self.daily_trades += 1  # only live executions count against the daily limit
+            decision["_counted_daily_trade"] = True
 
         mode_tag = "LIVE" if is_live else "PAPER"
         log_emoji = "✅" if approved else "❌"
         logger.info(f"[MasterBrain] [{mode_tag}] {log_emoji} {action} {strategy_name} {direction.upper()} "
                     f"· conviction {conviction:.0%} · size {size_mult:.0%} · {decision['reasoning']}")
         return decision
+
+    def rollback_daily_trade(self) -> None:
+        """Call when a live open that was approved fails at the exchange.
+        Returns the pre-incremented daily_trades slot so the counter stays accurate."""
+        if self.daily_trades > 0:
+            self.daily_trades -= 1
 
     def _reject(self, key: str, name: str, signal: dict, reason: str) -> dict:
         decision = {
@@ -564,7 +573,10 @@ class MasterBrain:
         Paper trades still count for learning — this is how the Brain
         builds confidence before approving live execution."""
         self._check_day()
-        self.daily_pnl += pnl
+        # Only live-trade PnL counts toward the daily loss limit gate.
+        # Paper/shadow trades still update trust and stats for learning.
+        if was_live:
+            self.daily_pnl += pnl
 
         if won:
             self.daily_wins += 1

@@ -368,7 +368,13 @@ def _run_hft(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
 
     signal = None
     if long_met >= 3 or short_met >= 3:
-        d    = "long" if long_met >= short_met else "short"
+        # On a tie use OBI to break: positive OBI → long, negative → short, else skip
+        if long_met == short_met:
+            d = "long" if obi > 0 else "short" if obi < 0 else None
+            if d is None:
+                return None  # genuine indecision — no trade
+        else:
+            d = "long" if long_met > short_met else "short"
         e    = cur1m["close"]
         sl_d = max(1.5 * atr1m, abs(e - vwap1m))
         sl   = e - sl_d if d == "long" else e + sl_d
@@ -580,6 +586,8 @@ class PersistentAgent:
         # Restore paper trader
         if data.get("paper_trader"):
             self.paper_trader.from_dict(data["paper_trader"])
+        # Re-sync brain limits from the loaded config — single source of truth
+        self.brain.MAX_DAILY_LOSS = -abs(float(self.config.get("daily_loss_limit", 50.0)))
         # If Brain's stats were wiped (restart/deploy), reconstruct from trade history
         self._reconstruct_brain_stats()
 
@@ -912,9 +920,8 @@ class PersistentAgent:
                 # ── Hourly BTC analysis — always posts ───────────────────────
                 if now.hour != last_hour_posted:
                     open_pos = [p for p in self.positions.values() if p]
-                    live_pnl = sum(
-                        p.get("unrealized_pnl", 0) for p in open_pos if p.get("mode") == "live"
-                    ) + self.stats.get("total_pnl", 0)
+                    # Use brain.daily_pnl — live trades only, resets at midnight UTC
+                    daily_pnl_live = self.brain.daily_pnl
                     # Fetch current BTC price from market stream cache
                     btc_price = 0.0
                     try:
@@ -925,7 +932,7 @@ class PersistentAgent:
                     self.x_publisher.post_hourly(
                         btc_price=btc_price,
                         open_positions=open_pos,
-                        daily_pnl=live_pnl,
+                        daily_pnl=daily_pnl_live,
                         regime=regime,
                         regime_stability=str(regime_stability),
                     )
@@ -1590,8 +1597,7 @@ class PersistentAgent:
                         self._log(f"✗ [LIVE] [{name}] BingX FAILED — {err_msg}")
                         # Remove placeholder — trade never executed
                         self.positions.pop(key, None)
-                        if self.brain.daily_trades > 0:
-                            self.brain.daily_trades -= 1
+                        self.brain.rollback_daily_trade()
 
                 asyncio.create_task(_do_live_open())
                 return
@@ -1659,7 +1665,7 @@ class PersistentAgent:
                     exit_price = sl if sl else live_price
 
                 diff = (exit_price - entry) if d == "long" else (entry - exit_price)
-                pnl = round(diff * pos.get("btc_size", 0) * pos.get("leverage", 1), 2)
+                pnl = round(diff * pos.get("btc_size", 0), 2)
 
                 self._log(f"🔄 [LIVE] [{pos.get('strategy_name', key)}] Exchange SL/TP fired — "
                           f"{reason.upper()} @ ${exit_price:.0f} · P&L {'+' if pnl >= 0 else ''}${pnl:.2f}")
@@ -1705,8 +1711,9 @@ class PersistentAgent:
             else:
                 d_   = pos["direction"]
                 diff = (price - pos["entry"]) if d_ == "long" else (pos["entry"] - price)
-                lev  = pos.get("leverage", 1)
-                pnl  = diff * pos["btc_size"] * lev
+                # btc_size already encodes notional (size_usdc * leverage / entry),
+                # so pnl = diff * btc_size — no extra *leverage needed
+                pnl  = diff * pos["btc_size"]
                 pct  = diff / pos["entry"] * 100 if pos["entry"] > 0 else 0
                 self.positions[key] = {**pos, "current_price": price, "unrealized_pnl": round(pnl, 2), "unrealized_pct": round(pct, 4)}
 
@@ -1739,7 +1746,7 @@ class PersistentAgent:
                     # Force close locally to prevent stuck positions
                     d = pos["direction"]
                     diff = (exit_price - pos["entry"]) if d == "long" else (pos["entry"] - exit_price)
-                    pnl = round(diff * pos.get("btc_size", 0) * pos.get("leverage", 1), 2)
+                    pnl = round(diff * pos.get("btc_size", 0), 2)
                     self._record_trade_closure(key, pos, pnl, exit_price, f"{reason}_forced", is_live=True)
             asyncio.create_task(_do_live_close())
             return

@@ -980,8 +980,13 @@ function PositionsPanel({
         </div>
 
         {p.sl && p.tp && (() => {
-          const range   = p.tp - p.sl;
-          const pct     = range > 0 ? ((p.current_price - p.sl) / range * 100) : 50;
+          const isShort = p.direction === "short";
+          // For longs:  progress goes SL (left) → TP (right), current between them
+          // For shorts: SL is above entry and TP is below, so flip the geometry
+          const lo      = isShort ? p.tp  : p.sl;
+          const hi      = isShort ? p.sl  : p.tp;
+          const range   = hi - lo;
+          const pct     = range > 0 ? ((p.current_price - lo) / range * 100) : 50;
           const clamped = Math.min(Math.max(pct, 0), 100);
           return (
             <div className="space-y-1">

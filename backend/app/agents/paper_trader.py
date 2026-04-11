@@ -73,6 +73,8 @@ class PaperTrader:
     # ── Position sizing ──────────────────────────────────────────────────────
 
     def _calc_size(self, leverage: int) -> float:
+        """Returns the margin (collateral) to allocate per trade.
+        The notional exposure is margin * leverage, handled by the caller."""
         margin = self.balance * self.RISK_PER_TRADE_PCT
         return round(margin, 2)
 

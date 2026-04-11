@@ -194,13 +194,14 @@ async def live_close_position(strategy_key: str, _: dict = Depends(get_current_u
     from app.agents.live_market_stream import LIVE_PRICES
     price = LIVE_PRICES.get("BTC/USDT", {}).get("last", pos["entry"])
     trade = await agent._live.close_position(strategy_key, price, "manual_api")
-    if trade:
-        agent._record_trade_closure(strategy_key, pos, trade["pnl_usd"], trade["exit_price"], "manual_api", is_live=True)
+    if not trade:
+        raise HTTPException(status_code=502, detail=f"BingX close failed: {getattr(agent._live, 'last_error', 'unknown')}")
+    agent._record_trade_closure(strategy_key, pos, trade["pnl_usd"], trade["exit_price"], "manual_api", is_live=True)
     return {"ok": True, "trade": trade}
 
 
 @router.get("/live/balance")
-async def live_balance():
+async def live_balance(_: dict = Depends(get_current_user)):
     """Fetch live BingX account USDT balance."""
     agent = _get()
     if not agent._live:

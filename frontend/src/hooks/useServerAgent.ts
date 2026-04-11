@@ -156,10 +156,18 @@ export interface ServerStatus {
 }
 
 async function apiFetch(path: string, opts?: RequestInit) {
+  const token = typeof window !== "undefined" ? localStorage.getItem("tradeos_token") : null;
   const r = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+    },
     ...opts,
   });
+  if (r.status === 401 && typeof window !== "undefined") {
+    localStorage.removeItem("tradeos_token");
+    window.location.href = "/login";
+  }
   if (!r.ok) throw new Error(`${r.status}`);
   return r.json();
 }
