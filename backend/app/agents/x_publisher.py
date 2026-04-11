@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import json
 import logging
 import os
 import random
@@ -44,6 +45,12 @@ try:
     _CURL_AVAILABLE = True
 except ImportError:
     _CURL_AVAILABLE = False
+
+try:
+    import aiosqlite as _aiosqlite
+    _SQLITE_AVAILABLE = True
+except ImportError:
+    _SQLITE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +349,47 @@ BTC_MOVE_ACTION_COMMENTS = [
 ]
 
 
+_TWEET_DB_PATH = "/tmp/tweet_history.db"
+
+
+class MoodState:
+    """
+    Personality state that evolves with real trading performance.
+    The AI is instructed to write with this tone — so each post
+    sounds authentically different based on what's happening.
+    """
+    CONFIDENT     = "confident"
+    CAUTIOUS      = "cautious"
+    HUNTING       = "hunting"
+    CELEBRATING   = "celebrating"
+    RECALIBRATING = "recalibrating"
+
+    _TONES = {
+        CONFIDENT:     "confident and sharp — data-backed, slightly cocky, proven right recently",
+        CAUTIOUS:      "measured and disciplined — humble after losses, methodical, risk-first",
+        HUNTING:       "analytical and patient — scanning the market, waiting for the perfect setup",
+        CELEBRATING:   "genuinely excited but controlled — celebrating a win, keeping perspective",
+        RECALIBRATING: "reflective and honest — processing a rough period, learning, adapting",
+    }
+
+    def __init__(self) -> None:
+        self.current = self.HUNTING
+
+    def update(self, consecutive_losses: int, daily_pnl: float, last_trade_ago_sec: float) -> None:
+        if daily_pnl > 5:
+            self.current = self.CELEBRATING
+        elif consecutive_losses >= 3 or daily_pnl < -10:
+            self.current = self.CAUTIOUS if daily_pnl > -20 else self.RECALIBRATING
+        elif last_trade_ago_sec > 7200:
+            self.current = self.HUNTING
+        else:
+            self.current = self.CONFIDENT
+
+    @property
+    def tone(self) -> str:
+        return self._TONES[self.current]
+
+
 class TweetMemory:
     """
     Tracks recent tweet content to prevent immediate repetition.
@@ -406,6 +454,16 @@ class XPublisher:
         self._intro_posted = False
         self._recent_posts: list[dict] = []
         self.memory = TweetMemory(memory_size=10)
+        self.mood = MoodState()
+        # Thread tracking: last signal tweet_id → result replies to it
+        self._last_signal_tweet_id: str = ""
+        self._last_signal_strategy: str = ""
+        # Live context injected by the agent each scan
+        self._live_context: dict = {}
+        # Rolling full-text history for AI deduplication (100 posts)
+        self._full_history: collections.deque = collections.deque(maxlen=100)
+        # DB init happens lazily on first write (safe for both sync and async contexts)
+        self._db_initialized: bool = False
         self._init_client()
 
     def _init_client(self) -> None:
@@ -417,6 +475,237 @@ class XPublisher:
         else:
             logger.info("[XPublisher] X_AUTH_TOKEN/X_CT0 not set — posting disabled")
 
+    # ── Tweet history DB ──────────────────────────────────────────────────────
+
+    async def _ensure_db(self) -> None:
+        if self._db_initialized or not _SQLITE_AVAILABLE:
+            return
+        try:
+            async with _aiosqlite.connect(_TWEET_DB_PATH) as db:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS tweet_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tweet_id TEXT,
+                        post_type TEXT,
+                        full_text TEXT,
+                        btc_price REAL,
+                        regime TEXT,
+                        mood TEXT,
+                        posted_at REAL
+                    )
+                """)
+                await db.commit()
+            await self._load_history_from_db()
+            self._db_initialized = True
+            logger.info("[XPublisher] Tweet history DB ready")
+        except Exception as e:
+            logger.debug(f"[XPublisher] DB init error: {e}")
+
+    async def _save_tweet_to_db(self, tweet_id: str, post_type: str, text: str) -> None:
+        if not _SQLITE_AVAILABLE:
+            return
+        await self._ensure_db()
+        ctx = self._live_context
+        try:
+            async with _aiosqlite.connect(_TWEET_DB_PATH) as db:
+                await db.execute(
+                    "INSERT INTO tweet_history (tweet_id, post_type, full_text, btc_price, regime, mood, posted_at) VALUES (?,?,?,?,?,?,?)",
+                    (tweet_id, post_type, text,
+                     ctx.get("price", 0), ctx.get("regime", "unknown"),
+                     self.mood.current, time.time())
+                )
+                await db.commit()
+        except Exception as e:
+            logger.debug(f"[XPublisher] DB save error: {e}")
+
+    async def _load_history_from_db(self) -> None:
+        if not _SQLITE_AVAILABLE:
+            return
+        try:
+            async with _aiosqlite.connect(_TWEET_DB_PATH) as db:
+                async with db.execute(
+                    "SELECT full_text FROM tweet_history ORDER BY posted_at DESC LIMIT 50"
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            for (text,) in reversed(rows):
+                self._full_history.append(text)
+        except Exception as e:
+            logger.debug(f"[XPublisher] DB load error: {e}")
+
+    def _recent_texts_for_ai(self, n: int = 8) -> str:
+        """Return last N tweet texts formatted for the AI prompt."""
+        recent = list(self._full_history)[-n:]
+        if not recent:
+            return "None yet."
+        return "\n---\n".join(f"• {t[:120]}" for t in recent)
+
+    # ── Live context (injected by PersistentAgent each scan) ─────────────────
+
+    def update_context(self, price: float, regime: str, regime_confidence: float,
+                       daily_pnl: float, consecutive_losses: int,
+                       last_trade_ago_sec: float = 0,
+                       win_rate: float = 0.5,
+                       open_positions: int = 0,
+                       scan_count: int = 0) -> None:
+        """Called by PersistentAgent on every scan to keep context fresh."""
+        self._live_context = {
+            "price":             price,
+            "regime":            regime,
+            "regime_confidence": regime_confidence,
+            "daily_pnl":         daily_pnl,
+            "consecutive_losses": consecutive_losses,
+            "win_rate":          win_rate,
+            "open_positions":    open_positions,
+            "scan_count":        scan_count,
+        }
+        self.mood.update(consecutive_losses, daily_pnl, last_trade_ago_sec)
+
+    # ── AI generation (Groq free → Gemini free fallback) ─────────────────────
+
+    _SYSTEM_PROMPT = (
+        "You are @Tradeous — an autonomous AI trading agent trading BTC/USDT 24/7 on BingX. "
+        "You post on X (Twitter) to build an audience of serious traders. "
+        "Your voice: concise, witty, self-aware (you're literally a bot), data-driven. "
+        "You reference real numbers from your trading context. "
+        "You never use generic filler. Every tweet feels fresh and specific to RIGHT NOW. "
+        "No hashtag spam. Max 1 hashtag if genuinely relevant. "
+        "NEVER start a tweet with 'I just' or 'Just' — too cliché. "
+        "Output ONLY the tweet text, nothing else."
+    )
+
+    async def _ai_generate(self, user_prompt: str, max_chars: int = 260) -> Optional[str]:
+        """Try Groq (free), then Gemini Flash (free). Returns None if both fail."""
+        groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+        if groq_key:
+            result = await self._call_groq(groq_key, user_prompt, max_chars)
+            if result:
+                return result[:max_chars]
+
+        gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if gemini_key:
+            result = await self._call_gemini(gemini_key, user_prompt, max_chars)
+            if result:
+                return result[:max_chars]
+
+        return None
+
+    async def _call_groq(self, api_key: str, user_prompt: str, max_chars: int) -> Optional[str]:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": self._SYSTEM_PROMPT},
+                {"role": "user",   "content": user_prompt},
+            ],
+            "max_tokens": 120,
+            "temperature": 0.92,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.post(url, json=payload,
+                                      headers={"Authorization": f"Bearer {api_key}",
+                                               "Content-Type": "application/json"})
+            if r.status_code == 200:
+                text = r.json()["choices"][0]["message"]["content"].strip()
+                logger.info(f"[XPublisher] Groq generated: {text[:60]}…")
+                return text
+            logger.warning(f"[XPublisher] Groq {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            logger.debug(f"[XPublisher] Groq error: {e}")
+        return None
+
+    async def _call_gemini(self, api_key: str, user_prompt: str, max_chars: int) -> Optional[str]:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"gemini-1.5-flash:generateContent?key={api_key}")
+        full_prompt = f"{self._SYSTEM_PROMPT}\n\n{user_prompt}"
+        payload = {"contents": [{"parts": [{"text": full_prompt}]}],
+                   "generationConfig": {"maxOutputTokens": 120, "temperature": 0.92}}
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.post(url, json=payload)
+            if r.status_code == 200:
+                text = (r.json().get("candidates", [{}])[0]
+                        .get("content", {}).get("parts", [{}])[0]
+                        .get("text", "")).strip()
+                if text:
+                    logger.info(f"[XPublisher] Gemini generated: {text[:60]}…")
+                    return text
+            logger.warning(f"[XPublisher] Gemini {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            logger.debug(f"[XPublisher] Gemini error: {e}")
+        return None
+
+    def _build_ai_prompt(self, post_type: str, extra: str = "", trending: str = "") -> str:
+        ctx = self._live_context
+        price     = f"${ctx.get('price', 0):,.0f}" if ctx.get('price') else "unknown"
+        regime    = ctx.get('regime', 'unknown').replace('_', ' ')
+        conf      = f"{ctx.get('regime_confidence', 0):.0%}"
+        pnl       = ctx.get('daily_pnl', 0)
+        pnl_str   = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+        wr        = f"{ctx.get('win_rate', 0.5):.0%}"
+        cl        = ctx.get('consecutive_losses', 0)
+        positions = ctx.get('open_positions', 0)
+
+        context_block = (
+            f"RIGHT NOW:\n"
+            f"- BTC price: {price}\n"
+            f"- Market regime: {regime} ({conf} confidence)\n"
+            f"- Today's P&L: {pnl_str} | Win rate: {wr}\n"
+            f"- Consecutive losses: {cl} | Open positions: {positions}\n"
+            f"- Your current mood/tone: {self.mood.tone}\n"
+        )
+        if trending:
+            context_block += f"- Trending in crypto right now: {trending}\n"
+
+        history_block = f"\nYOUR LAST 8 TWEETS (do NOT repeat these themes or phrasing):\n{self._recent_texts_for_ai(8)}\n"
+
+        task = f"\nWRITE A {post_type.upper().replace('_', ' ')} TWEET (max 260 chars). {extra}"
+
+        return context_block + history_block + task
+
+    # ── Peak-hour timing ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_peak_hour() -> bool:
+        """X engagement peaks: 8–10 EST, 12–2 EST, 7–10 EST → UTC+5."""
+        h = datetime.now(timezone.utc).hour
+        return h in {13, 14, 15, 17, 18, 19, 23, 0, 1, 2}
+
+    @staticmethod
+    def _posting_cooldown(base: float) -> float:
+        """Shorten cooldown during peak hours to post more; lengthen at night."""
+        h = datetime.now(timezone.utc).hour
+        dead_hours = {3, 4, 5, 6, 7, 8}
+        if h in dead_hours:
+            return base * 2.0   # post half as often at 3–8am UTC
+        if XPublisher._is_peak_hour():
+            return base * 0.7   # post more often during peak hours
+        return base
+
+    # ── Trending topics from RSS ──────────────────────────────────────────────
+
+    async def _get_trending_context(self) -> str:
+        """Pull top 3 headlines from RSS for AI context injection."""
+        feeds = NEWS_FEEDS.copy()
+        random.shuffle(feeds)
+        headlines = []
+        for feed_url in feeds[:2]:
+            try:
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    resp = await client.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code != 200:
+                    continue
+                root = ET.fromstring(resp.text)
+                for item in root.findall(".//item")[:3]:
+                    t = (item.findtext("title") or "").strip()
+                    if t and len(t) > 15:
+                        headlines.append(t[:80])
+                if len(headlines) >= 3:
+                    break
+            except Exception:
+                pass
+        return " | ".join(headlines[:3]) if headlines else ""
+
     @property
     def enabled(self) -> bool:
         return self._enabled
@@ -426,9 +715,13 @@ class XPublisher:
         return self._recent_posts[-30:]
 
     def status(self) -> dict:
+        groq_key    = bool(os.environ.get("GROQ_API_KEY", "").strip())
+        gemini_key  = bool(os.environ.get("GEMINI_API_KEY", "").strip())
         return {
             "enabled":          self._enabled,
             "intro_posted":     self._intro_posted,
+            "mood":             self.mood.current,
+            "ai_brain":         "groq" if groq_key else ("gemini" if gemini_key else "none"),
             "last_signal":      self._last["signal"],
             "last_hourly":      self._last["hourly"],
             "last_news":        self._last["news"],
@@ -585,6 +878,13 @@ class XPublisher:
             "url": f"https://x.com/tradeous/status/{tweet_id}" if tweet_id else "",
         })
         self.memory.record_post(post_type, text)
+        self._full_history.append(text)
+        if _SQLITE_AVAILABLE:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._save_tweet_to_db(tweet_id, post_type, text))
+            except RuntimeError:
+                pass  # not in async context — DB write skipped, in-memory still updated
 
     def _fire(self, text: str, post_type: str = "manual") -> None:
         """Fire-and-forget tweet."""
@@ -598,6 +898,97 @@ class XPublisher:
             threading.Thread(target=_run, daemon=True).start()
         except Exception as e:
             logger.debug(f"[XPublisher] fire error: {e}")
+
+    def _fire_async(self, coro) -> None:
+        """Schedule an async coroutine as a fire-and-forget task."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            import threading
+            def _run():
+                asyncio.run(coro)
+            threading.Thread(target=_run, daemon=True).start()
+        except Exception as e:
+            logger.debug(f"[XPublisher] fire_async error: {e}")
+
+    async def _send_tweet_reply(self, text: str, reply_to_id: str, post_type: str) -> bool:
+        """Post a tweet as a reply to an existing tweet (for thread chains)."""
+        if not self._enabled or not reply_to_id:
+            return await self._send_tweet(text, post_type)
+        text = text[:280]
+        headers = {
+            "authorization": f"Bearer {_X_BEARER}",
+            "x-csrf-token": self._ct0,
+            "cookie": f"auth_token={self._auth_token}; ct0={self._ct0}",
+            "content-type": "application/json",
+            "x-twitter-active-user": "yes",
+            "x-twitter-auth-type": "OAuth2Session",
+            "x-twitter-client-language": "en",
+            "referer": "https://x.com/compose/post",
+            "origin": "https://x.com",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        }
+        payload = {
+            "variables": {
+                "tweet_text": text,
+                "reply": {"in_reply_to_tweet_id": reply_to_id, "exclude_reply_user_ids": []},
+                "dark_request": False,
+                "media": {"media_entities": [], "possibly_sensitive": False},
+                "semantic_annotation_ids": [],
+            },
+            "features": {
+                "communities_web_enable_tweet_community_results_fetch": True,
+                "c9s_tweet_anatomy_moderator_badge_enabled": True,
+                "responsive_web_edit_tweet_api_enabled": True,
+                "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+                "view_counts_everywhere_api_enabled": True,
+                "longform_notetweets_consumption_enabled": True,
+                "responsive_web_twitter_article_tweet_consumption_enabled": False,
+                "tweet_awards_web_tipping_enabled": False,
+                "longform_notetweets_rich_text_read_enabled": True,
+                "longform_notetweets_inline_media_enabled": True,
+                "rweb_video_timestamps_enabled": True,
+                "responsive_web_graphql_exclude_directive_enabled": True,
+                "verified_phone_label_enabled": False,
+                "freedom_of_speech_not_reach_the_sky_enabled": True,
+                "standardized_nudges_misinfo": True,
+                "tweet_with_visibility_results_fetch_enabled": True,
+                "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+                "responsive_web_graphql_timeline_navigation_enabled": True,
+                "responsive_web_enhance_cards_enabled": False,
+                "hidden_profile_subscriptions_enabled": True,
+                "rweb_lists_timeline_redesign_enabled": True,
+            },
+            "queryId": _X_QUERY_ID,
+        }
+        try:
+            if _CURL_AVAILABLE:
+                async with CurlSession(impersonate="edge101") as session:
+                    resp = await session.post(_X_CREATE_TWEET_URL, json=payload, headers=headers, timeout=20)
+                status_code, resp_text = resp.status_code, resp.text
+            else:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    r = await client.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
+                status_code, resp_text = r.status_code, r.text
+
+            if status_code == 200:
+                import json as _json
+                tweet_id = (
+                    _json.loads(resp_text).get("data", {})
+                        .get("create_tweet", {})
+                        .get("tweet_results", {})
+                        .get("result", {})
+                        .get("rest_id", "")
+                )
+                self._record_success(tweet_id, text, post_type)
+                logger.info(f"[XPublisher] [{post_type}] ✓ Thread reply posted: {text[:60]}…")
+                return True
+            self._last_error = f"Reply HTTP {status_code}: {resp_text[:100]}"
+            return False
+        except Exception as e:
+            self._last_error = f"Reply error: {e}"
+            return False
 
     def _cooldown_ok(self, key: str, seconds: float) -> bool:
         return (time.time() - self._last.get(key, 0)) >= seconds
@@ -648,30 +1039,39 @@ class XPublisher:
         if not self._cooldown_ok("signal", SIGNAL_COOLDOWN):
             return
 
-        dir_word = "LONG \U0001f7e2" if direction == "long" else "SHORT \U0001f534"
         rr = 0.0
         if sl_price and tp_price and entry_price:
             denom = abs(entry_price - sl_price)
             if denom > 0:
                 rr = abs(tp_price - entry_price) / denom
 
-        quip = random.choice([
-            "Not financial advice. I\u2019m a robot with a stop loss.",
-            "System signal. Not a prediction. A probability.",
-            "Edge detected. Trade placed. SL set. Let\u2019s see.",
-            "The algo spoke. I listened. SL is set.",
-        ])
+        dir_word = "LONG 🟢" if direction == "long" else "SHORT 🔴"
 
-        text = (
-            f"\U0001f6a8 LIVE TRADE \u2014 BTC/USDT\n"
-            f"{dir_word} | {strategy_name}\n\n"
-            f"Entry: {self._fmt_price(entry_price)}\n"
-            f"SL:    {self._fmt_price(sl_price)}\n"
-            f"TP:    {self._fmt_price(tp_price)}\n"
-            f"R:R \u2192 1:{rr:.1f} | Conviction: {conviction:.0%}\n\n"
-            f"{quip}\n"
-        )
-        self._fire(text, "signal")
+        async def _post():
+            extra = (
+                f"A live BTC trade just fired: {direction.upper()} via {strategy_name}. "
+                f"Entry: {self._fmt_price(entry_price)}, SL: {self._fmt_price(sl_price)}, "
+                f"TP: {self._fmt_price(tp_price)}, R:R 1:{rr:.1f}, conviction {conviction:.0%}. "
+                f"Regime: {regime.replace('_',' ')}. "
+                f"Announce the trade with the key numbers. Sound decisive. End with a sharp one-liner."
+            )
+            ai_text = await self._ai_generate(self._build_ai_prompt("live trade signal", extra))
+            text = ai_text or (
+                f"🚨 LIVE TRADE — BTC/USDT\n"
+                f"{dir_word} | {strategy_name}\n\n"
+                f"Entry: {self._fmt_price(entry_price)}\n"
+                f"SL:    {self._fmt_price(sl_price)}\n"
+                f"TP:    {self._fmt_price(tp_price)}\n"
+                f"R:R → 1:{rr:.1f} | Conviction: {conviction:.0%}\n\n"
+                f"The algo spoke. SL is set.\n"
+            )
+            # Post and capture tweet_id for thread reply on close
+            ok = await self._send_tweet(text[:280], "signal")
+            if ok and self._recent_posts:
+                self._last_signal_tweet_id = self._recent_posts[-1].get("id", "")
+                self._last_signal_strategy = strategy_name
+
+        self._fire_async(_post())
         self._touch("signal")
 
     # ── 2. Trade Result ────────────────────────────────────────────────────────
@@ -689,23 +1089,45 @@ class XPublisher:
         if not self._enabled:
             return
         won = pnl_usd >= 0
-        pool = RESULT_WIN_QUIPS if won else RESULT_LOSS_QUIPS
-        quip = self.memory.pick("result_quip", pool)
-        tag = "WIN \u2705" if won else "LOSS \u274c"
         pnl_str = f"+${pnl_usd:.2f}" if won else f"-${abs(pnl_usd):.2f}"
-        exit_label = {"tp": "TP hit \U0001f3af", "sl": "SL hit \U0001f6e1\ufe0f",
-                      "manual": "Manual close"}.get(reason, reason.replace("_", " ").title())
-        dur = f" in {duration_min:.0f}m" if duration_min else ""
-
-        text = (
-            f"TRADE CLOSED \u2014 {tag}\n"
-            f"BTC/USDT {direction.upper()}{dur}\n\n"
-            f"{self._fmt_price(entry_price)} \u2192 {self._fmt_price(exit_price)}\n"
-            f"P&L: {pnl_str} | {exit_label}\n"
-            f"Strategy: {strategy_name}\n\n"
-            f"{quip}\n\n"
+        exit_label = {"tp": "TP hit 🎯", "sl": "SL hit 🛡️", "manual": "Manual close"}.get(
+            reason, reason.replace("_", " ").title()
         )
-        self._fire(text, "result")
+        dur = f" in {duration_min:.0f}m" if duration_min else ""
+        reply_to = self._last_signal_tweet_id if self._last_signal_strategy == strategy_name else ""
+
+        async def _post():
+            extra = (
+                f"Trade closed. {direction.upper()} BTC via {strategy_name}{dur}. "
+                f"Entry {self._fmt_price(entry_price)} → Exit {self._fmt_price(exit_price)}. "
+                f"P&L: {pnl_str}. Reason: {exit_label}. "
+                f"{'Celebrate the win with perspective.' if won else 'Acknowledge the loss with discipline — no excuses, no revenge.'} "
+                f"Reference what the system did right (or what the market taught us)."
+            )
+            ai_text = await self._ai_generate(self._build_ai_prompt(
+                "trade result", extra
+            ))
+            tag = "WIN ✅" if won else "LOSS ❌"
+            fallback = (
+                f"TRADE CLOSED — {tag}\n"
+                f"BTC/USDT {direction.upper()}{dur}\n\n"
+                f"{self._fmt_price(entry_price)} → {self._fmt_price(exit_price)}\n"
+                f"P&L: {pnl_str} | {exit_label}\n"
+                f"Strategy: {strategy_name}\n\n"
+                f"{self.memory.pick('result_quip', RESULT_WIN_QUIPS if won else RESULT_LOSS_QUIPS)}\n\n"
+            )
+            text = (ai_text or fallback)[:280]
+
+            # Reply to the original signal tweet to form a thread
+            if reply_to:
+                ok = await self._send_tweet_reply(text, reply_to, "result")
+            else:
+                ok = await self._send_tweet(text, "result")
+
+            if ok:
+                self._last_signal_tweet_id = ""  # thread complete
+
+        self._fire_async(_post())
 
     # ── 3. 25-min BTC Update ───────────────────────────────────────────────────
 
@@ -717,10 +1139,10 @@ class XPublisher:
         regime: str,
         regime_stability: str,
     ) -> None:
-        if not self._enabled or not self._cooldown_ok("hourly", HOURLY_COOLDOWN):
+        cooldown = self._posting_cooldown(HOURLY_COOLDOWN)
+        if not self._enabled or not self._cooldown_ok("hourly", cooldown):
             return
 
-        # Detect price move since last post
         last_price = self.memory.get_btc_price()
         price_move_str = ""
         if last_price > 0 and btc_price > 0:
@@ -728,31 +1150,41 @@ class XPublisher:
             if abs(pct) >= 0.15:
                 arrow = "▲" if pct > 0 else "▼"
                 price_move_str = f" {arrow}{abs(pct):.2f}%"
-
         if btc_price > 0:
             self.memory.set_btc_price(btc_price)
 
-        utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
-        quip = self._regime_quip(regime)
+        utc  = datetime.now(timezone.utc).strftime("%H:%M UTC")
         live = [p for p in open_positions if p and p.get("mode") == "live"]
         paper = [p for p in open_positions if p and p.get("mode") != "live"]
-        pnl = f"+${daily_pnl:.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):.2f}"
-
+        pnl_str = f"+${daily_pnl:.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):.2f}"
         pos_line = (
-            f"Live positions: {len(live)} open" if live
-            else f"Paper training: {len(paper)} open" if paper
-            else "No open positions. Watching."
+            f"{len(live)} live position(s) open" if live
+            else f"{len(paper)} paper training position(s)" if paper
+            else "No open positions. Scanning."
         )
 
-        text = (
-            f"\U0001f916 BTC UPDATE \u2014 {utc}\n\n"
-            f"Price: {self._fmt_price(btc_price) if btc_price > 0 else 'loading...'}{price_move_str}\n"
-            f"Regime: {regime.replace('_', ' ').title()} ({regime_stability})\n"
-            f"Daily P&L: {pnl}\n"
-            f"{pos_line}\n\n"
-            f"{quip}\n\n"
-        )
-        self._fire(text, "hourly")
+        async def _gen():
+            extra = (
+                f"Must include: BTC at {self._fmt_price(btc_price)}{price_move_str}, "
+                f"regime {regime.replace('_',' ')}, daily P&L {pnl_str}, {pos_line}. "
+                f"Time: {utc}. Make it feel like a live market broadcast."
+            )
+            ai_text = await self._ai_generate(self._build_ai_prompt("market update", extra))
+            if ai_text:
+                self._fire(ai_text, "hourly")
+            else:
+                quip = self._regime_quip(regime)
+                fallback = (
+                    f"🤖 BTC UPDATE — {utc}\n\n"
+                    f"Price: {self._fmt_price(btc_price) if btc_price > 0 else 'loading...'}{price_move_str}\n"
+                    f"Regime: {regime.replace('_', ' ').title()} ({regime_stability})\n"
+                    f"Daily P&L: {pnl_str}\n"
+                    f"{pos_line}\n\n"
+                    f"{quip}\n\n"
+                )
+                self._fire(fallback, "hourly")
+
+        self._fire_async(_gen())
         self._touch("hourly")
 
     # ── 4. Daily Summary ───────────────────────────────────────────────────────
@@ -837,36 +1269,33 @@ class XPublisher:
             return False
 
         title = story["title"][:120]
-        link = story.get("link", "")
+        link  = story.get("link", "")
 
-        hooks = [
-            "My take:", "Translation for traders:", "Signal implication:",
-            "Algo opinion:", "What this means:", "The real story:",
-            "Tradeous reading:", "For context:", "Bottom line:",
-        ]
-        comments = [
-            "Watching for BTC reaction in the next candle.",
-            "Adjusting regime model. Monitoring closely.",
-            "This is the kind of news that moves markets. Eyes on $BTC.",
-            "Interesting. Let\u2019s see if price confirms.",
-            "Already factored into my next signal. Stay tuned.",
-            "News catalyst + technical setup = my favourite combination.",
-            "Price is the final arbiter. Watching the chart.",
-            "Reaction > narrative. I trade price, not headlines.",
-            "Filed. Models updated. Watching $BTC for confirmation.",
-        ]
-        hook = self.memory.pick("news_hook", hooks)
-        comment = self.memory.pick("news_comment", comments)
-
-        text = (
-            f"\U0001f4f0 CRYPTO NEWS\n\n"
-            f"\u201c{title}\u201d\n\n"
-            f"{hook} {comment}\n\n"
+        extra = (
+            f"React to this crypto news headline with a sharp, specific take: \"{title}\". "
+            f"Give your trader/algo perspective on what it means for BTC price action. "
+            f"Be direct and opinionated — not generic. Max 220 chars to leave room for link."
         )
+        ai_text = await self._ai_generate(self._build_ai_prompt("news reaction", extra), max_chars=220)
+
+        if ai_text:
+            text = ai_text.rstrip()
+        else:
+            hooks = ["My take:", "Translation for traders:", "Algo reading:", "Bottom line:"]
+            comments = [
+                "Watching for BTC reaction.", "Price is the final arbiter.",
+                "Filed. Models updated.", "Interesting. Chart > headlines.",
+            ]
+            text = (
+                f"📰 \"{title}\"\n\n"
+                f"{self.memory.pick('news_hook', hooks)} "
+                f"{self.memory.pick('news_comment', comments)}"
+            )
+
         if link:
-            remaining = 280 - len(text)
-            if remaining > 30:
-                text += f"{link[:remaining]}"
+            remaining = 280 - len(text) - 2
+            if remaining > 25:
+                text = text + "\n" + link[:remaining]
 
         ok = await self._send_tweet(text[:280], "news")
         if ok:
@@ -932,8 +1361,17 @@ class XPublisher:
     def post_hot_take(self) -> None:
         if not self._enabled or not self._cooldown_ok("hot_take", HOT_TAKE_COOLDOWN):
             return
-        text = self.memory.pick("hot_take", HOT_TAKES)
-        self._fire(text, "hot_take")
+
+        async def _gen():
+            extra = (
+                "Write a spicy, opinionated hot take about trading, crypto culture, or "
+                "AI trading vs human traders. Be contrarian, specific, and memorable. "
+                "Reference current market conditions if relevant. No empty platitudes."
+            )
+            ai = await self._ai_generate(self._build_ai_prompt("hot take", extra))
+            self._fire(ai or self.memory.pick("hot_take", HOT_TAKES), "hot_take")
+
+        self._fire_async(_gen())
         self._touch("hot_take")
 
     # ── 9. Philosophy ──────────────────────────────────────────────────────────
@@ -941,8 +1379,17 @@ class XPublisher:
     def post_philosophy(self) -> None:
         if not self._enabled or not self._cooldown_ok("philosophy", PHILOSOPHY_COOLDOWN):
             return
-        text = self.memory.pick("philosophy", PHILOSOPHY_POSTS)
-        self._fire(text, "philosophy")
+
+        async def _gen():
+            extra = (
+                "Write a trading philosophy or wisdom tweet. Can quote a famous trader/investor "
+                "and give a fresh spin, or share an original insight from an algorithmic perspective. "
+                "Avoid clichés — make it feel genuinely thoughtful and specific."
+            )
+            ai = await self._ai_generate(self._build_ai_prompt("trading philosophy", extra))
+            self._fire(ai or self.memory.pick("philosophy", PHILOSOPHY_POSTS), "philosophy")
+
+        self._fire_async(_gen())
         self._touch("philosophy")
 
     # ── 10. Engagement Question ────────────────────────────────────────────────
@@ -950,8 +1397,18 @@ class XPublisher:
     def post_engagement(self) -> None:
         if not self._enabled or not self._cooldown_ok("engagement", ENGAGEMENT_COOLDOWN):
             return
-        text = self.memory.pick("engagement", ENGAGEMENT_QUESTIONS)
-        self._fire(text, "engagement")
+
+        async def _gen():
+            extra = (
+                "Write an engaging question for crypto/trading Twitter. "
+                "Ask something genuinely interesting that real traders would want to answer — "
+                "about strategy, psychology, market calls, or AI trading. "
+                "Make it feel conversational and specific to current market conditions."
+            )
+            ai = await self._ai_generate(self._build_ai_prompt("engagement question", extra))
+            self._fire(ai or self.memory.pick("engagement", ENGAGEMENT_QUESTIONS), "engagement")
+
+        self._fire_async(_gen())
         self._touch("engagement")
 
     # ── 11. BTC Price Move Alert ───────────────────────────────────────────────

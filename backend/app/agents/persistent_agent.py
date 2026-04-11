@@ -1062,6 +1062,28 @@ class PersistentAgent:
         # Update open position P&L
         self._update_positions(live_price)
 
+        # Keep X publisher context fresh every scan
+        regime_now = self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown"
+        regime_conf = getattr(self.brain, "_regime_confidence", 0.5)
+        consec_losses = getattr(self.brain, "consecutive_losses", 0)
+        daily_pnl_now = getattr(self.brain, "daily_pnl", 0.0)
+        open_pos_count = sum(1 for v in self.positions.values() if v)
+        wr_all = self.stats.get("win_rate", 0) / 100.0
+        last_trade_ts = max(
+            (t.get("ts", 0) or 0 for t in (self.x_publisher._recent_posts or [])), default=0
+        )
+        self.x_publisher.update_context(
+            price=live_price,
+            regime=regime_now,
+            regime_confidence=regime_conf,
+            daily_pnl=daily_pnl_now,
+            consecutive_losses=consec_losses,
+            last_trade_ago_sec=time.time() - last_trade_ts if last_trade_ts else 999999,
+            win_rate=wr_all,
+            open_positions=open_pos_count,
+            scan_count=self.scan_count,
+        )
+
         # Sync with BingX exchange — detect positions closed by SL/TP
         if self._is_live_mode() and self._live:
             await self._sync_exchange_positions(live_price)
