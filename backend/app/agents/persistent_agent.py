@@ -952,11 +952,34 @@ class PersistentAgent:
 
     async def _x_scheduler(self) -> None:
         """
-        Background task that drives hourly, daily, and weekly X posts.
-        Runs independently of the main trading loop.
+        Background task driving all X posts — trading updates + viral content.
+        Fires immediately on startup, then runs on smart cooldown intervals.
         """
         if not self.x_publisher.enabled:
             return
+
+        # Give the agent 30s to initialise market data before first post
+        await asyncio.sleep(30)
+
+        # Fire startup burst — intro + first hourly + philosophy + engagement
+        try:
+            from app.agents.live_market_stream import LIVE_PRICES
+            btc_price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+        except Exception:
+            btc_price = 0.0
+
+        self.x_publisher.post_hourly(
+            btc_price=btc_price, open_positions=[],
+            daily_pnl=0.0, regime="unknown", regime_stability="starting up",
+        )
+        await asyncio.sleep(5)
+        self.x_publisher.post_philosophy()
+        await asyncio.sleep(5)
+        self.x_publisher.post_engagement()
+        await asyncio.sleep(5)
+        await self.x_publisher.post_fear_greed()
+        await asyncio.sleep(5)
+        await self.x_publisher.post_news()
 
         last_hour_posted = -1
         last_day_posted  = -1

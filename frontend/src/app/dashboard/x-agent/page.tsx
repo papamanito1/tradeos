@@ -120,6 +120,45 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, color, onTr
   );
 }
 
+function FireAllButton({ onDone }: { onDone: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const fireAll = async () => {
+    setLoading(true);
+    setResult(null);
+    try {
+      const r = await fetch(`${API}/api/x-agent/fire-all`, { method: "POST" });
+      const d = await r.json();
+      if (d.ok) {
+        const fired = Object.values(d.results || {}).filter((v) => v !== "failed").length;
+        setResult(`🔥 ${fired} posts fired!`);
+        onDone();
+      } else {
+        setResult(`❌ ${d.error}`);
+      }
+    } catch {
+      setResult("❌ Error");
+    }
+    setLoading(false);
+    setTimeout(() => setResult(null), 5000);
+  };
+
+  return (
+    <button
+      onClick={fireAll}
+      disabled={loading}
+      className={`px-4 py-1.5 text-sm font-semibold rounded-lg border transition-all ${
+        loading
+          ? "border-gray-600 text-gray-500 cursor-wait"
+          : "border-orange-500 text-orange-400 hover:bg-orange-500 hover:text-white cursor-pointer"
+      }`}
+    >
+      {loading ? "Posting…" : result || "🔥 Post Everything Now"}
+    </button>
+  );
+}
+
 export default function XAgentPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [manualText, setManualText] = useState("");
@@ -234,6 +273,7 @@ export default function XAgentPage() {
               <span className={`w-2 h-2 rounded-full ${status?.enabled ? "bg-green-400 animate-pulse" : "bg-red-400"}`} />
               {status?.enabled ? "LIVE" : "OFFLINE"}
             </div>
+            <FireAllButton onDone={fetchStatus} />
             <button
               onClick={resetCooldowns}
               className="px-3 py-1.5 text-xs text-gray-400 border border-gray-600 rounded-lg hover:border-gray-400 hover:text-gray-200 transition-colors"

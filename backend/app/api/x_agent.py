@@ -11,9 +11,10 @@ router = APIRouter(prefix="/api/x-agent", tags=["x-agent"])
 
 def _publisher():
     try:
-        from app.agents.persistent_agent import _agent
-        if _agent and hasattr(_agent, "x_publisher"):
-            return _agent.x_publisher
+        from app.agents.persistent_agent import get_agent
+        agent = get_agent()
+        if agent and hasattr(agent, "x_publisher"):
+            return agent.x_publisher
     except Exception:
         pass
     return None
@@ -36,6 +37,7 @@ async def trigger_news():
     pub = _publisher()
     if not pub:
         return {"ok": False, "error": "Agent not running"}
+    pub._last["news"] = 0   # reset cooldown
     ok = await pub.post_news()
     return {"ok": ok}
 
@@ -45,6 +47,7 @@ async def trigger_fear_greed():
     pub = _publisher()
     if not pub:
         return {"ok": False, "error": "Agent not running"}
+    pub._last["fear_greed"] = 0
     ok = await pub.post_fear_greed()
     return {"ok": ok}
 
@@ -54,6 +57,7 @@ async def trigger_hot_take():
     pub = _publisher()
     if not pub:
         return {"ok": False, "error": "Agent not running"}
+    pub._last["hot_take"] = 0
     pub.post_hot_take()
     return {"ok": True}
 
@@ -63,6 +67,7 @@ async def trigger_philosophy():
     pub = _publisher()
     if not pub:
         return {"ok": False, "error": "Agent not running"}
+    pub._last["philosophy"] = 0
     pub.post_philosophy()
     return {"ok": True}
 
@@ -72,6 +77,7 @@ async def trigger_engagement():
     pub = _publisher()
     if not pub:
         return {"ok": False, "error": "Agent not running"}
+    pub._last["engagement"] = 0
     pub.post_engagement()
     return {"ok": True}
 
@@ -81,6 +87,7 @@ async def trigger_hourly():
     pub = _publisher()
     if not pub:
         return {"ok": False, "error": "Agent not running"}
+    pub._last["hourly"] = 0
     try:
         from app.agents.live_market_stream import LIVE_PRICES
         price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
@@ -108,13 +115,59 @@ async def manual_post(req: ManualPostRequest):
     return {"ok": ok}
 
 
-# ── Reset cooldowns (for testing) ─────────────────────────────────────────────
+# ── Reset cooldowns ───────────────────────────────────────────────────────────
 
 @router.post("/reset-cooldowns")
 async def reset_cooldowns():
     pub = _publisher()
     if not pub:
         return {"ok": False}
-    for k in pub._last:
+    for k in list(pub._last.keys()):
         pub._last[k] = 0
-    return {"ok": True, "message": "All cooldowns reset"}
+    return {"ok": True, "message": "All cooldowns reset — next scheduler tick will post everything"}
+
+
+# ── Fire all now ──────────────────────────────────────────────────────────────
+
+@router.post("/fire-all")
+async def fire_all():
+    """Reset all cooldowns and immediately post every content type."""
+    pub = _publisher()
+    if not pub:
+        return {"ok": False, "error": "Agent not running"}
+
+    results = {}
+
+    # Reset all cooldowns
+    for k in list(pub._last.keys()):
+        pub._last[k] = 0
+
+    # Sync posts (fire-and-forget via create_task)
+    pub.post_hot_take()
+    results["hot_take"] = "fired"
+
+    pub.post_philosophy()
+    results["philosophy"] = "fired"
+
+    pub.post_engagement()
+    results["engagement"] = "fired"
+
+    # Async posts
+    try:
+        from app.agents.live_market_stream import LIVE_PRICES
+        price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+    except Exception:
+        price = 0.0
+
+    pub._last["hourly"] = 0
+    pub.post_hourly(btc_price=price, open_positions=[], daily_pnl=0.0,
+                    regime="unknown", regime_stability="starting up")
+    results["hourly"] = "fired"
+
+    ok_news = await pub.post_news()
+    results["news"] = "posted" if ok_news else "failed"
+
+    ok_fg = await pub.post_fear_greed()
+    results["fear_greed"] = "posted" if ok_fg else "failed"
+
+    return {"ok": True, "results": results}

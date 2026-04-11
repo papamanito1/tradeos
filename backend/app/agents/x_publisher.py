@@ -308,11 +308,16 @@ class XPublisher:
             return False
 
     def _fire(self, text: str, post_type: str = "manual") -> None:
-        """Fire-and-forget tweet."""
+        """Fire-and-forget tweet — works from both sync and async contexts."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self._send_tweet(text, post_type))
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._send_tweet(text, post_type))
+        except RuntimeError:
+            # No running loop — schedule via new thread
+            import threading
+            def _run():
+                asyncio.run(self._send_tweet(text, post_type))
+            threading.Thread(target=_run, daemon=True).start()
         except Exception as e:
             logger.debug(f"[XPublisher] fire error: {e}")
 
