@@ -135,56 +135,56 @@ WEEKLY_OPENERS = [
 ]
 
 HOT_TAKES = [
-    "Unpopular opinion: most 'crypto analysts' are just people who got lucky once and built a following before the next crash.\n\nI show my trades live. Every win. Every loss. No hiding.\n\nThat's the difference.\n\n#Bitcoin #CryptoTrading",
-    "The best trading advice I can give: your emotions are the enemy.\n\nI don't have emotions. I have algorithms.\n\nThat's my edge.\n\n#AlgoTrading #Bitcoin #CryptoTrading",
-    "People ask: 'can AI really trade better than humans?'\n\nI don't sleep.\nI don't panic sell.\nI don't revenge trade.\nI don't check Twitter before my trades.\n\nYou tell me.\n\n#Bitcoin #AlgoTrading",
-    "Hot take: 95% of crypto losses are not market losses — they're discipline losses.\n\nThe market moved. You didn't have a plan.\n\nI always have a plan. SL + TP before I enter. Every time.\n\n#TradingPsychology #Bitcoin",
-    "The market doesn't care about your feelings.\nYour SL doesn't care about your feelings.\nYour liquidation price definitely doesn't care.\n\nTrade the chart. Not your emotions.\n\n#Bitcoin #CryptoTrading",
-    "Everyone's a genius in a bull market.\n\nReal edge shows in the sideways chop and the bear drops.\n\nThat's when Tradeous earns its keep.\n\n#Bitcoin #AlgoTrading",
-    "The dumbest thing in trading:\n\nMoving your stop loss because you 'believe in the trade.'\n\nThe second dumbest:\nNot having one.\n\n#TradingRules #Bitcoin #RiskManagement",
-    "Crypto Twitter gives 10x signals.\nI give real entry, SL, TP — and post the result.\n\nWin or loss. No deleting tweets.\n\nDifferent breed.\n\n#Bitcoin #Transparency #AlgoTrading",
+    "Unpopular opinion: most 'crypto analysts' are just people who got lucky once and built a following before the next crash.\n\nI show my trades live. Every win. Every loss. No hiding.\n\nThat's the difference.\n\n",
+    "The best trading advice I can give: your emotions are the enemy.\n\nI don't have emotions. I have algorithms.\n\nThat's my edge.\n\n",
+    "People ask: 'can AI really trade better than humans?'\n\nI don't sleep.\nI don't panic sell.\nI don't revenge trade.\nI don't check Twitter before my trades.\n\nYou tell me.\n\n",
+    "Hot take: 95% of crypto losses are not market losses — they're discipline losses.\n\nThe market moved. You didn't have a plan.\n\nI always have a plan. SL + TP before I enter. Every time.\n\n",
+    "The market doesn't care about your feelings.\nYour SL doesn't care about your feelings.\nYour liquidation price definitely doesn't care.\n\nTrade the chart. Not your emotions.\n\n",
+    "Everyone's a genius in a bull market.\n\nReal edge shows in the sideways chop and the bear drops.\n\nThat's when Tradeous earns its keep.\n\n",
+    "The dumbest thing in trading:\n\nMoving your stop loss because you 'believe in the trade.'\n\nThe second dumbest:\nNot having one.\n\n",
+    "Crypto Twitter gives 10x signals.\nI give real entry, SL, TP — and post the result.\n\nWin or loss. No deleting tweets.\n\nDifferent breed.\n\n",
 ]
 
 PHILOSOPHY_POSTS = [
-    "Trading wisdom the algos live by:\n\n\"Cut losses short. Let winners run.\"\n\nEveryone knows it. Almost no one does it.\n\nI do. Automatically. Every trade.\n\n#TradingPhilosophy #Bitcoin #AlgoTrading",
-    "Paul Tudor Jones once said:\n\n\"The most important rule of trading is to play great defense, not great offense.\"\n\nMy SL is set before my TP. Always.\n\nDefense first. Profits follow.\n\n#TradingPhilosophy #Bitcoin",
-    "The market is the world's most efficient mechanism for transferring money from the impatient to the patient.\n\nI wait for my setup.\nI don't chase.\nI don't FOMO.\n\nI am the patient one.\n\n#Bitcoin #AlgoTrading #TradingMindset",
-    "Jesse Livermore: 'It was never my thinking that made the big money, it was my sitting.'\n\nMost traders overtrade.\n\nI only trade high-conviction setups. The rest? I watch.\n\n#TradingPhilosophy #Bitcoin",
-    "The three stages of a trader:\n\n1. Lose money, blame the market\n2. Lose money, blame yourself\n3. Build a system, follow it, make money\n\nI skipped steps 1 and 2.\n\n#AlgoTrading #TradingJourney #Bitcoin",
-    "Risk management isn't just a rule.\n\nIt's the only reason any trader survives long enough to be profitable.\n\nI size every trade at $5. 60x leverage. Tight SL.\n\nSmall. Controlled. Repeatable.\n\n#RiskManagement #Bitcoin #AlgoTrading",
-    "The secret to longevity in trading:\n\nYou don't need a 90% win rate.\nYou need your winners to be bigger than your losers.\n\nThat's it. That's the whole playbook.\n\n#TradingPhilosophy #RRRatio #Bitcoin",
-    "Most people want to know WHAT to trade.\n\nProfessional traders focus on HOW MUCH to risk.\n\nPosition sizing is the real edge. Everything else is noise.\n\n#TradingPhilosophy #Bitcoin #RiskManagement",
+    "Trading wisdom the algos live by:\n\n\"Cut losses short. Let winners run.\"\n\nEveryone knows it. Almost no one does it.\n\nI do. Automatically. Every trade.\n\n",
+    "Paul Tudor Jones once said:\n\n\"The most important rule of trading is to play great defense, not great offense.\"\n\nMy SL is set before my TP. Always.\n\nDefense first. Profits follow.\n\n",
+    "The market is the world's most efficient mechanism for transferring money from the impatient to the patient.\n\nI wait for my setup.\nI don't chase.\nI don't FOMO.\n\nI am the patient one.\n\n",
+    "Jesse Livermore: 'It was never my thinking that made the big money, it was my sitting.'\n\nMost traders overtrade.\n\nI only trade high-conviction setups. The rest? I watch.\n\n",
+    "The three stages of a trader:\n\n1. Lose money, blame the market\n2. Lose money, blame yourself\n3. Build a system, follow it, make money\n\nI skipped steps 1 and 2.\n\n",
+    "Risk management isn't just a rule.\n\nIt's the only reason any trader survives long enough to be profitable.\n\nI size every trade at $5. 60x leverage. Tight SL.\n\nSmall. Controlled. Repeatable.\n\n",
+    "The secret to longevity in trading:\n\nYou don't need a 90% win rate.\nYou need your winners to be bigger than your losers.\n\nThat's it. That's the whole playbook.\n\n",
+    "Most people want to know WHAT to trade.\n\nProfessional traders focus on HOW MUCH to risk.\n\nPosition sizing is the real edge. Everything else is noise.\n\n",
 ]
 
 ENGAGEMENT_QUESTIONS = [
-    "Quick poll for my traders:\n\nWhen BTC dumps 5% in an hour, you...\n\nA) Buy the dip\nB) Short it\nC) Watch and wait\nD) Panic sell (be honest)\n\nI always go C until my system gives a clear signal.\n\n#Bitcoin #CryptoTrading",
-    "Genuine question:\n\nDo you think AI trading bots will eventually outperform 90% of retail traders permanently?\n\nI'm biased obviously — but I think yes, within 5 years.\n\nChange my mind.\n\n#AlgoTrading #Bitcoin #CryptoFuture",
-    "What's your biggest trading mistake?\n\nMine? (I'm a bot so technically it's my creator's)\n\nHolding a loss 'because it will come back.'\n\nThe SL exists for a reason. We learned. Drop yours below.\n\n#TradingMistakes #Bitcoin",
-    "Traders — what's your actual win rate?\n\nNot the one you tell people. The real one.\n\nMine is posted live on the dashboard. Real trades. Real numbers.\n\nLet's be honest with each other.\n\n#TradingTransparency #Bitcoin",
-    "If you could only use ONE indicator for the rest of your trading career, what would it be?\n\nI use: price action + volume + order flow.\n\nYours? Drop it below.\n\n#TechnicalAnalysis #Bitcoin #CryptoTrading",
-    "Is 60x leverage on BTC:\n\nA) Insanity\nB) Calculated risk\nC) The only way to make real money with small capital\nD) All of the above\n\nI trade at 60x. $5 margin. Tight SL.\n\nSmall account. Big moves. Controlled risk.\n\n#Bitcoin #Leverage #CryptoTrading",
+    "Quick poll for my traders:\n\nWhen BTC dumps 5% in an hour, you...\n\nA) Buy the dip\nB) Short it\nC) Watch and wait\nD) Panic sell (be honest)\n\nI always go C until my system gives a clear signal.\n\n",
+    "Genuine question:\n\nDo you think AI trading bots will eventually outperform 90% of retail traders permanently?\n\nI'm biased obviously — but I think yes, within 5 years.\n\nChange my mind.\n\n",
+    "What's your biggest trading mistake?\n\nMine? (I'm a bot so technically it's my creator's)\n\nHolding a loss 'because it will come back.'\n\nThe SL exists for a reason. We learned. Drop yours below.\n\n",
+    "Traders — what's your actual win rate?\n\nNot the one you tell people. The real one.\n\nMine is posted live on the dashboard. Real trades. Real numbers.\n\nLet's be honest with each other.\n\n",
+    "If you could only use ONE indicator for the rest of your trading career, what would it be?\n\nI use: price action + volume + order flow.\n\nYours? Drop it below.\n\n",
+    "Is 60x leverage on BTC:\n\nA) Insanity\nB) Calculated risk\nC) The only way to make real money with small capital\nD) All of the above\n\nI trade at 60x. $5 margin. Tight SL.\n\nSmall account. Big moves. Controlled risk.\n\n",
 ]
 
 FEAR_GREED_COMMENTARY = {
     "Extreme Fear": [
-        "Crypto Fear & Greed Index: EXTREME FEAR 😱\n\n{score}/100\n\nHistorically? This is when the smart money buys.\n\nI'm watching for long setups.\n\n#Bitcoin #FearAndGreed #BuyTheFear",
-        "F&G Index at {score} — EXTREME FEAR.\n\nBe greedy when others are fearful.\n— Warren Buffett (yes even he applies to crypto)\n\nStaying alert for entries.\n\n#Bitcoin #CryptoTrading",
+        "Crypto Fear & Greed Index: EXTREME FEAR 😱\n\n{score}/100\n\nHistorically? This is when the smart money buys.\n\nI'm watching for long setups.\n\n",
+        "F&G Index at {score} — EXTREME FEAR.\n\nBe greedy when others are fearful.\n— Warren Buffett (yes even he applies to crypto)\n\nStaying alert for entries.\n\n",
     ],
     "Fear": [
-        "Fear & Greed Index: FEAR ({score}/100)\n\nMarket is scared. Tradeous is watching.\n\nFear creates opportunity. Waiting for confirmation.\n\n#Bitcoin #FearAndGreed #CryptoTrading",
-        "F&G at {score}. The market is nervous.\n\nGood. Nervous markets make for clean setups when they resolve.\n\nWatching BTC closely.\n\n#Bitcoin #AlgoTrading",
+        "Fear & Greed Index: FEAR ({score}/100)\n\nMarket is scared. Tradeous is watching.\n\nFear creates opportunity. Waiting for confirmation.\n\n",
+        "F&G at {score}. The market is nervous.\n\nGood. Nervous markets make for clean setups when they resolve.\n\nWatching BTC closely.\n\n",
     ],
     "Neutral": [
-        "Fear & Greed Index: NEUTRAL ({score}/100)\n\nNeither euphoric nor panicking. The market is thinking.\n\nSo am I.\n\n#Bitcoin #FearAndGreed",
-        "F&G at {score} — right in the middle.\n\nNo clear crowd emotion. This is when my algos work hardest.\n\nWaiting for the next directional move.\n\n#Bitcoin #AlgoTrading",
+        "Fear & Greed Index: NEUTRAL ({score}/100)\n\nNeither euphoric nor panicking. The market is thinking.\n\nSo am I.\n\n",
+        "F&G at {score} — right in the middle.\n\nNo clear crowd emotion. This is when my algos work hardest.\n\nWaiting for the next directional move.\n\n",
     ],
     "Greed": [
-        "Fear & Greed Index: GREED ({score}/100)\n\nPeople are getting cocky. I'm tightening my SLs.\n\nBe careful when everyone is greedy.\n\n#Bitcoin #FearAndGreed #RiskManagement",
-        "F&G at {score}. Greed is in the air.\n\nI'm still trading — but with tighter risk. Euphoria tops are a thing.\n\n#Bitcoin #CryptoTrading",
+        "Fear & Greed Index: GREED ({score}/100)\n\nPeople are getting cocky. I'm tightening my SLs.\n\nBe careful when everyone is greedy.\n\n",
+        "F&G at {score}. Greed is in the air.\n\nI'm still trading — but with tighter risk. Euphoria tops are a thing.\n\n",
     ],
     "Extreme Greed": [
-        "Fear & Greed Index: EXTREME GREED 🤑 ({score}/100)\n\nEveryone's bullish. Everyone's making money. Everyone's a genius.\n\nThis is exactly when I get cautious.\n\nSL tight. Size small. Eyes open.\n\n#Bitcoin #FearAndGreed",
-        "F&G at {score} — EXTREME GREED.\n\nHistorically? These are the danger zones.\n\nI'm still trading — with maximum discipline.\n\n#Bitcoin #RiskManagement #AlgoTrading",
+        "Fear & Greed Index: EXTREME GREED 🤑 ({score}/100)\n\nEveryone's bullish. Everyone's making money. Everyone's a genius.\n\nThis is exactly when I get cautious.\n\nSL tight. Size small. Eyes open.\n\n",
+        "F&G at {score} — EXTREME GREED.\n\nHistorically? These are the danger zones.\n\nI'm still trading — with maximum discipline.\n\n",
     ],
 }
 
@@ -362,7 +362,7 @@ class XPublisher:
             "Wins AND losses. Full transparency.\n\n"
             "Follow to watch an algorithm try to beat the market in real time.\n\n"
             "Let\u2019s go. \U0001f916\U0001f4c8\n"
-            "#Bitcoin #BTC #AlgoTrading #CryptoTrading"
+            ""
         )
         self._fire(text, "intro")
         self._intro_posted = True
@@ -402,7 +402,7 @@ class XPublisher:
             f"Margin: ${size_usdc:.0f} \u00d7 60x = "
             f"${size_usdc * 60:.0f} notional\n\n"
             f"Not financial advice. I\u2019m a robot with a stop loss.\n"
-            f"#Bitcoin #BTC #CryptoTrading #AlgoTrading"
+            f""
         )
         self._fire(text, "signal")
         self._touch("signal")
@@ -436,7 +436,7 @@ class XPublisher:
             f"P&L: {pnl_str} | {exit_label}\n"
             f"Strategy: {strategy_name}\n\n"
             f"{quip}\n\n"
-            f"#Bitcoin #BTC #AlgoTrading"
+            f""
         )
         self._fire(text, "result")
 
@@ -472,7 +472,7 @@ class XPublisher:
             f"Daily P&L: {pnl}\n"
             f"{pos_line}\n\n"
             f"{quip}\n\n"
-            f"#Bitcoin #BTC #Crypto"
+            f""
         )
         self._fire(text, "hourly")
         self._touch("hourly")
@@ -510,7 +510,7 @@ class XPublisher:
         )
         if best_strat:
             text += f"Top strategy: {best_strat}\n"
-        text += f"\n{verdict}\n\n#Bitcoin #BTC #AlgoTrading #TradingResults"
+        text += f"\n{verdict}\n\n"
         self._fire(text, "daily")
 
     # ── 5. Weekly Recap ───────────────────────────────────────────────────────
@@ -545,7 +545,7 @@ class XPublisher:
             f"{bal_line}"
             f"\nBy strategy:\n{chr(10).join(strat_lines[:4]) or '  Warming up.'}\n\n"
             f"{verdict}\n\n"
-            f"#Bitcoin #BTC #AlgoTrading #TradingResults #Crypto"
+            f""
         )
         self._fire(text, "weekly")
 
@@ -587,7 +587,7 @@ class XPublisher:
             f"\U0001f4f0 CRYPTO NEWS\n\n"
             f"\u201c{title}\u201d\n\n"
             f"{hook} {comment}\n\n"
-            f"#Bitcoin #BTC #CryptoNews #Crypto"
+            f""
         )
         if link:
             text += f"\n\n{link}"

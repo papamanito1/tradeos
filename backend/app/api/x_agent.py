@@ -74,7 +74,7 @@ def _gen_hourly_text(pub) -> str:
         f"Price: {price_str}\n"
         f"No open positions. Watching.\n\n"
         f"{quip}\n\n"
-        f"#Bitcoin #BTC #Crypto"
+        f""
     )
 
 
@@ -93,7 +93,7 @@ async def trigger_news():
         f"\U0001f4f0 CRYPTO NEWS\n\n"
         f"\u201c{story['title'][:120]}\u201d\n\n"
         f"{random.choice(hooks)} {random.choice(comments)}\n\n"
-        f"#Bitcoin #BTC #CryptoNews"
+        f""
     )
     if story.get("link"):
         text += f"\n\n{story['link']}"
