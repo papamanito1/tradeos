@@ -152,6 +152,7 @@ export interface ServerStatus {
   log:              string[];
   live_executor?:   LiveExecutorStatus | null;
   master_brain?:    MasterBrainStatus | null;
+  paper_trader?:    Record<string, unknown> | null;
 }
 
 async function apiFetch(path: string, opts?: RequestInit) {
