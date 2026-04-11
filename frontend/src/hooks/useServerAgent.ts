@@ -262,5 +262,6 @@ export function useServerAgent() {
     livePrice:        status?.live_price      ?? 0,
     liveExecutor:     status?.live_executor   ?? null,
     brain:            status?.master_brain    ?? null,
+    paperTrader:      status?.paper_trader    ?? null,
   };
 }

@@ -504,6 +504,8 @@ class PersistentAgent:
         # X/Twitter publisher — gracefully disabled when env vars are absent
         from app.agents.x_publisher import XPublisher
         self.x_publisher = XPublisher()
+        from app.agents.paper_trader import PaperTrader
+        self.paper_trader = PaperTrader()
         self._load_state()
 
     def _get_live_executor(self):
@@ -546,6 +548,8 @@ class PersistentAgent:
             # X posts survive restarts — last 50 posts persisted
             "x_recent_posts":  self.x_publisher._recent_posts[-50:],
             "x_last_times":    self.x_publisher._last,
+            # Paper trader state survives restarts
+            "paper_trader":    self.paper_trader.to_dict(),
         }
 
     def _apply_state(self, data: dict) -> None:
@@ -573,6 +577,9 @@ class PersistentAgent:
             self.x_publisher._recent_posts = data["x_recent_posts"]
         if data.get("x_last_times"):
             self.x_publisher._last.update(data["x_last_times"])
+        # Restore paper trader
+        if data.get("paper_trader"):
+            self.paper_trader.from_dict(data["paper_trader"])
         # If Brain's stats were wiped (restart/deploy), reconstruct from trade history
         self._reconstruct_brain_stats()
 
@@ -822,6 +829,8 @@ class PersistentAgent:
         loaded_from_db = await self._load_state_db()
         if not loaded_from_db:
             self._load_state()  # file fallback (local dev)
+        # Load paper trader's own persistent DB (separate from main agent state)
+        await self.paper_trader.load_from_db()
         # Always force trading-active flags on start regardless of stale DB config
         self.config["enabled"]      = True
         self.config["auto_execute"] = True
@@ -1062,6 +1071,17 @@ class PersistentAgent:
         # Update open position P&L
         self._update_positions(live_price)
 
+        # Paper trader — update prices and check SL/TP
+        self.paper_trader.update_prices(live_price)
+        paper_closed = self.paper_trader.check_sl_tp(live_price)
+        for pt in paper_closed:
+            strat_key = pt.get("strat_key_ref", pt.get("strategy_key", ""))
+            pnl = pt.get("pnl_usd", 0)
+            won = pnl > 0
+            self.brain.record_trade_result(strat_key, pnl, won, was_live=False)
+            self._log(f"📊 [PAPER_TRADER] {pt['strategy_name']} {pt['exit_reason'].upper()} "
+                      f"· P&L {'+' if pnl>=0 else ''}${pnl:.2f} · bal ${self.paper_trader.balance:.2f}")
+
         # Keep X publisher context fresh every scan
         regime_now = self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown"
         regime_conf = getattr(self.brain, "_regime_confidence", 0.5)
@@ -1221,6 +1241,35 @@ class PersistentAgent:
             min_conf = max(0.40, s_cfg.get("min_confidence", 0.50) - 0.08)
             if sig.get("confidence", 0) >= min_conf:
                 self._open_shadow(shadow_key, result.get("name", key), sig, s_cfg, live_price)
+
+        # ── Paper Trader — takes every signal with realistic sizing ────────
+        for key, result in strategies:
+            s_cfg = self._strategy_cfg(key)
+            if not s_cfg.get("enabled", True):
+                continue
+            sig = result.get("signal")
+            if not sig:
+                continue
+            min_conf = max(0.35, s_cfg.get("min_confidence", 0.50) - 0.12)
+            if sig.get("confidence", 0) >= min_conf:
+                sig_entry = sig.get("entry") or live_price
+                entry = live_price if live_price > 0 else sig_entry
+                sl_dist = abs(sig_entry - (sig.get("sl") or sig_entry)) if sig.get("sl") else entry * 0.004
+                tp_dist = abs((sig.get("tp") or sig_entry) - sig_entry) if sig.get("tp") else entry * 0.008
+                d = sig["direction"]
+                sl = (entry - sl_dist) if d == "long" else (entry + sl_dist)
+                tp = (entry + tp_dist) if d == "long" else (entry - tp_dist)
+                self.paper_trader.open_position(
+                    strategy_key=key,
+                    strategy_name=result.get("name", key),
+                    direction=d,
+                    entry_price=entry,
+                    sl_price=round(sl, 2),
+                    tp_price=round(tp, 2),
+                    confidence=sig.get("confidence", 0),
+                    leverage=int(s_cfg.get("leverage", 10)),
+                    reasoning=sig.get("reasoning", ""),
+                )
 
         # ── Fusion strategy — ONE unified meta-signal from all sub-strategies ─
         # The MasterBrain acts as an ensemble learner: it weights each strategy's
@@ -1826,6 +1875,7 @@ class PersistentAgent:
             "training_index":       self.training_index,
             "live_executor":        live_executor_status,
             "master_brain":         self.brain.get_status(self.positions, price),
+            "paper_trader":         self.paper_trader.get_status(),
         }
 
 

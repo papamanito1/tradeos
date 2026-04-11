@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
-  Settings, LogOut, Bot, Twitter,
+  Settings, LogOut, Bot, Twitter, LineChart,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Logo } from "@/components/ui/Logo";
@@ -17,8 +17,9 @@ const NAV_SECTIONS = [
     label: "Trading",
     items: [
       { label: "Overview",   href: "/dashboard",            icon: LayoutDashboard },
-      { label: "Live Agent", href: "/dashboard/agent",      icon: Bot },
-      { label: "X Agent",    href: "/dashboard/x-agent",   icon: Twitter },
+      { label: "Live Agent",    href: "/dashboard/agent",        icon: Bot },
+      { label: "Paper Trader", href: "/dashboard/paper-trader", icon: LineChart },
+      { label: "X Agent",      href: "/dashboard/x-agent",     icon: Twitter },
     ],
   },
   {

@@ -244,3 +244,22 @@ async def reset_brain_trust():
     agent._save_state()
     agent._schedule_db_save()
     return {"ok": True, "trust": agent.brain.strategy_trust}
+
+
+# ── Paper Trader ──────────────────────────────────────────────────────────
+
+@router.get("/paper-trader")
+async def get_paper_trader():
+    """Full paper trader status — balance, positions, trades, equity curve."""
+    return _get().paper_trader.get_status()
+
+
+@router.post("/paper-trader/reset")
+async def reset_paper_trader():
+    """Reset paper trader to $10K starting balance."""
+    agent = _get()
+    from app.agents.paper_trader import PaperTrader, STARTING_BALANCE
+    agent.paper_trader = PaperTrader()
+    agent._save_state()
+    agent._schedule_db_save()
+    return {"ok": True, "balance": STARTING_BALANCE}
