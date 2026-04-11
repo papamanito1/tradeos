@@ -72,19 +72,23 @@ except ImportError:
 
 # ── Timing constants ──────────────────────────────────────────────────────────
 SIGNAL_MIN_CONVICTION  = 0.70
-SIGNAL_COOLDOWN        = 900      # 15 min
-HOURLY_COOLDOWN        = 1500     # 25 min
-NEWS_COOLDOWN          = 3000     # 50 min
-FEAR_GREED_COOLDOWN    = 7200     # 2 h
-HOT_TAKE_COOLDOWN      = 3600     # 60 min
-PHILOSOPHY_COOLDOWN    = 7200     # 2 h
-ENGAGEMENT_COOLDOWN    = 7200     # 2 h
-BTC_MOVE_COOLDOWN      = 1800     # 30 min
-ALGO_INSIGHT_COOLDOWN  = 10800    # 3 h
-TRENDING_COOLDOWN      = 5400     # 90 min — Grok X-trend post
-VIRAL_COMMENTARY_COOLDOWN = 7200  # 2 h — Grok viral commentary
-BOLD_PREDICTION_COOLDOWN  = 14400 # 4 h — Grok bold prediction
-PREDICTION_COOLDOWN    = 14400    # 4 h
+SIGNAL_COOLDOWN        = 600      # 10 min (was 15)
+HOURLY_COOLDOWN        = 1200     # 20 min (was 25) — market updates more frequent
+NEWS_COOLDOWN          = 2400     # 40 min (was 50)
+FEAR_GREED_COOLDOWN    = 5400     # 90 min (was 2 h)
+HOT_TAKE_COOLDOWN      = 2700     # 45 min (was 60)
+PHILOSOPHY_COOLDOWN    = 5400     # 90 min (was 2 h)
+ENGAGEMENT_COOLDOWN    = 5400     # 90 min (was 2 h)
+BTC_MOVE_COOLDOWN      = 1200     # 20 min (was 30)
+ALGO_INSIGHT_COOLDOWN  = 7200     # 2 h (was 3 h)
+ALGO_EXPLAINER_COOLDOWN = 10800   # 3 h — "how the AI thinks" thread
+GM_COOLDOWN            = 82800    # 23 h — once per morning
+GN_COOLDOWN            = 82800    # 23 h — once per night
+REPLY_HOOK_COOLDOWN    = 3600     # 1 h — reply to viral BTC tweet
+TRENDING_COOLDOWN      = 3600     # 60 min (was 90) — Grok X-trend post
+VIRAL_COMMENTARY_COOLDOWN = 5400  # 90 min (was 2 h) — Grok viral commentary
+BOLD_PREDICTION_COOLDOWN  = 10800 # 3 h (was 4 h) — Grok bold prediction
+PREDICTION_COOLDOWN    = 10800    # 3 h
 MILESTONE_COOLDOWN     = 3600     # 1 h (but only fires when milestone reached)
 GROK_TREND_REFRESH     = 2700     # 45 min — background Grok trend refresh
 
@@ -467,6 +471,7 @@ class XPublisher:
             "signal": 0, "hourly": 0, "news": 0,
             "fear_greed": 0, "hot_take": 0, "philosophy": 0,
             "engagement": 0, "btc_move": 0, "algo_insight": 0,
+            "algo_explainer": 0, "gm": 0, "gn": 0, "reply_hook": 0,
             "trending_hook": 0, "viral_commentary": 0, "bold_prediction": 0,
         }
         self._intro_posted = False
@@ -1158,6 +1163,10 @@ class XPublisher:
         "engagement":       ENGAGEMENT_COOLDOWN,
         "btc_move":         BTC_MOVE_COOLDOWN,
         "algo_insight":     ALGO_INSIGHT_COOLDOWN,
+        "algo_explainer":   ALGO_EXPLAINER_COOLDOWN,
+        "gm":               GM_COOLDOWN,
+        "gn":               GN_COOLDOWN,
+        "reply_hook":       REPLY_HOOK_COOLDOWN,
         "news":             NEWS_COOLDOWN,
         "trending_hook":    TRENDING_COOLDOWN,
         "viral_commentary": VIRAL_COMMENTARY_COOLDOWN,
@@ -1203,6 +1212,11 @@ class XPublisher:
 
     # ── 1. Trade Signal ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _tv_link(interval: str = "15") -> str:
+        """TradingView BTC/USDT chart link for the signal's timeframe."""
+        return f"https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT&interval={interval}"
+
     def post_signal(
         self,
         strategy_name: str,
@@ -1225,31 +1239,78 @@ class XPublisher:
             if denom > 0:
                 rr = abs(tp_price - entry_price) / denom
 
-        dir_word = "LONG 🟢" if direction == "long" else "SHORT 🔴"
+        dir_emoji = "🟢" if direction == "long" else "🔴"
+        conviction_pct = int(conviction * 100)
+        chart_url = self._tv_link()
 
         async def _post():
             extra = (
-                f"btc trade just opened: {direction} entry at {self._fmt_price(entry_price)}, "
-                f"sl {self._fmt_price(sl_price)}, tp {self._fmt_price(tp_price)}, r:r 1:{rr:.1f}. "
-                f"announce the trade in @mistor style — short, lowercase, punchy. "
-                f"mention the key numbers. end with a one-liner showing conviction."
+                f"🚨 live btc {direction} just opened. "
+                f"entry {self._fmt_price(entry_price)} | sl {self._fmt_price(sl_price)} | tp {self._fmt_price(tp_price)} | r:r 1:{rr:.1f} | conviction {conviction_pct}%. "
+                f"write a punchy signal announcement in @mistor style. "
+                f"start with 🚨 on first line. direction + key numbers. end with a short conviction line. "
+                f"MUST include #Bitcoin and #BTC at the end. max 220 chars before the hashtags."
             )
             ai_text = await self._ai_generate(self._build_ai_prompt("live trade signal", extra))
-            dir_emoji = "🟢" if direction == "long" else "🔴"
-            text = ai_text or (
-                f"btc {direction} {dir_emoji}\n\n"
+            fallback = (
+                f"🚨 btc {direction} {dir_emoji}\n\n"
                 f"entry: {self._fmt_price(entry_price)}\n"
-                f"sl: {self._fmt_price(sl_price)} · tp: {self._fmt_price(tp_price)}\n\n"
-                f"sl is set. we ride or we cut. no in between"
+                f"sl: {self._fmt_price(sl_price)} · tp: {self._fmt_price(tp_price)}\n"
+                f"r:r 1:{rr:.1f} · conviction {conviction_pct}%\n\n"
+                f"sl is set. no emotion. algo running.\n\n"
+                f"#Bitcoin #BTC"
             )
-            # Post and capture tweet_id for thread reply on close
-            ok = await self._send_tweet(text[:280], "signal")
+            text = (ai_text or fallback)[:280]
+
+            # Post signal and capture tweet_id for the follow-up thread
+            ok = await self._send_tweet(text, "signal")
             if ok and self._recent_posts:
                 self._last_signal_tweet_id = self._recent_posts[-1].get("id", "")
                 self._last_signal_strategy = strategy_name
+                # Queue "why algo entered" explanation as a thread reply
+                await asyncio.sleep(random.uniform(30, 90))
+                await self._post_signal_explainer(
+                    strategy_name, direction, entry_price, sl_price, tp_price,
+                    rr, conviction_pct, regime, chart_url, self._last_signal_tweet_id,
+                )
 
         self._fire_async(_post())
         self._touch("signal")
+
+    async def _post_signal_explainer(
+        self,
+        strategy_name: str,
+        direction: str,
+        entry: float,
+        sl: float,
+        tp: float,
+        rr: float,
+        conviction_pct: int,
+        regime: str,
+        chart_url: str,
+        reply_to_id: str,
+    ) -> None:
+        """Thread reply: explains WHY the algo entered — builds trust + engagement."""
+        extra = (
+            f"explain in 3-4 short lines why the algo just took a btc {direction} at {self._fmt_price(entry)}. "
+            f"regime is {regime.replace('_', ' ')}. conviction {conviction_pct}%. strategy: {strategy_name}. "
+            f"write like @mistor — lowercase, punchy, no corporate speak. "
+            f"explain the logic briefly (e.g. ema crossover, vwap, volume, regime etc). "
+            f"end with the TradingView link on its own line: {chart_url}"
+        )
+        ai_text = await self._ai_generate(self._build_ai_prompt("signal explainer", extra))
+        fallback = (
+            f"why the algo entered {direction}:\n\n"
+            f"• regime: {regime.replace('_',' ')}\n"
+            f"• conviction: {conviction_pct}%\n"
+            f"• r:r 1:{rr:.1f} — risk defined before entry\n\n"
+            f"chart: {chart_url}"
+        )
+        text = (ai_text or fallback)[:280]
+        if reply_to_id:
+            await self._send_tweet_reply(text, reply_to_id, "signal_explainer")
+        else:
+            await self._send_tweet(text, "signal_explainer")
 
     # ── 2. Trade Result ────────────────────────────────────────────────────────
 
@@ -1274,24 +1335,27 @@ class XPublisher:
         reply_to = self._last_signal_tweet_id if self._last_signal_strategy == strategy_name else ""
 
         async def _post():
+            pnl_receipt = f"{self._fmt_price(entry_price)} → {self._fmt_price(exit_price)} · {pnl_str}"
             extra = (
-                f"btc {direction} trade closed{dur}. "
-                f"entry {self._fmt_price(entry_price)} → exit {self._fmt_price(exit_price)}. "
-                f"p&l: {pnl_str}. {'win.' if won else 'sl hit.'} "
-                f"write in @mistor style: short, lowercase, no hashtags. "
-                f"{'own the win with quiet confidence.' if won else 'own the loss with discipline. no excuses. no drama.'}"
+                f"btc {direction} trade closed{dur}. receipt: {pnl_receipt}. "
+                f"exit reason: {reason}. {'win — tp hit 🎯' if won else 'loss — sl hit 🛡️'}. "
+                f"write in @mistor style: short, lowercase. "
+                f"show the receipt clearly (entry → exit · p&l). "
+                f"{'quiet confidence. no celebration. just the numbers.' if won else 'own the loss. no excuses. sl protected the bag. next.'} "
+                f"end with #Bitcoin"
             )
             ai_text = await self._ai_generate(self._build_ai_prompt("trade result", extra))
             quip = self.memory.pick("result_quip", RESULT_WIN_QUIPS if won else RESULT_LOSS_QUIPS)
             fallback = (
-                f"btc {direction} closed{dur}\n\n"
+                f"{'🎯 tp hit' if reason == 'tp' else '🛡️ sl hit'} · btc {direction}{dur}\n\n"
                 f"{self._fmt_price(entry_price)} → {self._fmt_price(exit_price)}\n"
                 f"{pnl_str}\n\n"
-                f"{quip}"
+                f"{quip}\n\n"
+                f"#Bitcoin"
             )
             text = (ai_text or fallback)[:280]
 
-            # Reply to the original signal tweet to form a thread
+            # Reply to the original signal tweet to form a thread (receipt = thread)
             if reply_to:
                 ok = await self._send_tweet_reply(text, reply_to, "result")
             else:
@@ -1815,6 +1879,147 @@ class XPublisher:
             )
         except Exception as e:
             logger.debug(f"[XPublisher] Grok refresh error: {e}")
+
+    # ── 16. Good Morning / Good Night ─────────────────────────────────────────
+
+    _GM_LINES = [
+        "gm. btc only. algo is live.\n\n#Bitcoin",
+        "gm\n\nif you're not watching btc you're watching the wrong chart\n\n#Bitcoin",
+        "gm. another day. btc still printing.\n\n#BTC",
+        "gm btc twitter\n\nalgo scanning. positions loading.\n\n#Bitcoin",
+        "gm\n\neth down. memes down. btc stays.\n\nalways btc 💨\n\n#BTC",
+        "gm\n\nweak hands slept. strong hands held.\n\nthat's the trade.\n\n#Bitcoin",
+        "gm crypto twitter\n\nbtc is the only asset that matters today\n\n#BTC",
+    ]
+    _GN_LINES = [
+        "gn. algo running overnight. btc doesn't sleep.\n\n#Bitcoin",
+        "gn btc twitter\n\npositions managed. sl set. see you at open.\n\n#BTC",
+        "gn\n\nbought the close. btc doesn't care about your bedtime.\n\n#Bitcoin",
+        "gn\n\nalgo handles the night shift\n\nno emotion. no mistakes.\n\n#BTC",
+        "gn. the weak hands are sleeping. the system keeps scanning.\n\n#Bitcoin",
+    ]
+
+    def post_gm(self) -> None:
+        if not self._enabled or not self._cooldown_ok("gm", GM_COOLDOWN):
+            return
+        async def _gen():
+            extra = (
+                "write a gm (good morning) tweet for btc crypto twitter. "
+                "@mistor style. lowercase. punchy. max 3 lines. "
+                "can diss alts. mention btc is the only thing that matters. "
+                "end with #Bitcoin or #BTC."
+            )
+            ai = await self._ai_generate(self._build_ai_prompt("gm post", extra))
+            await self._send_tweet(ai or random.choice(self._GM_LINES), "gm")
+        self._fire_async(_gen())
+        self._touch("gm")
+
+    def post_gn(self) -> None:
+        if not self._enabled or not self._cooldown_ok("gn", GN_COOLDOWN):
+            return
+        async def _gen():
+            extra = (
+                "write a gn (good night) tweet for btc crypto twitter. "
+                "@mistor style. lowercase. punchy. mention the algo runs 24/7. "
+                "max 3 lines. end with #Bitcoin or #BTC."
+            )
+            ai = await self._ai_generate(self._build_ai_prompt("gn post", extra))
+            await self._send_tweet(ai or random.choice(self._GN_LINES), "gn")
+        self._fire_async(_gen())
+        self._touch("gn")
+
+    # ── 17. Algo Explainer — "How the AI thinks" ──────────────────────────────
+
+    _ALGO_EXPLAINER_HOOKS = [
+        "how the algo decides when to enter btc:",
+        "what the ai actually looks at before opening a trade:",
+        "people ask how the algo works. here's what it checks:",
+        "every btc trade goes through this filter:",
+        "the ai doesn't guess. here's the process:",
+    ]
+
+    def post_algo_explainer(self) -> None:
+        """
+        Educational thread-style post explaining how MasterBrain works.
+        Builds trust, authority, and shares — key for follower growth.
+        """
+        if not self._enabled or not self._cooldown_ok("algo_explainer", ALGO_EXPLAINER_COOLDOWN):
+            return
+        ctx = self._live_context
+        regime = ctx.get("regime", "unknown").replace("_", " ")
+
+        async def _gen():
+            extra = (
+                "write an educational tweet thread explaining how an AI btc trading algo works. "
+                f"current btc regime: {regime}. "
+                "format: hook line → 3-4 bullet points showing what the ai checks (e.g. ema, vwap, orderbook, regime, conviction score). "
+                "end: 'no emotion. no guessing. just data.' "
+                "@mistor style — lowercase, punchy, educational. no hashtags except #Bitcoin at very end. "
+                "max 260 chars total."
+            )
+            ai = await self._ai_generate(self._build_ai_prompt("algo explainer", extra))
+            hook = random.choice(self._ALGO_EXPLAINER_HOOKS)
+            fallback = (
+                f"{hook}\n\n"
+                f"• regime detection (trending/ranging/volatile)\n"
+                f"• ema crossovers + vwap distance\n"
+                f"• order book imbalance (obi)\n"
+                f"• conviction score > 70%\n"
+                f"• risk/reward ≥ 1:2\n\n"
+                f"if all boxes checked → trade opens.\n\n"
+                f"no emotion. no guessing. just data.\n\n#Bitcoin"
+            )
+            await self._send_tweet((ai or fallback)[:280], "algo_explainer")
+        self._fire_async(_gen())
+        self._touch("algo_explainer")
+
+    # ── 18. Reply Hook — engage viral BTC tweets for reach ────────────────────
+
+    def post_reply_hook(self) -> None:
+        """
+        Grok finds a currently viral BTC tweet and generates a sharp reply.
+        Replies to viral content = discovery by thousands of eyeballs.
+        """
+        if not self._enabled or not self._cooldown_ok("reply_hook", REPLY_HOOK_COOLDOWN):
+            return
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            return   # requires Grok live X search
+
+        ctx = self._live_context
+
+        async def _gen():
+            try:
+                hook_data = await self.grok.generate_reply_hook(
+                    btc_price=ctx.get("price", 0),
+                    mood_tone=self.mood.tone,
+                    recent_posts=self._recent_texts_for_ai(4),
+                )
+                if not hook_data:
+                    return
+                # hook_data is either plain text (the reply) or a dict with "reply"/"tweet_url"
+                if isinstance(hook_data, dict):
+                    reply_text = hook_data.get("reply", "")
+                    tweet_url  = hook_data.get("tweet_url", "")
+                else:
+                    reply_text = str(hook_data)
+                    tweet_url  = ""
+
+                if not reply_text:
+                    return
+
+                # If we have the URL of the viral tweet, quote-tweet style
+                if tweet_url:
+                    full_text = f"{reply_text}\n\n{tweet_url}"[:280]
+                else:
+                    full_text = reply_text[:280]
+
+                await self._send_tweet(full_text, "reply_hook")
+                logger.info(f"[XPublisher] Reply hook posted: {reply_text[:60]}…")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_reply_hook error: {e}")
+
+        self._fire_async(_gen())
+        self._touch("reply_hook")
 
     # ── Manual post (from dashboard) ──────────────────────────────────────────
 

@@ -902,6 +902,8 @@ class PersistentAgent:
         last_day_posted  = -1
         last_week_posted = -1
         last_news_check  = 0.0   # tracks when we last polled RSS
+        last_gm_posted   = -1    # UTC hour of last GM post
+        last_gn_posted   = -1    # UTC hour of last GN post
 
         # Content candidates (key, async_fn or sync_fn) — excluding news (handled separately)
         def _get_btc_price() -> float:
@@ -922,7 +924,7 @@ class PersistentAgent:
                 rs = "unknown"
             return r, rs
 
-        MAX_SILENCE_SEC   = 1800   # 30 min — force a post if nothing has gone out
+        MAX_SILENCE_SEC   = 1200   # 20 min — force a post (target 4-6 posts/day)
         NEWS_CHECK_SEC    = 300    # 5 min — how often to poll RSS for fresh stories
 
         while self._running:
@@ -948,6 +950,20 @@ class PersistentAgent:
                         self.x_publisher.post_btc_move(btc_price, prev_price)
                         await asyncio.sleep(random.uniform(300, 900))
                         continue
+
+                # ── GM post — 08:00–09:00 UTC (London open energy) ───────────
+                if now.hour == 8 and now.day != last_gm_posted:
+                    self.x_publisher.post_gm()
+                    last_gm_posted = now.day
+                    await asyncio.sleep(random.uniform(60, 300))
+                    continue
+
+                # ── GN post — 22:00–23:00 UTC ────────────────────────────────
+                if now.hour == 22 and now.day != last_gn_posted:
+                    self.x_publisher.post_gn()
+                    last_gn_posted = now.day
+                    await asyncio.sleep(random.uniform(60, 300))
+                    continue
 
                 # ── Daily summary at midnight UTC ─────────────────────────────
                 if now.hour == 0 and now.day != last_day_posted:
@@ -1004,13 +1020,16 @@ class PersistentAgent:
                     "philosophy":        self.x_publisher.post_philosophy,
                     "engagement":        self.x_publisher.post_engagement,
                     "algo_insight":      self.x_publisher.post_algo_insight,
+                    "algo_explainer":    self.x_publisher.post_algo_explainer,
                     # Grok-powered posts — only included when Grok key is set
                     **({"trending_hook":    self.x_publisher.post_trending_hook,
                         "viral_commentary": self.x_publisher.post_viral_commentary,
                         "bold_prediction":  lambda: self.x_publisher.post_bold_prediction(
                             macro_trend=self.brain.macro_trend,
                             fear_greed=self.brain.fear_greed_score,
-                        )} if grok_enabled else {}),
+                        ),
+                        "reply_hook":       self.x_publisher.post_reply_hook,
+                        } if grok_enabled else {}),
                 }
                 available = self.x_publisher.available_post_types()
                 # Remove news/btc_move (handled separately above)
@@ -1018,12 +1037,13 @@ class PersistentAgent:
 
                 # Grok posts get weighted higher in random selection (2× chance)
                 if grok_enabled:
-                    grok_types = {"trending_hook", "viral_commentary", "bold_prediction"}
+                    # Grok posts get 2× weight — live X data = more reach
+                    grok_types = {"trending_hook", "viral_commentary", "bold_prediction", "reply_hook"}
                     weighted_candidates = []
                     for c in candidates:
                         weighted_candidates.append(c)
                         if c in grok_types:
-                            weighted_candidates.append(c)   # double-weight Grok posts
+                            weighted_candidates.append(c)
                     candidates = weighted_candidates
 
                 # Enforce max-silence guarantee: if no post in 30 min, force one
@@ -1046,7 +1066,7 @@ class PersistentAgent:
                         await result
                     logger.debug(f"[XScheduler] Posted: {chosen_key}")
 
-                # Sleep a random 5–30 min before the next check cycle
+                # Sleep 5–20 min before next check — targets 4-6 posts/day
                 sleep_sec = random.uniform(300, MAX_SILENCE_SEC)
                 await asyncio.sleep(sleep_sec)
 
