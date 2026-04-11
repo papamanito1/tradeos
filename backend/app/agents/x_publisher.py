@@ -900,17 +900,22 @@ class XPublisher:
             logger.debug(f"[XPublisher] fire error: {e}")
 
     def _fire_async(self, coro) -> None:
-        """Schedule an async coroutine as a fire-and-forget task."""
+        """Schedule an async coroutine as a fire-and-forget task with error logging."""
+        async def _safe_wrapper():
+            try:
+                await coro
+            except Exception as e:
+                logger.error(f"[XPublisher] async task failed: {type(e).__name__}: {e}")
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(coro)
+            loop.create_task(_safe_wrapper())
         except RuntimeError:
             import threading
             def _run():
-                asyncio.run(coro)
+                asyncio.run(_safe_wrapper())
             threading.Thread(target=_run, daemon=True).start()
         except Exception as e:
-            logger.debug(f"[XPublisher] fire_async error: {e}")
+            logger.error(f"[XPublisher] fire_async scheduling error: {e}")
 
     async def _send_tweet_reply(self, text: str, reply_to_id: str, post_type: str) -> bool:
         """Post a tweet as a reply to an existing tweet (for thread chains)."""
@@ -1164,25 +1169,28 @@ class XPublisher:
         )
 
         async def _gen():
-            extra = (
-                f"Must include: BTC at {self._fmt_price(btc_price)}{price_move_str}, "
-                f"regime {regime.replace('_',' ')}, daily P&L {pnl_str}, {pos_line}. "
-                f"Time: {utc}. Make it feel like a live market broadcast."
-            )
-            ai_text = await self._ai_generate(self._build_ai_prompt("market update", extra))
-            if ai_text:
-                self._fire(ai_text, "hourly")
-            else:
-                quip = self._regime_quip(regime)
-                fallback = (
-                    f"🤖 BTC UPDATE — {utc}\n\n"
-                    f"Price: {self._fmt_price(btc_price) if btc_price > 0 else 'loading...'}{price_move_str}\n"
-                    f"Regime: {regime.replace('_', ' ').title()} ({regime_stability})\n"
-                    f"Daily P&L: {pnl_str}\n"
-                    f"{pos_line}\n\n"
-                    f"{quip}\n\n"
+            try:
+                extra = (
+                    f"Must include: BTC at {self._fmt_price(btc_price)}{price_move_str}, "
+                    f"regime {regime.replace('_',' ')}, daily P&L {pnl_str}, {pos_line}. "
+                    f"Time: {utc}. Make it feel like a live market broadcast."
                 )
-                self._fire(fallback, "hourly")
+                ai_text = await self._ai_generate(self._build_ai_prompt("market update", extra))
+                if ai_text:
+                    await self._send_tweet(ai_text, "hourly")
+                else:
+                    quip = self._regime_quip(regime)
+                    fallback = (
+                        f"🤖 BTC UPDATE — {utc}\n\n"
+                        f"Price: {self._fmt_price(btc_price) if btc_price > 0 else 'loading...'}{price_move_str}\n"
+                        f"Regime: {regime.replace('_', ' ').title()} ({regime_stability})\n"
+                        f"Daily P&L: {pnl_str}\n"
+                        f"{pos_line}\n\n"
+                        f"{quip}\n\n"
+                    )
+                    await self._send_tweet(fallback, "hourly")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_hourly error: {e}")
 
         self._fire_async(_gen())
         self._touch("hourly")
@@ -1363,13 +1371,16 @@ class XPublisher:
             return
 
         async def _gen():
-            extra = (
-                "Write a spicy, opinionated hot take about trading, crypto culture, or "
-                "AI trading vs human traders. Be contrarian, specific, and memorable. "
-                "Reference current market conditions if relevant. No empty platitudes."
-            )
-            ai = await self._ai_generate(self._build_ai_prompt("hot take", extra))
-            self._fire(ai or self.memory.pick("hot_take", HOT_TAKES), "hot_take")
+            try:
+                extra = (
+                    "Write a spicy, opinionated hot take about trading, crypto culture, or "
+                    "AI trading vs human traders. Be contrarian, specific, and memorable. "
+                    "Reference current market conditions if relevant. No empty platitudes."
+                )
+                ai = await self._ai_generate(self._build_ai_prompt("hot take", extra))
+                await self._send_tweet(ai or self.memory.pick("hot_take", HOT_TAKES), "hot_take")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_hot_take error: {e}")
 
         self._fire_async(_gen())
         self._touch("hot_take")
@@ -1381,13 +1392,16 @@ class XPublisher:
             return
 
         async def _gen():
-            extra = (
-                "Write a trading philosophy or wisdom tweet. Can quote a famous trader/investor "
-                "and give a fresh spin, or share an original insight from an algorithmic perspective. "
-                "Avoid clichés — make it feel genuinely thoughtful and specific."
-            )
-            ai = await self._ai_generate(self._build_ai_prompt("trading philosophy", extra))
-            self._fire(ai or self.memory.pick("philosophy", PHILOSOPHY_POSTS), "philosophy")
+            try:
+                extra = (
+                    "Write a trading philosophy or wisdom tweet. Can quote a famous trader/investor "
+                    "and give a fresh spin, or share an original insight from an algorithmic perspective. "
+                    "Avoid clichés — make it feel genuinely thoughtful and specific."
+                )
+                ai = await self._ai_generate(self._build_ai_prompt("trading philosophy", extra))
+                await self._send_tweet(ai or self.memory.pick("philosophy", PHILOSOPHY_POSTS), "philosophy")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_philosophy error: {e}")
 
         self._fire_async(_gen())
         self._touch("philosophy")
@@ -1399,14 +1413,17 @@ class XPublisher:
             return
 
         async def _gen():
-            extra = (
-                "Write an engaging question for crypto/trading Twitter. "
-                "Ask something genuinely interesting that real traders would want to answer — "
-                "about strategy, psychology, market calls, or AI trading. "
-                "Make it feel conversational and specific to current market conditions."
-            )
-            ai = await self._ai_generate(self._build_ai_prompt("engagement question", extra))
-            self._fire(ai or self.memory.pick("engagement", ENGAGEMENT_QUESTIONS), "engagement")
+            try:
+                extra = (
+                    "Write an engaging question for crypto/trading Twitter. "
+                    "Ask something genuinely interesting that real traders would want to answer — "
+                    "about strategy, psychology, market calls, or AI trading. "
+                    "Make it feel conversational and specific to current market conditions."
+                )
+                ai = await self._ai_generate(self._build_ai_prompt("engagement question", extra))
+                await self._send_tweet(ai or self.memory.pick("engagement", ENGAGEMENT_QUESTIONS), "engagement")
+            except Exception as e:
+                logger.error(f"[XPublisher] post_engagement error: {e}")
 
         self._fire_async(_gen())
         self._touch("engagement")
