@@ -67,9 +67,9 @@ class MasterBrain:
         }
 
         # ── Live readiness thresholds ─────────────────────────────────────
-        self.MIN_PAPER_TRADES_FOR_LIVE = 10   # strategy must have 10+ paper trades before live
-        self.MIN_WIN_RATE_FOR_LIVE = 0.45     # must be >45% win rate to go live
-        self.LIVE_CONVICTION_THRESHOLD = 0.60 # higher bar for live than paper (0.45)
+        self.MIN_PAPER_TRADES_FOR_LIVE = 5    # strategy must have 5+ paper trades before live
+        self.MIN_WIN_RATE_FOR_LIVE = 0.40     # must be >=40% win rate to go live
+        self.LIVE_CONVICTION_THRESHOLD = 0.55 # higher bar for live than paper
         self.PAPER_CONVICTION_THRESHOLD = 0.40
 
         # ── Limits ───────────────────────────────────────────────────────
