@@ -450,21 +450,15 @@ class LiveExecutor:
         """
         Sync with BingX exchange:
         1. Update unrealized P&L for all local positions
-        2. Detect positions that were closed on exchange (by SL/TP stop orders)
-           and return their keys so the agent can record the closure.
-        3. Cancel any orphaned SL/TP orders when a position is gone from exchange.
+        2. Detect positions closed on exchange by checking their SL/TP order status
+        3. Cancel orphaned counterpart orders when a trade's SL or TP already filled
         """
         closed_keys: list[str] = []
 
         if not self.live_positions:
             return closed_keys
 
-        # Fetch actual exchange positions to detect SL/TP closures
-        exchange_positions = await self.fetch_exchange_positions()
-        exchange_has_btc = any(
-            abs(p.get("contracts", 0)) > 0 for p in exchange_positions
-        )
-
+        # Update P&L for all tracked positions
         for key, pos in list(self.live_positions.items()):
             entry = pos["entry"]
             d     = pos["direction"]
@@ -478,14 +472,52 @@ class LiveExecutor:
                 "unrealized_pct": pct,
             }
 
-        # If we have local positions but the exchange has NONE, the SL/TP orders
-        # already fired and closed everything. Cancel only the counterpart orders per trade.
-        if self.live_positions and not exchange_has_btc:
-            for key in list(self.live_positions.keys()):
-                # Cancel only this trade's orphaned counterpart order
+        # Fetch open stop orders from BingX to detect which SL/TP have fired
+        try:
+            open_orders = await self._exchange.fetch_open_orders(SYMBOL)
+        except Exception as e:
+            logger.debug(f"[LiveExecutor] fetch_open_orders failed: {e}")
+            open_orders = []
+        open_order_ids = {str(o.get("id", "")) for o in open_orders}
+
+        # Also fetch actual exchange positions for total-gone detection
+        exchange_positions = await self.fetch_exchange_positions()
+        exchange_qty = sum(abs(p.get("contracts", 0)) for p in exchange_positions)
+
+        for key, pos in list(self.live_positions.items()):
+            sl_oid = pos.get("sl_order_id", "")
+            tp_oid = pos.get("tp_order_id", "")
+
+            if not sl_oid and not tp_oid:
+                continue
+
+            sl_still_open = sl_oid in open_order_ids if sl_oid else False
+            tp_still_open = tp_oid in open_order_ids if tp_oid else False
+
+            # If SL fired (gone from open orders) but TP is still there → SL closed this trade
+            sl_fired = sl_oid and not sl_still_open
+            tp_fired = tp_oid and not tp_still_open
+
+            if sl_fired and tp_still_open:
+                logger.info(f"[LiveExecutor] {key}: SL order {sl_oid} fired — "
+                            f"cancelling orphaned TP {tp_oid}")
                 await self.cancel_position_orders(key)
-                logger.info(f"[LiveExecutor] Position {key} gone from exchange — "
-                            f"SL/TP closed it. Counterpart order cancelled. Cleaning up.")
+                closed_keys.append(key)
+            elif tp_fired and sl_still_open:
+                logger.info(f"[LiveExecutor] {key}: TP order {tp_oid} fired — "
+                            f"cancelling orphaned SL {sl_oid}")
+                await self.cancel_position_orders(key)
+                closed_keys.append(key)
+            elif sl_fired and tp_fired:
+                logger.info(f"[LiveExecutor] {key}: Both SL and TP gone — "
+                            f"position fully closed on exchange")
+                closed_keys.append(key)
+
+        # Fallback: if exchange has zero position but we still track some, clean up all
+        if self.live_positions and exchange_qty == 0 and not closed_keys:
+            for key in list(self.live_positions.keys()):
+                await self.cancel_position_orders(key)
+                logger.info(f"[LiveExecutor] {key} gone from exchange (zero net position) — cleaning up")
                 closed_keys.append(key)
 
         return closed_keys
