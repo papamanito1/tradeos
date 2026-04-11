@@ -268,7 +268,8 @@ class MasterBrain:
             score *= 0.3
             reasons.append(f"⚠ {self.consecutive_losses} consecutive losses — caution mode")
 
-        if self.daily_pnl <= self.MAX_DAILY_LOSS:
+        # Daily loss limit only applies to live trades — paper/shadow always run
+        if is_live and self.daily_pnl <= self.MAX_DAILY_LOSS:
             return self._reject(strategy_key, strategy_name, signal,
                                 f"Daily loss limit (${self.daily_pnl:.0f} ≤ ${self.MAX_DAILY_LOSS:.0f})")
 

@@ -1071,16 +1071,7 @@ class PersistentAgent:
         # Update open position P&L
         self._update_positions(live_price)
 
-        # Paper trader — update prices and check SL/TP
-        self.paper_trader.update_prices(live_price)
-        paper_closed = self.paper_trader.check_sl_tp(live_price)
-        for pt in paper_closed:
-            strat_key = pt.get("strat_key_ref", pt.get("strategy_key", ""))
-            pnl = pt.get("pnl_usd", 0)
-            won = pnl > 0
-            self.brain.record_trade_result(strat_key, pnl, won, was_live=False)
-            self._log(f"📊 [PAPER_TRADER] {pt['strategy_name']} {pt['exit_reason'].upper()} "
-                      f"· P&L {'+' if pnl>=0 else ''}${pnl:.2f} · bal ${self.paper_trader.balance:.2f}")
+        # Paper trader price update happens above the enabled gate (always-on)
 
         # Keep X publisher context fresh every scan
         regime_now = self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown"
@@ -1107,6 +1098,19 @@ class PersistentAgent:
         # Sync with BingX exchange — detect positions closed by SL/TP
         if self._is_live_mode() and self._live:
             await self._sync_exchange_positions(live_price)
+
+        # ── Paper Trader price update + SL/TP always runs — never blocked ──────
+        # Paper trader and shadow training run 24/7 regardless of circuit breaker,
+        # kill switch, or enabled flag. Their only job is to feed MasterBrain data.
+        self.paper_trader.update_prices(live_price)
+        paper_closed = self.paper_trader.check_sl_tp(live_price)
+        for pt in paper_closed:
+            strat_key = pt.get("strat_key_ref", pt.get("strategy_key", ""))
+            pnl = pt.get("pnl_usd", 0)
+            won = pnl > 0
+            self.brain.record_trade_result(strat_key, pnl, won, was_live=False)
+            self._log(f"📊 [PAPER_TRADER] {pt['strategy_name']} {pt['exit_reason'].upper()} "
+                      f"· P&L {'+' if pnl>=0 else ''}${pnl:.2f} · bal ${self.paper_trader.balance:.2f}")
 
         if not cfg.get("enabled", True):
             return
@@ -1240,13 +1244,10 @@ class PersistentAgent:
                     self._log(f"[{name}] {met}/{total} conds · no signal · {bias}{ti_str}")
 
         # ── Always-on shadow paper training ──────────────────────────────────
-        # Every strategy that fires a signal also opens a shadow paper position
-        # regardless of live/paper mode. This generates continuous training data
-        # so the Brain never stops learning, even when a strategy is going live.
+        # Runs regardless of strategy enabled flag — shadow trains the brain
+        # even if the strategy is disabled for live/paper execution.
         for key, result in strategies:
             s_cfg = self._strategy_cfg(key)
-            if not s_cfg.get("enabled", True):
-                continue
             sig = result.get("signal")
             if not sig:
                 continue
@@ -1259,10 +1260,9 @@ class PersistentAgent:
                 self._open_shadow(shadow_key, result.get("name", key), sig, s_cfg, live_price)
 
         # ── Paper Trader — takes every signal with realistic sizing ────────
+        # Also always-on — paper trader feeds MasterBrain regardless of live gates.
         for key, result in strategies:
             s_cfg = self._strategy_cfg(key)
-            if not s_cfg.get("enabled", True):
-                continue
             sig = result.get("signal")
             if not sig:
                 continue
