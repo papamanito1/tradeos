@@ -1081,13 +1081,16 @@ class PersistentAgent:
         Background loop that refreshes market-wide context for MasterBrain:
         - BTC perpetual funding rate (every 5 minutes)
         - Fear & Greed Index (every 30 minutes)
-        Both feed into evaluate_signal biasing logic.
+        - HTF Pivot Points (every 60 minutes)
+        All feed into evaluate_signal biasing logic.
         """
         import httpx
         _fear_greed_interval = 30 * 60   # 30 minutes
         _funding_interval    = 5  * 60   # 5 minutes
+        _pivot_interval      = 60 * 60   # 60 minutes
         _last_fg = 0.0
         _last_fr = 0.0
+        _last_piv = 0.0
 
         while self._running:
             now = time.time()
@@ -1122,6 +1125,21 @@ class PersistentAgent:
                             logger.debug(f"[ContextLoop] Fear & Greed updated: {fg}")
                 except Exception as e:
                     logger.debug(f"[ContextLoop] Fear & Greed fetch failed: {e}")
+
+            # ── HTF Pivot Points (1h + 4h candles for weekly/monthly pivots) ─
+            if now - _last_piv >= _pivot_interval:
+                try:
+                    from app.agents.live_market_stream import LIVE_CANDLES
+                    c1h = LIVE_CANDLES.get("BTC/USDT:1h", [])
+                    c4h = LIVE_CANDLES.get("BTC/USDT:4h", [])
+                    if len(c1h) >= 100 or len(c4h) >= 10:
+                        self.brain.compute_htf_pivots(c1h, c4h)
+                        _last_piv = now
+                        wp  = self.brain._weekly_pivots.get("PP", 0)
+                        mp  = self.brain._monthly_pivots.get("PP", 0)
+                        logger.debug(f"[ContextLoop] HTF Pivots — W.PP=${wp:,.0f} M.PP=${mp:,.0f}")
+                except Exception as e:
+                    logger.debug(f"[ContextLoop] HTF pivot compute failed: {e}")
 
             await asyncio.sleep(60)  # check every minute, act based on intervals above
 
@@ -1335,23 +1353,34 @@ class PersistentAgent:
         if candles1h or candles4h:
             self.brain.detect_macro_trend(candles1h, candles4h)
 
-        # ── MasterBrain: Fibonacci levels (every 15 scans ≈ 5 min) ─────
-        if self.scan_count % 15 == 0 and len(candles15m) >= 20:
-            self.brain.compute_fib_levels(candles15m, lookback=100)
+        # ── MasterBrain: Fibonacci + advanced intelligence (every 15 scans ≈ 5 min) ─
+        if self.scan_count % 15 == 0:
+            if len(candles15m) >= 20:
+                self.brain.compute_fib_levels(candles15m, lookback=100)
+                self.brain.detect_liquidity_sweep(candles15m, lookback=50)
+                self.brain.detect_market_structure(candles15m, candles1h)
+                self.brain.detect_volume_anomaly(candles15m)
+                self.brain.detect_rsi_divergence(candles15m)
 
         if self.scan_count % 10 == 1:
             fib_info = ""
             if self.brain._fib_levels:
                 fib_618 = self.brain._fib_levels.get("61.8", 0)
-                fib_info = f" · Fib 61.8%=${fib_618:,.0f}({self.brain._fib_trend})"
-            stability = self.brain._regime_stability()
+                fib_info = f" · Fib61.8%=${fib_618:,.0f}"
+            mss_info = ""
+            if self.brain._mss:
+                mss_info = f" · {self.brain._mss.get('type','')} {self.brain._mss.get('direction','')[:3].upper()}"
+            sweep_info = f" · sweep={self.brain._liq_sweep.get('direction','none')[:3]}" if self.brain._liq_sweep else ""
+            div_info   = f" · RSIDiv={self.brain._rsi_divergence}" if self.brain._rsi_divergence else ""
+            stability  = self.brain._regime_stability()
             self._log(
                 f"🧠 Regime: {self.brain.current_regime.upper()} "
                 f"({self.brain.regime_confidence:.0%} conf · {stability}) · "
                 f"Macro: {self.brain.macro_trend.upper()} ({self.brain.macro_confidence:.0%}) · "
                 f"ATR {self.brain.current_atr_pct:.3%} · "
                 f"F&G {self.brain.fear_greed_score} · "
-                f"Funding {self.brain.funding_rate:+.4%}{fib_info}"
+                f"Funding {self.brain.funding_rate:+.4%}"
+                f"{fib_info}{mss_info}{sweep_info}{div_info}"
             )
 
             # Log live readiness summary
@@ -1410,7 +1439,7 @@ class PersistentAgent:
                     # They run as paper/shadow to feed Brain learning.
                     # Only the Fusion signal (below) places real BingX trades.
                     self._brain_gate_execute(key, name, sig, s_cfg, live_price,
-                                             live_allowed=False)
+                                             live_allowed=False, orderbook=orderbook)
                     any_signal = True
             else:
                 if self.scan_count % 5 == 0:
@@ -1490,6 +1519,7 @@ class PersistentAgent:
                     live_price=live_price,
                     portfolio_pnl=self.stats.get("total_pnl", 0),
                     is_live=self._is_live_mode(),
+                    orderbook=orderbook,
                 )
                 contributors = fusion_sig.get("contributors", [])
                 n_strats     = len(results_dict)
@@ -1537,6 +1567,7 @@ class PersistentAgent:
         cfg: dict,
         live_price: float,
         live_allowed: bool = True,
+        orderbook: Optional[dict] = None,
     ) -> None:
         """
         Dual-mode execution pipeline.
@@ -1557,7 +1588,7 @@ class PersistentAgent:
                     strategy_key=strat_key, strategy_name=name, signal=sig,
                     open_positions=self.positions, live_price=live_price,
                     portfolio_pnl=self.stats.get("total_pnl", 0),
-                    is_live=True,
+                    is_live=True, orderbook=orderbook,
                 )
                 if live_decision["approved"]:
                     adjusted_cfg = {**cfg}
@@ -1595,7 +1626,7 @@ class PersistentAgent:
                 strategy_key=strat_key, strategy_name=name, signal=sig,
                 open_positions=self.positions, live_price=live_price,
                 portfolio_pnl=self.stats.get("total_pnl", 0),
-                is_live=False,
+                is_live=False, orderbook=orderbook,
             )
             if paper_decision["approved"]:
                 adjusted_cfg = {**cfg}
@@ -1619,7 +1650,7 @@ class PersistentAgent:
                 strategy_key=strat_key, strategy_name=name, signal=sig,
                 open_positions=self.positions, live_price=live_price,
                 portfolio_pnl=self.stats.get("total_pnl", 0),
-                is_live=False,
+                is_live=False, orderbook=orderbook,
             )
             if decision["approved"]:
                 adjusted_cfg = {**cfg}
