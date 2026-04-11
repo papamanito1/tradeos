@@ -137,6 +137,36 @@ async def get_signals(
     return get_signals(symbol, limit)
 
 
+@router.get("/btc-ticker")
+async def get_btc_ticker():
+    """
+    Public endpoint — returns full BingX BTC/USDT ticker from the server-side cache.
+    No auth required (it's public market data). Used as a reliable frontend fallback
+    when direct browser→BingX CORS requests fail.
+    """
+    from app.agents.live_market_stream import LIVE_PRICES, LIVE_ORDERBOOK
+    live = LIVE_PRICES.get("BTC/USDT")
+    ob = LIVE_ORDERBOOK.get("BTC/USDT")
+    if not live or not live.get("last", 0):
+        return {"error": "BTC ticker not yet available", "last": 0}
+    return {
+        "symbol":       "BTC/USDT",
+        "last":         live.get("last", 0),
+        "bid":          live.get("bid", live.get("last", 0)),
+        "ask":          live.get("ask", live.get("last", 0)),
+        "open_24h":     live.get("open_24h", 0),
+        "high_24h":     live.get("high_24h", 0),
+        "low_24h":      live.get("low_24h", 0),
+        "volume":       live.get("volume", 0),
+        "quote_volume": live.get("quote_volume", 0),
+        "change_pct":   live.get("change_pct", 0),
+        "updated_ms":   live.get("updated_ms", 0),
+        "source":       "bingx_server",
+        "bids":         (ob.get("bids", [])[:10] if ob else []),
+        "asks":         (ob.get("asks", [])[:10] if ob else []),
+    }
+
+
 @router.get("/stream-status")
 async def get_stream_status(current_user: dict = Depends(get_current_user)):
     """Report whether the live WebSocket stream is connected."""

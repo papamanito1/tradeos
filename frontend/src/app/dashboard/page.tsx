@@ -13,7 +13,7 @@ import { Overview } from "@/types";
 import { formatUSD, formatPct, pnlColor, cn } from "@/lib/utils";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import {
-  useBingXStream, seedBingXCandles, BinanceCandle, BinanceTicker, BinanceOrderBook,
+  useBingXStream, seedBingXCandles, BingXCandle, BingXTicker, BingXOrderBook,
 } from "@/hooks/useBingXStream";
 import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
@@ -48,7 +48,7 @@ function calcEMA(vals: number[], period: number): number[] {
   for (let i = period; i < vals.length; i++) { prev = vals[i] * k + prev * (1 - k); out.push(prev); }
   return out;
 }
-function calcVWAP(candles: BinanceCandle[], w = 50): number[] {
+function calcVWAP(candles: BingXCandle[], w = 50): number[] {
   return candles.map((_, i) => {
     const seg = candles.slice(Math.max(0, i - w + 1), i + 1);
     const tv = seg.reduce((s, c) => s + c.volume, 0);
@@ -76,8 +76,8 @@ function calcRSI(closes: number[], period = 14): number[] {
 function StrategyChart({
   candles, liveCandle, signals,
 }: {
-  candles: BinanceCandle[];
-  liveCandle: BinanceCandle | null;
+  candles: BingXCandle[];
+  liveCandle: BingXCandle | null;
   signals: Array<{ timestamp: string; direction: string; sl?: number | null; tp?: number | null }>;
 }) {
   const all = liveCandle && candles.length > 0
@@ -380,7 +380,7 @@ function LiveAgentSignal({ result }: { result: StrategyResult }) {
 }
 
 // ─── BTC Market Panel ─────────────────────────────────────────────────────────
-function BTCMarketPanel({ ticker, orderBook }: { ticker: BinanceTicker | null; orderBook: BinanceOrderBook | null }) {
+function BTCMarketPanel({ ticker, orderBook }: { ticker: BingXTicker | null; orderBook: BingXOrderBook | null }) {
   const prevRef = useRef<number | null>(null);
   const [flash, setFlash] = useState<"up" | "down" | null>(null);
   useEffect(() => {
@@ -445,7 +445,7 @@ function BTCMarketPanel({ ticker, orderBook }: { ticker: BinanceTicker | null; o
           </div>
           {orderBook && (
             <span className="text-[8px] text-neutral-700 flex items-center gap-1">
-              <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />100ms depth
+              <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />BingX live
             </span>
           )}
         </div>
@@ -546,7 +546,7 @@ function AgentCard({
 }: {
   name: string; timeframe: string; strategy: string;
   result: StrategyResult; candleCount: number;
-  ticker?: BinanceTicker | null;
+  ticker?: BingXTicker | null;
 }) {
   const sig = result.signal;
   const isReady = candleCount >= 60;
@@ -634,7 +634,7 @@ function MiniAgentCard({
   name: string; timeframe: string; strategy: string;
   bias: "long" | "short" | "neutral";
   metCount: number; total: number; hasSignal: boolean;
-  ticker?: BinanceTicker | null;
+  ticker?: BingXTicker | null;
 }) {
   const isLong = bias === "long", isShort = bias === "short";
   const biasRgb   = isLong ? "34,197,94" : isShort ? "239,68,68" : "55,65,81";
@@ -1147,8 +1147,8 @@ function AllAgentsPanel({
   strategyResult, hftResult, obiResult, orbResult, chartCandles, activity, btcTicker, serverAgent, masterAgent,
 }: {
   strategyResult: StrategyResult; hftResult: HFTResult; obiResult: OBIResult; orbResult: ORBResult;
-  chartCandles: BinanceCandle[];
-  activity: ActivityEvent[]; btcTicker: BinanceTicker | null;
+  chartCandles: BingXCandle[];
+  activity: ActivityEvent[]; btcTicker: BingXTicker | null;
   serverAgent: ReturnType<typeof useServerAgent>;
   masterAgent: ReturnType<typeof useMasterAgent>;
 }) {
@@ -1267,7 +1267,7 @@ function AllAgentsPanel({
 function CommandBar({
   ticker, agent, strategyResult, orbResult, hftResult, obiResult, streamConnected, serverAgent,
 }: {
-  ticker: BinanceTicker | null;
+  ticker: BingXTicker | null;
   agent: ReturnType<typeof useMasterAgent>;
   strategyResult: StrategyResult;
   orbResult: ORBResult;
@@ -1622,9 +1622,9 @@ function SignalCommandCenter({
 function MarketPulseStrip({
   ticker, orderBook, chartCandles,
 }: {
-  ticker: BinanceTicker | null;
-  orderBook: BinanceOrderBook | null;
-  chartCandles: BinanceCandle[];
+  ticker: BingXTicker | null;
+  orderBook: BingXOrderBook | null;
+  chartCandles: BingXCandle[];
 }) {
   const atr = useMemo(() => {
     if (chartCandles.length < 15) return null;
@@ -1783,12 +1783,12 @@ export default function OverviewPage() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [activity, setActivity]         = useState<ActivityEvent[]>([]);
   const [toasts, setToasts]             = useState<Toast[]>([]);
-  const [chartCandles, setChartCandles] = useState<BinanceCandle[]>([]);
-  const [liveCandle, setLiveCandle]     = useState<BinanceCandle | null>(null);
-  const [btcTicker, setBtcTicker]       = useState<BinanceTicker | null>(null);
-  const [btcOrderBook, setBtcOrderBook] = useState<BinanceOrderBook | null>(null);
+  const [chartCandles, setChartCandles] = useState<BingXCandle[]>([]);
+  const [liveCandle, setLiveCandle]     = useState<BingXCandle | null>(null);
+  const [btcTicker, setBtcTicker]       = useState<BingXTicker | null>(null);
+  const [btcOrderBook, setBtcOrderBook] = useState<BingXOrderBook | null>(null);
   const [signals, setSignals]           = useState<Array<{ timestamp: string; direction: string; sl?: number | null; tp?: number | null }>>([]);
-  const [candles1m, setCandles1m]       = useState<BinanceCandle[]>([]);
+  const [candles1m, setCandles1m]       = useState<BingXCandle[]>([]);
   const toastId = useRef(0);
 
   // ── Frontend strategy engines ─────────────────────────────────────────────
@@ -1800,19 +1800,41 @@ export default function OverviewPage() {
   // Server agent — shared 24/7 backend positions, trades, stats (single poll for all routes)
   const serverAgent = useSharedServerAgent();
 
-  // Fallback ticker synthesized from backend live_price when BingX stream hasn't populated yet
-  const effectiveTicker: BinanceTicker | null = useMemo(() => {
-    if (btcTicker) return btcTicker;
-    const lp = serverAgent.status?.live_price;
-    if (lp && lp > 0) {
-      return {
-        symbol: "BTC/USDT", last: lp, bid: lp, ask: lp,
-        open_24h: lp, high_24h: lp, low_24h: lp,
-        volume: 0, quote_volume: 0, change_pct: 0, updated_ms: Date.now(),
-      };
+  // ── Backend BingX ticker (server-side poll, always available) ────────────
+  const [serverTicker, setServerTicker] = useState<BingXTicker | null>(null);
+  const [serverOrderBook, setServerOrderBook] = useState<BingXOrderBook | null>(null);
+  useEffect(() => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://tradeos-production-8f21.up.railway.app";
+    let active = true;
+    async function poll() {
+      while (active) {
+        try {
+          const r = await fetch(`${API_BASE}/api/market/btc-ticker`);
+          if (r.ok) {
+            const d = await r.json();
+            if (d.last > 0) {
+              setServerTicker({
+                symbol: "BTC/USDT", last: d.last, bid: d.bid, ask: d.ask,
+                open_24h: d.open_24h, high_24h: d.high_24h, low_24h: d.low_24h,
+                volume: d.volume, quote_volume: d.quote_volume,
+                change_pct: d.change_pct, updated_ms: d.updated_ms || Date.now(),
+              });
+              if (d.bids?.length && d.asks?.length) {
+                setServerOrderBook({ symbol: "BTC/USDT", bids: d.bids, asks: d.asks, timestamp: new Date().toISOString() });
+              }
+            }
+          }
+        } catch { /* retry next cycle */ }
+        await new Promise(r => setTimeout(r, 5000)); // poll every 5s
+      }
     }
-    return null;
-  }, [btcTicker, serverAgent.status?.live_price]);
+    poll();
+    return () => { active = false; };
+  }, []);
+
+  // Prefer direct BingX stream (2s), fall back to server-side BingX data (5s)
+  const effectiveTicker: BingXTicker | null = btcTicker ?? serverTicker;
+  const effectiveOrderBook: BingXOrderBook | null = btcOrderBook ?? serverOrderBook;
 
   const masterAgent = useMasterAgent(
     strategyResult, orbResult, hftResult, obiResult,
@@ -1892,10 +1914,10 @@ export default function OverviewPage() {
   useBingXStream({
     symbols: ["BTC/USDT"],
     timeframe: "15m",
-    onTicker: useCallback((t: BinanceTicker) => {
+    onTicker: useCallback((t: BingXTicker) => {
       if (t.symbol === "BTC/USDT") setBtcTicker(t);
     }, []),
-    onCandle: useCallback((sym: string, candle: BinanceCandle) => {
+    onCandle: useCallback((sym: string, candle: BingXCandle) => {
       if (sym !== "BTC/USDT") return;
       setLiveCandle(candle);
       setChartCandles(prev => {
@@ -1907,7 +1929,7 @@ export default function OverviewPage() {
         return prev;
       });
     }, []),
-    onOrderBook: useCallback((ob: BinanceOrderBook) => {
+    onOrderBook: useCallback((ob: BingXOrderBook) => {
       if (ob.symbol === "BTC/USDT") setBtcOrderBook(ob);
     }, []),
   });
@@ -1916,7 +1938,7 @@ export default function OverviewPage() {
   useBingXStream({
     symbols: ["BTC/USDT"],
     timeframe: "1m",
-    onCandle: useCallback((_sym: string, c: BinanceCandle) => {
+    onCandle: useCallback((_sym: string, c: BingXCandle) => {
       setCandles1m(prev => {
         if (!prev.length) return [c];
         const lMs = new Date(prev[prev.length - 1].timestamp).getTime();
@@ -2003,7 +2025,7 @@ export default function OverviewPage() {
         <SignalCommandCenter agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} serverAgent={serverAgent} />
 
         {/* ── 3. Market Pulse Strip ── */}
-        <MarketPulseStrip ticker={effectiveTicker} orderBook={btcOrderBook} chartCandles={chartCandles} />
+        <MarketPulseStrip ticker={effectiveTicker} orderBook={effectiveOrderBook} chartCandles={chartCandles} />
 
         {/* ── 4. Main analysis grid: Chart · Conditions · Order Book ── */}
         <div className="grid grid-cols-12 gap-3">
@@ -2066,7 +2088,7 @@ export default function OverviewPage() {
                 : <span className="flex items-center gap-1 text-[8px] text-neutral-600"><WifiOff size={8} />Connecting</span>}
             </div>
             <div className="p-4">
-              <BTCMarketPanel ticker={effectiveTicker} orderBook={btcOrderBook} />
+              <BTCMarketPanel ticker={effectiveTicker} orderBook={effectiveOrderBook} />
             </div>
           </div>
         </div>
