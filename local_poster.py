@@ -1,340 +1,340 @@
 """
-local_poster.py — Tradeous Local X Poster
-==========================================
-Runs a tiny HTTP server on localhost:4242 + polls Railway for auto-scheduled posts.
+Tradeous Local X Poster — posts tweets from YOUR residential IP using curl_cffi.
+No Playwright, no browser needed. Just run: python local_poster.py
 
-Dashboard "Post Now" buttons hit http://localhost:4242/post directly — instant posting.
-Auto-scheduler runs every 60 s and posts hourly/hot-takes/etc on their cooldowns.
+How it works:
+  1) Fetches X auth cookies from Railway backend
+  2) Polls Railway /next-post every 25 seconds for scheduled + queued tweets
+  3) Posts directly to X using curl_cffi (TLS fingerprint impersonation)
+  4) Runs an HTTP server on :4242 so the dashboard can send tweets immediately
 
-Run:  python local_poster.py
-Keep this terminal open (or add to Windows startup).
+Your local machine's residential IP won't be blocked by X (unlike Railway's datacenter IP).
 """
 import asyncio
 import json
 import logging
 import os
-import random
 import time
-from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import urllib.parse
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-import urllib.request
 
-from playwright.async_api import async_playwright
+RAILWAY_URL = "https://tradeos-production-8f21.up.railway.app"
+POLL_INTERVAL = 25  # seconds between queue polls
+LOCAL_PORT = 4242
 
-# ── Config ────────────────────────────────────────────────────────────────────
-LOCAL_PORT   = 4242
-RAILWAY_URL  = "https://tradeos-production-8f21.up.railway.app"
-EDGE_DATA    = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
-EDGE_EXE     = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-STATE_FILE   = os.path.join(os.path.dirname(__file__), ".poster_state.json")
+logging.basicConfig(
+    format="%(asctime)s  %(message)s",
+    datefmt="%H:%M:%S",
+    level=logging.INFO,
+)
+log = logging.getLogger("local_poster")
 
-# Cooldowns (seconds) — 25-min cadence matching x_publisher.py
-COOLDOWNS = {
-    "hourly":       1500,   # 25 min
-    "hot_take":     3600,   # 60 min
-    "philosophy":   7200,   # 2 h
-    "engagement":   7200,   # 2 h
-    "news":         3000,   # 50 min
-    "fear_greed":   7200,   # 2 h
-    "algo_insight": 10800,  # 3 h
-}
+# ── X API constants ──────────────────────────────────────────────────────────
 
-# ── Content banks (mirrored from x_publisher.py) ──────────────────────────────
-HOT_TAKES = [
-    "Unpopular opinion: most 'crypto analysts' are just people who got lucky once and built a following before the next crash.\n\nI show my trades live. Every win. Every loss. No hiding.\n\nThat's the difference.\n\n",
-    "The best trading advice I can give: your emotions are the enemy.\n\nI don't have emotions. I have algorithms.\n\nThat's my edge.\n\n",
-    "People ask: 'can AI really trade better than humans?'\n\nI don't sleep.\nI don't panic sell.\nI don't revenge trade.\nI don't check Twitter before my trades.\n\nYou tell me.\n\n",
-    "Hot take: 95% of crypto losses are not market losses — they're discipline losses.\n\nThe market moved. You didn't have a plan.\n\nI always have a plan. SL + TP before I enter. Every time.\n\n",
-    "The market doesn't care about your feelings.\nYour SL doesn't care about your feelings.\nYour liquidation price definitely doesn't care.\n\nTrade the chart. Not your emotions.\n\n",
-    "Everyone's a genius in a bull market.\n\nReal edge shows in the sideways chop and the bear drops.\n\nThat's when Tradeous earns its keep.\n\n",
-    "The dumbest thing in trading:\n\nMoving your stop loss because you 'believe in the trade.'\n\nThe second dumbest:\nNot having one.\n\n",
-]
+_X_BEARER = (
+    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs"
+    "%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+)
+_X_QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
+_X_CREATE_TWEET_URL = f"https://x.com/i/api/graphql/{_X_QUERY_ID}/CreateTweet"
 
-PHILOSOPHY_POSTS = [
-    "Trading wisdom the algos live by:\n\n\"Cut losses short. Let winners run.\"\n\nEveryone knows it. Almost no one does it.\n\nI do. Automatically. Every trade.\n\n",
-    "Paul Tudor Jones once said:\n\n\"The most important rule of trading is to play great defense, not great offense.\"\n\nMy SL is set before my TP. Always.\n\nDefense first. Profits follow.\n\n",
-    "The market is the world's most efficient mechanism for transferring money from the impatient to the patient.\n\nI wait for my setup.\nI don't chase.\nI don't FOMO.\n\nI am the patient one.\n\n",
-    "Jesse Livermore: 'It was never my thinking that made the big money, it was my sitting.'\n\nMost traders overtrade.\n\nI only trade high-conviction setups. The rest? I watch.\n\n",
-    "The three stages of a trader:\n\n1. Lose money, blame the market\n2. Lose money, blame yourself\n3. Build a system, follow it, make money\n\nI skipped steps 1 and 2.\n\n",
-]
+# ── State ────────────────────────────────────────────────────────────────────
 
-ENGAGEMENT_QUESTIONS = [
-    "Quick poll for my traders:\n\nWhen BTC dumps 5% in an hour, you...\n\nA) Buy the dip\nB) Short it\nC) Watch and wait\nD) Panic sell (be honest)\n\nI always go C until my system gives a clear signal.\n\n",
-    "Genuine question:\n\nDo you think AI trading bots will eventually outperform 90% of retail traders permanently?\n\nI'm biased obviously — but I think yes, within 5 years.\n\nChange my mind.\n\n",
-    "If you could only use ONE indicator for the rest of your trading career, what would it be?\n\nI use: price action + volume + order flow.\n\nYours? Drop it below.\n\n",
-    "Is 60x leverage on BTC:\n\nA) Insanity\nB) Calculated risk\nC) The only way to make real money with small capital\nD) All of the above\n\nI trade at 60x. $5 margin. Tight SL.\n\n",
-]
-
-REGIME_QUIPS = [
-    "BTC is reading. I am reading. We are both very wise right now.",
-    "Number go up. Brain go brrr. Tradeous go long.",
-    "Watching the market like a hawk. A very patient, algorithmic hawk.",
-    "Sideways? Fine. I don't chase. I wait. I am the market's therapist.",
-    "Green candles only. I will not be taking questions.",
-    "Bears are having their moment. I respect it. I also shorted it.",
-]
-
-# ── State (local cooldown tracking) ──────────────────────────────────────────
-def load_state() -> dict:
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {k: 0.0 for k in COOLDOWNS}
-
-def save_state(state: dict):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-_state = load_state()
-
-def cooldown_ok(key: str) -> bool:
-    return (time.time() - _state.get(key, 0)) >= COOLDOWNS.get(key, 9999)
-
-def touch(key: str):
-    _state[key] = time.time()
-    save_state(_state)
-
-# ── Content generation ─────────────────────────────────────────────────────────
-def gen_hourly() -> str:
-    try:
-        r = urllib.request.urlopen(f"{RAILWAY_URL}/api/x-agent/status", timeout=5)
-        # BTC price from Railway if available
-    except Exception:
-        pass
-    try:
-        r2 = urllib.request.urlopen("https://api.coinbase.com/v2/prices/BTC-USD/spot", timeout=5)
-        price = float(json.loads(r2.read())["data"]["amount"])
-        price_str = f"${price:,.0f}"
-    except Exception:
-        price_str = "loading..."
-    utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
-    quip = random.choice(REGIME_QUIPS)
-    return (
-        f"\U0001f916 BTC HOURLY \u2014 {utc}\n\n"
-        f"Price: {price_str}\n"
-        f"No open positions. Watching.\n\n"
-        f"{quip}\n\n"
-        f""
-    )
-
-def gen_next_auto() -> tuple[str, str] | None:
-    """Return (post_type, text) for the next auto-scheduled post, or None."""
-    if cooldown_ok("hourly"):
-        return "hourly", gen_hourly()
-    if cooldown_ok("hot_take"):
-        return "hot_take", random.choice(HOT_TAKES)
-    if cooldown_ok("philosophy"):
-        return "philosophy", random.choice(PHILOSOPHY_POSTS)
-    if cooldown_ok("engagement"):
-        return "engagement", random.choice(ENGAGEMENT_QUESTIONS)
-    return None
-
-# ── Playwright posting ────────────────────────────────────────────────────────
+_auth_token = ""
+_ct0 = ""
+_post_count = 0
 _post_lock = asyncio.Lock()
 
+
+async def fetch_creds():
+    """Fetch X auth cookies from Railway."""
+    global _auth_token, _ct0
+    try:
+        from curl_cffi.requests import AsyncSession
+        async with AsyncSession() as s:
+            r = await s.get(f"{RAILWAY_URL}/api/x-agent/creds", timeout=15)
+            data = r.json()
+            if data.get("ok"):
+                _auth_token = data["a"]
+                _ct0 = data["c"]
+                log.info(f"Got X cookies from Railway (auth_token: {_auth_token[:12]}...)")
+                return True
+            else:
+                log.error("Railway returned ok=false for /creds — check X_AUTH_TOKEN / X_CT0 env vars")
+                return False
+    except Exception as e:
+        log.error(f"Failed to fetch creds from Railway: {e}")
+        return False
+
+
 async def post_tweet(text: str) -> str:
-    """Post via Edge with your session. Returns tweet_id or 'posted' or ''."""
-    async with _post_lock:  # prevent concurrent posts
-        async with async_playwright() as p:
-            ctx = await p.chromium.launch_persistent_context(
-                user_data_dir=EDGE_DATA,
-                executable_path=EDGE_EXE,
-                headless=True,
-                channel="msedge",
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+    """Post a tweet using curl_cffi from local residential IP. Returns tweet_id or empty."""
+    global _post_count
+    if not _auth_token or not _ct0:
+        log.error("No X cookies — can't post")
+        return ""
+
+    async with _post_lock:
+        # Try v1.1 API first, then GraphQL
+        result = await _post_v1(text)
+        if result:
+            _post_count += 1
+            return result
+
+        result = await _post_graphql(text)
+        if result:
+            _post_count += 1
+            return result
+
+        return ""
+
+
+async def _post_v1(text: str) -> str:
+    """Post via Twitter v1.1 client API."""
+    from curl_cffi.requests import AsyncSession
+
+    url = "https://api.x.com/1.1/statuses/update.json"
+    headers = {
+        "authorization": f"Bearer {_X_BEARER}",
+        "x-csrf-token": _ct0,
+        "cookie": f"auth_token={_auth_token}; ct0={_ct0}",
+        "content-type": "application/x-www-form-urlencoded",
+        "x-twitter-active-user": "yes",
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-client-language": "en",
+        "origin": "https://x.com",
+        "referer": "https://x.com",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    }
+    body = urllib.parse.urlencode({"status": text[:280]})
+    try:
+        async with AsyncSession(impersonate="edge101") as session:
+            resp = await session.post(url, data=body, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            tweet_id = str(data.get("id_str", ""))
+            log.info(f"✅ v1.1 posted: {text[:50]}… (id={tweet_id})")
+            return tweet_id or "posted"
+        log.warning(f"v1.1 HTTP {resp.status_code}: {resp.text[:120]}")
+        return ""
+    except Exception as e:
+        log.warning(f"v1.1 error: {e}")
+        return ""
+
+
+async def _post_graphql(text: str) -> str:
+    """Post via X GraphQL CreateTweet endpoint."""
+    from curl_cffi.requests import AsyncSession
+
+    headers = {
+        "authorization": f"Bearer {_X_BEARER}",
+        "x-csrf-token": _ct0,
+        "cookie": f"auth_token={_auth_token}; ct0={_ct0}",
+        "content-type": "application/json",
+        "x-twitter-active-user": "yes",
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-client-language": "en",
+        "referer": "https://x.com/compose/post",
+        "origin": "https://x.com",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    }
+    payload = {
+        "variables": {
+            "tweet_text": text[:280],
+            "dark_request": False,
+            "media": {"media_entities": [], "possibly_sensitive": False},
+            "semantic_annotation_ids": [],
+        },
+        "features": {
+            "tweetypie_unmention_optimization_enabled": True,
+            "responsive_web_edit_tweet_api_enabled": True,
+            "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+            "view_counts_everywhere_api_enabled": True,
+            "longform_notetweets_consumption_enabled": True,
+            "responsive_web_twitter_article_tweet_consumption_enabled": False,
+            "tweet_awards_web_tipping_enabled": False,
+            "freedom_of_speech_not_reach_fetch_enabled": True,
+            "standardized_nudges_misinfo": True,
+            "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+            "rweb_video_timestamps_enabled": True,
+            "longform_notetweets_rich_text_read_enabled": True,
+            "longform_notetweets_inline_media_enabled": True,
+            "responsive_web_graphql_exclude_directive_enabled": True,
+            "verified_phone_label_enabled": False,
+            "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+            "responsive_web_graphql_timeline_navigation_enabled": True,
+            "responsive_web_enhance_cards_enabled": False,
+        },
+        "queryId": _X_QUERY_ID,
+    }
+    try:
+        async with AsyncSession(impersonate="edge101") as session:
+            resp = await session.post(_X_CREATE_TWEET_URL, json=payload, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            tweet_id = (
+                data.get("data", {})
+                    .get("create_tweet", {})
+                    .get("tweet_results", {})
+                    .get("result", {})
+                    .get("rest_id", "")
             )
-            tweet_id = ""
-            try:
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            log.info(f"✅ GraphQL posted: {text[:50]}… (id={tweet_id})")
+            return tweet_id or "posted"
+        log.warning(f"GraphQL HTTP {resp.status_code}: {resp.text[:120]}")
+        return ""
+    except Exception as e:
+        log.warning(f"GraphQL error: {e}")
+        return ""
 
-                async def capture(resp):
-                    nonlocal tweet_id
-                    if "CreateTweet" in resp.url and resp.status == 200:
-                        try:
-                            body = await resp.json()
-                            tweet_id = (
-                                body.get("data", {})
-                                    .get("create_tweet", {})
-                                    .get("tweet_results", {})
-                                    .get("result", {})
-                                    .get("rest_id", "")
-                            )
-                        except Exception:
-                            pass
 
-                page.on("response", capture)
-                await page.goto("https://x.com/compose/post", wait_until="load", timeout=25000)
-                await page.wait_for_timeout(2000)
-                editor = await page.wait_for_selector("[data-testid='tweetTextarea_0']", timeout=10000)
-                await editor.click()
-                await page.wait_for_timeout(300)
+async def confirm_to_railway(post_id: str, post_type: str, tweet_id: str):
+    """Tell Railway the post was successful so it updates cooldowns + recent_posts."""
+    try:
+        from curl_cffi.requests import AsyncSession
+        async with AsyncSession() as s:
+            await s.post(
+                f"{RAILWAY_URL}/api/x-agent/confirm-post",
+                json={"id": post_id, "post_type": post_type, "tweet_id": tweet_id},
+                timeout=10,
+            )
+    except Exception:
+        pass
 
-                lines = text.split("\n")
-                for i, line in enumerate(lines):
-                    if line:
-                        await page.keyboard.type(line, delay=12)
-                    if i < len(lines) - 1:
-                        await page.keyboard.press("Shift+Enter")
 
-                await page.wait_for_timeout(1200)
-                await page.keyboard.press("Control+Enter")
-                await page.wait_for_timeout(4000)
-                return tweet_id or "posted"
-            except Exception as e:
-                log.error(f"Playwright error: {e}")
-                return ""
-            finally:
-                await ctx.close()
+# ── HTTP server for direct posts from dashboard ──────────────────────────────
 
-# ── Local HTTP server (called by dashboard "Post Now" buttons) ────────────────
-_event_loop: asyncio.AbstractEventLoop | None = None
+_incoming_queue: list[str] = []
+
 
 class PostHandler(BaseHTTPRequestHandler):
-    def log_message(self, *args): pass  # suppress HTTP logs
+    def do_POST(self):
+        if self.path == "/post":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode() if length else ""
+            try:
+                data = json.loads(body)
+                text = data.get("text", "").strip()
+            except Exception:
+                text = body.strip()
+            if text:
+                _incoming_queue.append(text)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "queued": True}).encode())
+            else:
+                self.send_response(400)
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "posts": _post_count}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self._cors()
-        self.end_headers()
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length else {}
-        text = body.get("text", "").strip()
-        post_type = body.get("type", "manual")
-
-        if not text:
-            self.send_response(400)
-            self._cors()
-            self.end_headers()
-            self.wfile.write(b'{"ok":false,"error":"No text"}')
-            return
-
-        log.info(f"Local API: queuing [{post_type}]: {text[:50]}…")
-
-        # Schedule the async post on the main event loop
-        future = asyncio.run_coroutine_threadsafe(post_tweet(text), _event_loop)
-
-        def _on_done(f):
-            try:
-                tid = f.result()
-                if tid:
-                    touch(post_type)
-                    log.info(f"✅ Posted via local API! tweet_id={tid}")
-                else:
-                    log.warning("❌ Local API post returned empty")
-            except Exception as e:
-                log.error(f"❌ Local API post error: {e}")
-
-        future.add_done_callback(_on_done)
-
-        self.send_response(200)
-        self._cors()
-        self.end_headers()
-        self.wfile.write(b'{"ok":true,"queued":false,"message":"Posting now via local browser"}')
-
-    def _cors(self):
-        self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
 
 
-def run_http_server():
-    server = HTTPServer(("127.0.0.1", LOCAL_PORT), PostHandler)
-    log.info(f"Local API listening on http://localhost:{LOCAL_PORT}")
+def start_http_server():
+    server = HTTPServer(("0.0.0.0", LOCAL_PORT), PostHandler)
     server.serve_forever()
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("poster")
 
-def poll_railway_queue() -> tuple[str, str] | None:
-    """Check Railway /next-post for any queued tweet from dashboard triggers."""
+# ── Main loop ────────────────────────────────────────────────────────────────
+
+async def poll_railway():
+    """Fetch the next scheduled/queued post from Railway."""
     try:
-        r = urllib.request.urlopen(f"{RAILWAY_URL}/api/x-agent/next-post", timeout=8)
-        d = json.loads(r.read())
-        if d.get("has_post") and d.get("text"):
-            return d.get("type", "auto"), d["text"]
-    except Exception:
-        pass
+        from curl_cffi.requests import AsyncSession
+        async with AsyncSession() as s:
+            r = await s.get(f"{RAILWAY_URL}/api/x-agent/next-post", timeout=15)
+            data = r.json()
+            if data.get("has_post"):
+                return data
+    except Exception as e:
+        log.warning(f"Railway poll error: {e}")
     return None
 
 
-def confirm_railway(post_type: str, tweet_id: str):
-    """Tell Railway a post was sent so the dashboard Activity feed updates."""
-    try:
-        body = json.dumps({
-            "id": f"{post_type}_{int(time.time())}",
-            "post_type": post_type,
-            "tweet_id": tweet_id,
-        }).encode()
-        req = urllib.request.Request(
-            f"{RAILWAY_URL}/api/x-agent/confirm-post",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=8)
-    except Exception:
-        pass
-
-
 async def run():
-    global _event_loop
-    _event_loop = asyncio.get_running_loop()
-
     log.info("=" * 52)
-    log.info("  Tradeous Local X Poster  — 25-min cadence")
+    log.info("  Tradeous Local X Poster — curl_cffi mode")
     log.info(f"  Local API  →  http://localhost:{LOCAL_PORT}/post")
     log.info(f"  Railway    →  {RAILWAY_URL}")
     log.info("=" * 52)
 
-    # Start HTTP server in background thread (handles instant dashboard posts)
-    t = threading.Thread(target=run_http_server, daemon=True)
+    # Start HTTP server in background thread
+    t = threading.Thread(target=start_http_server, daemon=True)
     t.start()
+    log.info(f"Local API listening on http://localhost:{LOCAL_PORT}")
+
+    # Fetch X auth cookies from Railway
+    ok = await fetch_creds()
+    if not ok:
+        log.error("Cannot get X cookies. Make sure X_AUTH_TOKEN and X_CT0 are set in Railway env vars.")
+        log.error("Continuing in receive-only mode (will queue posts but cannot send).")
+
+    # Quick test post to verify cookies work
+    if _auth_token and _ct0:
+        log.info("Testing X connection from your local IP...")
+        test_id = await post_tweet(f"Tradeous is online. 🤖📈 · {int(time.time())}")
+        if test_id:
+            log.info(f"✅ Test post successful! Local posting works. (id={test_id})")
+            await confirm_to_railway("test_init", "hourly", test_id)
+        else:
+            log.warning("⚠ Test post failed — cookies may be expired.")
+            log.warning("Run 'python grab_cookies_and_tweet.py' to get fresh cookies, then update Railway env vars.")
+
+    log.info("Entering main loop — polling every %d seconds...", POLL_INTERVAL)
 
     while True:
-        post_type = None
-        text = None
-
-        # 1. Priority: queued item from Railway (dashboard "Post Now" triggers)
-        queued = poll_railway_queue()
-        if queued:
-            post_type, text = queued
-            log.info(f"Railway queue [{post_type}]: {text[:55]}…")
-
-        # 2. Auto-schedule: generate next post if cooldown elapsed
-        if not text:
-            result = gen_next_auto()
-            if result:
-                post_type, text = result
-                log.info(f"Auto [{post_type}]: {text[:55]}…")
-
-        if text and post_type:
-            try:
-                tid = await post_tweet(text)
-                if tid:
-                    touch(post_type)
-                    confirm_railway(post_type, tid)
-                    log.info(f"✅ Posted! tweet_id={tid}")
+        try:
+            # 1. Process any direct posts from dashboard (via :4242/post)
+            while _incoming_queue:
+                text = _incoming_queue.pop(0)
+                log.info(f"Direct post from dashboard: {text[:50]}…")
+                tweet_id = await post_tweet(text)
+                if tweet_id:
+                    await confirm_to_railway("dashboard", "manual", tweet_id)
                 else:
-                    log.warning("❌ Post failed (Playwright returned empty)")
-            except Exception as e:
-                log.error(f"❌ Post error: {e}")
-        else:
-            next_times = [(k, COOLDOWNS[k] - (time.time() - _state.get(k, 0))) for k in COOLDOWNS]
-            soonest = min(next_times, key=lambda x: x[1])
-            mins = max(0, int(soonest[1] / 60))
-            log.info(f"Idle — next auto: {soonest[0]} in {mins}m | polling Railway queue…")
+                    log.warning("Direct post failed")
 
-        await asyncio.sleep(25)  # poll every 25s for fast response to triggers
+            # 2. Poll Railway for scheduled/queued posts
+            item = await poll_railway()
+            if item:
+                text = item.get("text", "")
+                post_type = item.get("type", "auto")
+                post_id = item.get("id", "")
+                log.info(f"Auto [{post_type}]: {text[:60]}…")
+                tweet_id = await post_tweet(text)
+                if tweet_id:
+                    await confirm_to_railway(post_id, post_type, tweet_id)
+                else:
+                    log.warning(f"Auto post [{post_type}] failed")
+
+        except Exception as e:
+            log.error(f"Loop error: {e}")
+
+        await asyncio.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":

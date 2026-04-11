@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const LOCAL = "http://localhost:4242";  // local_poster.py — posts via Edge browser instantly
+const LOCAL = "http://localhost:4242";  // local_poster.py — posts via curl_cffi from your PC
 
 async function postViaLocal(text: string, type: string): Promise<{ ok: boolean; msg: string }> {
   try {
@@ -276,33 +276,34 @@ export default function XAgentPage() {
     setPosting(true);
     setPostResult(null);
 
-    // Try local poster first (instant), then Railway queue as fallback
+    // Try local poster first (instant from your residential IP)
     const localRes = await postViaLocal(manualText.trim(), "manual");
     if (localRes.ok) {
-      setPostResult({ ok: true, msg: "Posting now via local browser…" });
+      setPostResult({ ok: true, msg: "Posting now…" });
       setManualText("");
       fetchStatus();
-    } else {
-      // Fallback: Railway queue
-      const railRes = await queueViaRailway(`/api/x-agent/post`);
-      // Railway /post needs body — call directly
-      try {
-        const r = await fetch(`${API}/api/x-agent/post`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: manualText.trim() }),
-        });
-        const d = await r.json();
-        if (d.ok) {
-          setPostResult({ ok: true, msg: "Queued — local_poster.py will send it" });
-          setManualText("");
-          fetchStatus();
-        } else {
-          setPostResult({ ok: false, msg: d.error || "Failed — start local_poster.py" });
-        }
-      } catch {
-        setPostResult({ ok: false, msg: "Start local_poster.py to enable posting" });
+      setPosting(false);
+      setTimeout(() => setPostResult(null), 7000);
+      return;
+    }
+
+    // Fallback: send to Railway which queues for local_poster.py to pick up
+    try {
+      const r = await fetch(`${API}/api/x-agent/post`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: manualText.trim() }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setPostResult({ ok: true, msg: "Posted ✓" });
+        setManualText("");
+        fetchStatus();
+      } else {
+        setPostResult({ ok: false, msg: d.error || "Failed" });
       }
+    } catch {
+      setPostResult({ ok: false, msg: "Cannot reach backend" });
     }
 
     setPosting(false);
@@ -376,12 +377,12 @@ export default function XAgentPage() {
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold text-yellow-300">local_poster.py not running — tweets will queue but not send</div>
               <div className="text-[11px] text-yellow-400/60 mt-1 leading-relaxed">
-                X blocks server IPs, so posts go through your PC&apos;s browser. Open a terminal in the project folder and run:
+                X blocks server IPs, so posts are sent from your PC&apos;s residential IP via curl_cffi. Open a terminal and run:
               </div>
               <code className="block mt-2 text-[11px] font-mono bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-yellow-300 select-all">
                 python local_poster.py
               </code>
-              <div className="text-[10px] text-yellow-400/40 mt-1">Keep it running — it posts every 25 min automatically + handles trigger buttons instantly</div>
+              <div className="text-[10px] text-yellow-400/40 mt-1">No browser needed — posts every 25 min automatically + handles trigger buttons instantly</div>
             </div>
             {localOnline !== null && (
               <div className="flex items-center gap-1.5 shrink-0 text-[10px] text-yellow-400/50">
@@ -394,7 +395,7 @@ export default function XAgentPage() {
           <div className="rounded-2xl border p-3 flex items-center gap-3"
             style={{ background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.15)" }}>
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
-            <span className="text-[12px] text-green-400 font-medium">local_poster.py running — triggers post instantly via your browser</span>
+            <span className="text-[12px] text-green-400 font-medium">local_poster.py running — posts go out from your PC instantly</span>
           </div>
         )}
 

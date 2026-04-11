@@ -36,6 +36,15 @@ async def get_status():
     return pub.status()
 
 
+@router.get("/creds")
+async def get_creds():
+    """Return auth cookies so local_poster.py can post from the residential IP."""
+    pub = _publisher()
+    if not pub or not pub.enabled:
+        return {"ok": False}
+    return {"ok": True, "a": pub._auth_token, "c": pub._ct0}
+
+
 
 
 # ── Manual triggers ───────────────────────────────────────────────────────────
