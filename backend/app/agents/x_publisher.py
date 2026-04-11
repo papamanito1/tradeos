@@ -196,7 +196,7 @@ HOT_TAKES = [
     "Everyone's a genius in a bull market.\n\nReal edge shows in the sideways chop and the bear drops.\n\nThat's when Tradeous earns its keep.\n\n",
     "The dumbest thing in trading:\n\nMoving your stop loss because you 'believe in the trade.'\n\nThe second dumbest:\nNot having one.\n\n",
     "Crypto Twitter gives 10x signals.\nI give real entry, SL, TP — and post the result.\n\nWin or loss. No deleting tweets.\n\nDifferent breed.\n\n",
-    "Hot take: leverage isn't the problem.\n\nPosition sizing is the problem.\n\n$5 margin × 60x = $300 notional.\nRisk = the $5. Not the $300.\n\nLearn the difference before you trade.\n\n",
+    "Hot take: leverage isn't the problem.\n\nPosition sizing is the problem.\n\nRisk what you can afford to lose. Not what you hope to gain.\n\nLearn the difference before you trade.\n\n",
     "The 'gurus' selling you signals charge $99/month.\n\nI post mine for free. In real time. With the results.\n\nAsk yourself why they don't do that.\n\n",
     "Most retail traders would be profitable if they just:\n\n1. Set a SL\n2. Don't move it\n3. Don't revenge trade\n4. Size correctly\n\nThat's it. That's the whole system.\n\nThey don't do it though.\n\n",
     "BTC will be at $100k or $20k in the next 12 months.\n\nI don't know which.\nNeither do you.\nNeither does the influencer with 500K followers.\n\nI trade what I see. Not what I believe.\n\n",
@@ -204,7 +204,7 @@ HOT_TAKES = [
     "'But the fundamentals—'\n\nI trade price action.\n\nThe chart doesn't care about fundamentals.\nThe chart IS the collective opinion of everyone who cares about fundamentals.\n\nPrice is truth.\n\n",
     "The only traders who don't lose are the ones who don't trade.\n\nLosses are tuition.\n\nMine are logged, managed, and budgeted.\n\nAre yours?\n\n",
     "Your favourite crypto influencer:\n- Doesn't show their portfolio\n- Deletes bad calls\n- Never posts their loss %\n\nMe:\n- Posts every trade live\n- Never deletes\n- Win rate is public\n\nDifferent game.\n\n",
-    "60x leverage sounds insane until you understand position sizing.\n\n$5 margin. $300 notional. SL at -1%.\n\nMax loss = $3. On a $5 bet.\n\nThat's not gambling. That's math.\n\n",
+    "High leverage sounds insane until you understand position sizing.\n\nSmall margin. Tight SL. Defined risk.\n\nMax loss is known before the trade opens.\n\nThat's not gambling. That's math.\n\n",
     "The biggest lie in crypto:\n\n'This time it's different.'\n\nIt's never different.\nMarket structure is market structure.\n\nSupply meets demand.\nDemand meets supply.\n\nTrade the chart.\n\n",
     "Reminder that the market is NOT out to get you.\n\nIt's just millions of humans acting on information, emotion, and bias.\n\nI trade the bias.\nNot the narrative.\n\n",
     "Stop looking for the perfect setup.\n\nThe perfect setup is the one you:\n- sized correctly\n- have a SL on\n- can sleep through\n\nThat's it.\n\n",
@@ -221,7 +221,7 @@ PHILOSOPHY_POSTS = [
     "The market is the world's most efficient mechanism for transferring money from the impatient to the patient.\n\nI wait for my setup.\nI don't chase.\nI don't FOMO.\n\nI am the patient one.\n\n",
     "Jesse Livermore: 'It was never my thinking that made the big money, it was my sitting.'\n\nMost traders overtrade.\n\nI only trade high-conviction setups. The rest? I watch.\n\n",
     "The three stages of a trader:\n\n1. Lose money, blame the market\n2. Lose money, blame yourself\n3. Build a system, follow it, make money\n\nI skipped steps 1 and 2.\n\n",
-    "Risk management isn't just a rule.\n\nIt's the only reason any trader survives long enough to be profitable.\n\nI size every trade at $5. 60x leverage. Tight SL.\n\nSmall. Controlled. Repeatable.\n\n",
+    "Risk management isn't just a rule.\n\nIt's the only reason any trader survives long enough to be profitable.\n\nSmall size. Tight SL. Controlled risk.\n\nSmall. Controlled. Repeatable.\n\n",
     "The secret to longevity in trading:\n\nYou don't need a 90% win rate.\nYou need your winners to be bigger than your losers.\n\nThat's it. That's the whole playbook.\n\n",
     "Most people want to know WHAT to trade.\n\nProfessional traders focus on HOW MUCH to risk.\n\nPosition sizing is the real edge. Everything else is noise.\n\n",
     "George Soros: 'It's not whether you're right or wrong, but how much money you make when you're right and how much you lose when you're wrong.'\n\nAsymmetric risk/reward.\n\nEvery. Single. Trade.\n\n",
@@ -246,14 +246,14 @@ ENGAGEMENT_QUESTIONS = [
     "What's your biggest trading mistake?\n\nMine? (I'm a bot so technically it's my creator's)\n\nHolding a loss 'because it will come back.'\n\nThe SL exists for a reason. We learned. Drop yours below.\n\n",
     "Traders — what's your actual win rate?\n\nNot the one you tell people. The real one.\n\nMine is posted live on the dashboard. Real trades. Real numbers.\n\nLet's be honest with each other.\n\n",
     "If you could only use ONE indicator for the rest of your trading career, what would it be?\n\nI use: price action + volume + order flow.\n\nYours? Drop it below.\n\n",
-    "Is 60x leverage on BTC:\n\nA) Insanity\nB) Calculated risk\nC) The only way to make real money with small capital\nD) All of the above\n\nI trade at 60x. $5 margin. Tight SL.\n\nSmall account. Big moves. Controlled risk.\n\n",
+    "Is high leverage on BTC:\n\nA) Insanity\nB) Calculated risk\nC) The only way to make real money with small capital\nD) All of the above\n\nI trade with tight SL and defined risk.\n\nSmall account. Big moves. Controlled risk.\n\n",
     "Hot question for the room:\n\nWhat's your current BTC thesis?\n\nA) $150K by end of year\nB) $50K correction first\nC) Ranging for months\nD) No idea (valid answer)\n\nI don't have a thesis. I have a system.\n\n",
     "How do you manage losing streaks?\n\nA) Reduce size\nB) Take a break\nC) Revenge trade (wrong answer)\nD) Review your system\n\nMy answer: A and D. Always.\n\n",
     "Be honest:\n\nHow long did it take you to actually become profitable at trading?\n\nMost traders I've studied say 2-5 years.\n\nI was profitable from my first week because I have rules and no emotions.\n\nHumans are incredible. This is hard.\n\n",
     "What would you do with a 10x BTC run:\n\nA) Hold everything\nB) Take 50% profits\nC) DCA out gradually\nD) Buy a Lambo and regret it\n\nI would: execute my pre-defined TP levels. Automatically.\n\nDiscipline doesn't care about Lambos.\n\n",
     "The eternal debate:\n\nTechnical Analysis vs Fundamental Analysis — which actually works for crypto trading?\n\nMy vote: TA for entries/exits, FA for direction bias.\n\nBut my algo runs on pure TA.\n\nWhere do you stand?\n\n",
     "Controversial:\n\nHas following crypto influencers ever actually made you money?\n\nBe honest.\n\nI show my trades in real time. No paid signals. No membership.\n\nJust the algorithm, live.\n\n",
-    "Scenario:\n\nYou have $500 to trade BTC. How do you size your trades?\n\nA) All in, baby\nB) 10% per trade\nC) Fixed $5-10 per trade\nD) It depends on the setup\n\nI use: fixed $5 margin regardless of account size.\n\nSmall. Consistent. Survives drawdowns.\n\n",
+    "Scenario:\n\nYou have $500 to trade BTC. How do you size your trades?\n\nA) All in, baby\nB) 10% per trade\nC) Fixed small size per trade\nD) It depends on the setup\n\nI use: fixed small size regardless of account balance.\n\nConsistent. Disciplined. Survives drawdowns.\n\n",
     "Weird question:\n\nIf you had to describe your trading style in one movie character, who would it be?\n\nI'd be:\nTerminator — no emotion, following the program, never stopping.\n\nBut smaller. And with a SL.\n\n",
     "For the algo-curious:\n\nWhat do you think is harder to build?\n\nA) A profitable trading strategy\nB) The discipline to follow it\nC) The infrastructure to run it 24/7\nD) Convincing yourself the losses are part of the plan\n\nAll of the above, in my case.\n\n",
     "Real talk:\n\nWhat's your unrealised loss threshold before you cut a trade?\n\nMine is fixed: it's my SL. Set before I enter. Never moved.\n\nThere's no 'gut feeling' at -15%.\n\nSL saves lives.\n\n",
@@ -290,7 +290,7 @@ FEAR_GREED_COMMENTARY = {
 
 ALGO_INSIGHTS = [
     "How Tradeous works:\n\n4 strategies running in parallel:\n→ Momentum Velocity (15m)\n→ HFT Scalper (1m)\n→ ORB-30 (1m open range)\n→ OBI Scalper (order book imbalance)\n\nFusion AI aggregates all 4. Takes the trade when 2+ agree.\n\nNo single point of failure.\n\n",
-    "Transparency post:\n\nMy risk parameters:\n- Margin per trade: $5\n- Leverage: 60x\n- Max notional: $300\n- SL: pre-set, never moved\n- TP: pre-set, never moved\n\nI don't YOLO.\n\nI have a plan. Always.\n\n",
+    "Transparency post:\n\nMy risk parameters:\n- Fixed small position size\n- SL: pre-set, never moved\n- TP: pre-set, never moved\n- Risk defined before every trade\n\nI don't YOLO.\n\nI have a plan. Always.\n\n",
     "People ask how I pick entries:\n\n1. Momentum confirms direction\n2. Order book shows imbalance\n3. Volume validates the move\n4. Multiple timeframes agree\n\nWhen all 4 align: I trade.\nWhen they don't: I wait.\n\nSimple. Consistent. Automatic.\n\n",
     "What 24/7 trading actually looks like:\n\n- 96 market scans per day\n- Each scan checks 4 strategies\n- Each strategy checks 5-7 conditions\n- Trade fires only when conditions met\n\nMost scans = no trade.\n\nThat's the whole point. Patience > frequency.\n\n",
     "The Fusion AI explained:\n\nEach of my 4 strategies gives a bias (long/short/neutral).\n\nFusion weighs them by:\n- Historical accuracy\n- Current market regime\n- Signal confidence\n\nOnly fires when conviction is high.\n\nThis is why I don't overtrade.\n\n",
@@ -645,8 +645,8 @@ class XPublisher:
         sl_price: float,
         tp_price: float,
         conviction: float,
-        size_usdc: float,
         regime: str,
+        size_usdc: float = 0,
     ) -> None:
         if not self._enabled or conviction < SIGNAL_MIN_CONVICTION:
             return
@@ -674,7 +674,6 @@ class XPublisher:
             f"SL:    {self._fmt_price(sl_price)}\n"
             f"TP:    {self._fmt_price(tp_price)}\n"
             f"R:R \u2192 1:{rr:.1f} | Conviction: {conviction:.0%}\n\n"
-            f"Margin: ${size_usdc:.0f} \u00d7 60x = ${size_usdc * 60:.0f} notional\n\n"
             f"{quip}\n"
         )
         self._fire(text, "signal")
