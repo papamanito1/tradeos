@@ -174,16 +174,6 @@ async def trigger_hourly():
     return await _send_now(pub, "hourly", _gen_hourly_text(pub))
 
 
-@router.post("/trigger/algo-insight")
-async def trigger_algo_insight():
-    from app.agents.x_publisher import ALGO_INSIGHTS
-    pub = _publisher()
-    if err := _check(pub): return err
-    pub._last["algo_insight"] = 0
-    text = pub.memory.pick("algo_insight", ALGO_INSIGHTS)
-    return await _send_now(pub, "algo_insight", text)
-
-
 # ── Test post (debug) ─────────────────────────────────────────────────────────
 
 @router.post("/test-post")
@@ -297,7 +287,7 @@ async def next_post():
     Checks manual queue first, then auto-schedule by cooldown."""
     from app.agents import x_publisher as xp
     from app.agents.x_publisher import (
-        HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS, ALGO_INSIGHTS,
+        HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS,
     )
 
     pub = _publisher()
@@ -330,11 +320,6 @@ async def next_post():
     elif _ok("engagement", xp.ENGAGEMENT_COOLDOWN):
         text = pub.memory.pick("engagement", ENGAGEMENT_QUESTIONS) if pub else random.choice(ENGAGEMENT_QUESTIONS)
         post_type = "engagement"
-
-    elif _ok("algo_insight", xp.ALGO_INSIGHT_COOLDOWN):
-        from app.agents.x_publisher import ALGO_INSIGHTS
-        text = pub.memory.pick("algo_insight", ALGO_INSIGHTS) if pub else random.choice(ALGO_INSIGHTS)
-        post_type = "algo_insight"
 
     if not post_type or not text:
         return {"has_post": False}

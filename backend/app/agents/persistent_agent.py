@@ -947,7 +947,6 @@ class PersistentAgent:
                 self.x_publisher.post_hot_take()
                 self.x_publisher.post_philosophy()
                 self.x_publisher.post_engagement()
-                self.x_publisher.post_algo_insight()
 
                 # BTC price move alert — fires only if price moved ≥1.5%
                 try:

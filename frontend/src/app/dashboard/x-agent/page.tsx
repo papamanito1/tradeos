@@ -78,7 +78,6 @@ const TYPE_META: Record<string, { label: string; icon: string; accent: string; g
   hot_take:     { label: "Hot Take",       icon: "◆",  accent: "text-rose-400",   glow: "shadow-rose-500/20" },
   philosophy:   { label: "Philosophy",     icon: "◇",  accent: "text-cyan-400",   glow: "shadow-cyan-500/20" },
   engagement:   { label: "Engagement",     icon: "○",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
-  algo_insight: { label: "Algo Insight",   icon: "🧠", accent: "text-purple-400", glow: "shadow-purple-500/20" },
   btc_move:     { label: "BTC Move",       icon: "📈", accent: "text-yellow-400", glow: "shadow-yellow-500/20" },
   daily:        { label: "Daily Summary",  icon: "◉",  accent: "text-indigo-400", glow: "shadow-indigo-500/20" },
   weekly:       { label: "Weekly Recap",   icon: "◈",  accent: "text-pink-400",   glow: "shadow-pink-500/20" },
@@ -353,12 +352,6 @@ export default function XAgentPage() {
       description: "Live BTC price, regime, move %, and witty commentary",
       nextPost: nextIn(status?.last_hourly || 0, 1500),
       endpoint: "/api/x-agent/trigger/hourly",
-    },
-    {
-      icon: "🧠", label: "Algo Insight",
-      description: "Transparency post: how the system works, risk params, strategy logic",
-      nextPost: nextIn(status?.last_hourly || 0, 10800),
-      endpoint: "/api/x-agent/trigger/algo-insight",
     },
   ];
 
