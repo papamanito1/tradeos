@@ -287,8 +287,8 @@ class LiveMarketStreamAgent:
                     }
                     self._connected = True
 
-            # Seed candles
-            for tf, limit in [("1m", 350), ("15m", 150)]:
+            # Seed candles — 1m, 15m for strategies; 1h, 4h for macro trend
+            for tf, limit in [("1m", 350), ("15m", 150), ("1h", 100), ("4h", 60)]:
                 candles = await self._fetch_candles(sym, tf, limit)
                 if candles:
                     key = f"{sym}:{tf}"
@@ -329,11 +329,16 @@ class LiveMarketStreamAgent:
             await asyncio.sleep(5)
 
     async def _rest_candle_loop(self) -> None:
-        """Refresh latest candles from BingX every 5s."""
+        """Refresh latest candles from BingX every 5s (1m/15m) and every 5 min (1h/4h)."""
         logger.info("[MarketStream] BingX candle refresh loop started (5s interval)")
+        _slow_refresh_counter = 0
         while self._running:
+            _slow_refresh_counter += 1
+            # 1m and 15m refresh every 5s (fast); 1h and 4h refresh every 5 min (60 ticks)
+            tfs_fast = ["1m", "15m"]
+            tfs_slow = ["1h", "4h"] if _slow_refresh_counter % 60 == 0 else []
             for sym in self._symbols:
-                for tf in ["1m", "15m"]:
+                for tf in tfs_fast + tfs_slow:
                     try:
                         new_candles = await self._fetch_candles(sym, tf, 3)
                         if new_candles:
@@ -344,7 +349,7 @@ class LiveMarketStreamAgent:
                                     candles[-1] = c
                                 elif not candles or c["timestamp"] > candles[-1]["timestamp"]:
                                     candles.append(c)
-                            limit = 200 if tf == "15m" else 500
+                            limit = {"1m": 500, "15m": 200, "1h": 100, "4h": 60}.get(tf, 200)
                             LIVE_CANDLES[key] = candles[-limit:]
                             await redis_publish("market:kline", {
                                 "symbol": sym, "timeframe": tf, "candle": new_candles[-1],

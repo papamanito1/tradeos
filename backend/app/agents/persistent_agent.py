@@ -848,6 +848,7 @@ class PersistentAgent:
         self._running = True
         self._task = asyncio.create_task(self._loop())
         asyncio.create_task(self._x_scheduler())
+        asyncio.create_task(self._market_context_loop())
         # Fire intro post once on first startup
         self.x_publisher.post_intro()
         mode = self.config.get("mode", "paper")
@@ -1028,6 +1029,55 @@ class PersistentAgent:
                 logger.warning(f"[XScheduler] Error: {e}")
                 await asyncio.sleep(60)
 
+    async def _market_context_loop(self) -> None:
+        """
+        Background loop that refreshes market-wide context for MasterBrain:
+        - BTC perpetual funding rate (every 5 minutes)
+        - Fear & Greed Index (every 30 minutes)
+        Both feed into evaluate_signal biasing logic.
+        """
+        import httpx
+        _fear_greed_interval = 30 * 60   # 30 minutes
+        _funding_interval    = 5  * 60   # 5 minutes
+        _last_fg = 0.0
+        _last_fr = 0.0
+
+        while self._running:
+            now = time.time()
+
+            # ── Funding rate (BingX perp) ─────────────────────────────────
+            if now - _last_fr >= _funding_interval:
+                try:
+                    async with httpx.AsyncClient(timeout=6.0) as c:
+                        r = await c.get(
+                            "https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex",
+                            params={"symbol": "BTC-USDT"},
+                        )
+                        if r.status_code == 200:
+                            j = r.json()
+                            fr = float(j.get("data", {}).get("lastFundingRate", 0) or 0)
+                            self.brain.update_market_context(funding_rate=fr)
+                            _last_fr = now
+                            logger.debug(f"[ContextLoop] Funding rate updated: {fr:+.5f}")
+                except Exception as e:
+                    logger.debug(f"[ContextLoop] Funding rate fetch failed: {e}")
+
+            # ── Fear & Greed Index (alternative.me) ───────────────────────
+            if now - _last_fg >= _fear_greed_interval:
+                try:
+                    async with httpx.AsyncClient(timeout=6.0) as c:
+                        r = await c.get("https://api.alternative.me/fng/?limit=1")
+                        if r.status_code == 200:
+                            j = r.json()
+                            fg = int(j["data"][0]["value"])
+                            self.brain.update_market_context(fear_greed_score=fg)
+                            _last_fg = now
+                            logger.debug(f"[ContextLoop] Fear & Greed updated: {fg}")
+                except Exception as e:
+                    logger.debug(f"[ContextLoop] Fear & Greed fetch failed: {e}")
+
+            await asyncio.sleep(60)  # check every minute, act based on intervals above
+
     async def _loop(self) -> None:
         while self._running:
             try:
@@ -1080,6 +1130,8 @@ class PersistentAgent:
 
         candles1m  = LIVE_CANDLES.get("BTC/USDT:1m",  [])
         candles15m = LIVE_CANDLES.get("BTC/USDT:15m", [])
+        candles1h  = LIVE_CANDLES.get("BTC/USDT:1h",  [])
+        candles4h  = LIVE_CANDLES.get("BTC/USDT:4h",  [])
         orderbook  = LIVE_ORDERBOOK.get("BTC/USDT")
         price_data = LIVE_PRICES.get("BTC/USDT", {})
         live_price = price_data.get("last", 0.0)
@@ -1108,7 +1160,8 @@ class PersistentAgent:
         if self.scan_count % 10 == 1:
             ob_bids = len(orderbook.get("bids", [])) if orderbook else 0
             self._log(
-                f"DATA: 1m={len(candles1m)} bars · 15m={len(candles15m)} bars · "
+                f"DATA: 1m={len(candles1m)} · 15m={len(candles15m)} · "
+                f"1h={len(candles1h)} · 4h={len(candles4h)} bars · "
                 f"OB={ob_bids} levels · price=${live_price:,.0f}"
             )
 
@@ -1152,7 +1205,15 @@ class PersistentAgent:
             strat_key = pt.get("strat_key_ref", pt.get("strategy_key", ""))
             pnl = pt.get("pnl_usd", 0)
             won = pnl > 0
-            self.brain.record_trade_result(strat_key, pnl, won, was_live=False)
+            pt_dur = 0.0
+            pt_opened = pt.get("opened_at") or pt.get("timestamp", "")
+            if pt_opened:
+                try:
+                    pt_dt = datetime.fromisoformat(pt_opened.replace("Z", "+00:00"))
+                    pt_dur = (datetime.now(timezone.utc) - pt_dt).total_seconds() / 60
+                except Exception:
+                    pass
+            self.brain.record_trade_result(strat_key, pnl, won, was_live=False, duration_min=pt_dur)
             self._log(f"📊 [PAPER_TRADER] {pt['strategy_name']} {pt['exit_reason'].upper()} "
                       f"· P&L {'+' if pnl>=0 else ''}${pnl:.2f} · bal ${self.paper_trader.balance:.2f}")
 
@@ -1205,12 +1266,20 @@ class PersistentAgent:
         if self.scan_count % 10 == 0:
             self._rebuild_training_index()
 
-        # ── MasterBrain: detect market regime ────────────────────────────
+        # ── MasterBrain: detect regimes + macro trend ────────────────────
         self.brain.detect_regime(candles15m, candles1m)
+        if candles1h or candles4h:
+            self.brain.detect_macro_trend(candles1h, candles4h)
         if self.scan_count % 10 == 1:
             stability = self.brain._regime_stability()
-            self._log(f"🧠 Regime: {self.brain.current_regime.upper()} "
-                      f"({self.brain.regime_confidence:.0%} confidence · {stability})")
+            self._log(
+                f"🧠 Regime: {self.brain.current_regime.upper()} "
+                f"({self.brain.regime_confidence:.0%} conf · {stability}) · "
+                f"Macro: {self.brain.macro_trend.upper()} ({self.brain.macro_confidence:.0%}) · "
+                f"ATR {self.brain.current_atr_pct:.3%} · "
+                f"F&G {self.brain.fear_greed_score} · "
+                f"Funding {self.brain.funding_rate:+.4%}"
+            )
 
             # Log live readiness summary
             if self._is_live_mode():
@@ -1828,19 +1897,21 @@ class PersistentAgent:
         else:
             strat_key = key
         won = pnl > 0
-        self.brain.record_trade_result(strat_key, pnl, won, was_live=is_live)
+
+        # Compute trade duration for brain learning (Feature 10)
+        opened_at = pos.get("opened_at") or pos.get("timestamp", "")
+        duration_min: float = 0.0
+        if opened_at:
+            try:
+                opened_dt = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+                duration_min = (datetime.now(timezone.utc) - opened_dt).total_seconds() / 60
+            except Exception:
+                pass
+
+        self.brain.record_trade_result(strat_key, pnl, won, was_live=is_live, duration_min=duration_min)
 
         # Post trade result to X for live closes
         if is_live:
-            opened_at = pos.get("opened_at") or pos.get("timestamp", "")
-            duration_min: Optional[float] = None
-            if opened_at:
-                try:
-                    from datetime import datetime as _dt
-                    opened_dt = _dt.fromisoformat(opened_at.replace("Z", "+00:00"))
-                    duration_min = (datetime.now(timezone.utc) - opened_dt).total_seconds() / 60
-                except Exception:
-                    pass
             self.x_publisher.post_result(
                 strategy_name=pos.get("strategy_name", ""),
                 direction=pos.get("direction", "long"),
