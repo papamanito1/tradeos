@@ -1371,23 +1371,11 @@ class PersistentAgent:
                           f"conf {conf*100:.0f}% (min {adj_min_conf*100:.0f}%){ti_str}{cd_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not open_pos and not in_cooldown and s_cfg.get("auto_execute", True):
-                    # Directional lock: if live mode, check that no live position
-                    # is open in the opposite direction before even attempting
-                    if self._is_live_mode():
-                        sig_dir = sig.get("direction", "")
-                        live_conflict = False
-                        for pk, pv in self.positions.items():
-                            if not pv or pk.startswith("shadow_") or pk.startswith("paper_"):
-                                continue
-                            if pv.get("mode") in ("shadow", "paper_trader"):
-                                continue
-                            if pv.get("direction") and pv["direction"] != sig_dir:
-                                live_conflict = True
-                                break
-                        if live_conflict:
-                            self._log(f"⛔ [{name}] BLOCKED — opposite direction position already open (directional lock)")
-                            continue
-                    self._brain_gate_execute(key, name, sig, s_cfg, live_price)
+                    # In live mode: individual strategies NEVER execute on BingX.
+                    # They run as paper/shadow to feed Brain learning.
+                    # Only the Fusion signal (below) places real BingX trades.
+                    self._brain_gate_execute(key, name, sig, s_cfg, live_price,
+                                             live_allowed=False)
                     any_signal = True
             else:
                 if self.scan_count % 5 == 0:
@@ -1484,6 +1472,18 @@ class PersistentAgent:
                     adj_cfg["size_usdc"] = round(
                         fusion_cfg["size_usdc"] * f_decision["size_multiplier"], 2
                     )
+                    # Post signal to X (Fusion is the only live signal)
+                    if self._is_live_mode():
+                        self.x_publisher.post_signal(
+                            strategy_name="Fusion (MasterBrain)",
+                            direction=fusion_sig.get("direction", "long"),
+                            entry_price=live_price,
+                            sl_price=fusion_sig.get("sl", 0),
+                            tp_price=fusion_sig.get("tp", 0),
+                            conviction=f_decision["conviction"],
+                            size_usdc=adj_cfg["size_usdc"],
+                            regime=self.brain.current_regime,
+                        )
                     self._open_position("fusion", "Fusion Strategy", fusion_sig, adj_cfg, live_price)
                     any_signal = True
             elif self.scan_count % 5 == 0:
@@ -1494,48 +1494,68 @@ class PersistentAgent:
 
     # ── Brain-gated execution (dual-mode: paper shadow + live) ─────────────
 
-    def _brain_gate_execute(self, key: str, name: str, sig: dict, cfg: dict, live_price: float) -> None:
+    def _brain_gate_execute(
+        self,
+        key: str,
+        name: str,
+        sig: dict,
+        cfg: dict,
+        live_price: float,
+        live_allowed: bool = True,
+    ) -> None:
         """
-        Dual-mode execution pipeline:
-        - PAPER mode: evaluate with paper threshold, open paper position
-        - LIVE mode:
-            1. Try live evaluation (strict thresholds + win-rate gate)
-            2. If live-approved → execute on BingX
-            3. If live-rejected → fall back to paper shadow (trains the Brain)
+        Dual-mode execution pipeline.
+
+        live_allowed=True  → normal flow: live approval path can open BingX trade.
+        live_allowed=False → individual strategy in live mode: paper/shadow ONLY.
+                             Used to feed Brain training without hitting BingX.
+                             Only Fusion calls this with live_allowed=True.
         """
-        strat_key = key
+        strat_key    = key
         is_live_mode = self._is_live_mode()
 
+        # ── LIVE MODE ──────────────────────────────────────────────────────────
         if is_live_mode:
-            live_decision = self.brain.evaluate_signal(
-                strategy_key=strat_key, strategy_name=name, signal=sig,
-                open_positions=self.positions, live_price=live_price,
-                portfolio_pnl=self.stats.get("total_pnl", 0),
-                is_live=True,
-            )
-            if live_decision["approved"]:
-                adjusted_cfg = {**cfg}
-                adjusted_cfg["size_usdc"] = round(cfg["size_usdc"] * live_decision["size_multiplier"], 2)
-                readiness = self.brain.is_strategy_live_ready(strat_key)
-                self._log(f"🧠 LIVE APPROVED {name} · conviction {live_decision['conviction']:.0%} "
-                          f"· size {live_decision['size_multiplier']:.0%} "
-                          f"· win rate {readiness['win_rate']:.0%} ({readiness['trades']} trades) "
-                          f"· {live_decision['reasoning']}")
-                # Post signal to X if conviction meets threshold
-                self.x_publisher.post_signal(
-                    strategy_name=name,
-                    direction=sig.get("direction", "long"),
-                    entry_price=live_price,
-                    sl_price=sig.get("sl", 0),
-                    tp_price=sig.get("tp", 0),
-                    conviction=live_decision["conviction"],
-                    size_usdc=adjusted_cfg["size_usdc"],
-                    regime=self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown",
+            if live_allowed:
+                # Full live path — evaluate with live thresholds, may open BingX trade
+                live_decision = self.brain.evaluate_signal(
+                    strategy_key=strat_key, strategy_name=name, signal=sig,
+                    open_positions=self.positions, live_price=live_price,
+                    portfolio_pnl=self.stats.get("total_pnl", 0),
+                    is_live=True,
                 )
-                self._open_position(key, name, sig, adjusted_cfg, live_price)
-                return
+                if live_decision["approved"]:
+                    adjusted_cfg = {**cfg}
+                    adjusted_cfg["size_usdc"] = round(
+                        cfg["size_usdc"] * live_decision["size_multiplier"], 2
+                    )
+                    readiness = self.brain.is_strategy_live_ready(strat_key)
+                    self._log(
+                        f"🧠 LIVE APPROVED {name} · conviction {live_decision['conviction']:.0%} "
+                        f"· size {live_decision['size_multiplier']:.0%} "
+                        f"· win rate {readiness['win_rate']:.0%} ({readiness['trades']} trades) "
+                        f"· {live_decision['reasoning']}"
+                    )
+                    self.x_publisher.post_signal(
+                        strategy_name=name,
+                        direction=sig.get("direction", "long"),
+                        entry_price=live_price,
+                        sl_price=sig.get("sl", 0),
+                        tp_price=sig.get("tp", 0),
+                        conviction=live_decision["conviction"],
+                        size_usdc=adjusted_cfg["size_usdc"],
+                        regime=getattr(self.brain, "current_regime", "unknown"),
+                    )
+                    self._open_position(key, name, sig, adjusted_cfg, live_price)
+                    return
 
-            rejection_reason = live_decision["reasoning"]
+                rejection_reason = live_decision["reasoning"]
+            else:
+                # Individual strategy in live mode — BingX execution is disabled.
+                # Route straight to paper shadow to keep training data flowing.
+                rejection_reason = "Fusion-only live mode — individual strategies are paper/shadow"
+
+            # Paper shadow path (for both: live-rejected + live_allowed=False)
             paper_decision = self.brain.evaluate_signal(
                 strategy_key=strat_key, strategy_name=name, signal=sig,
                 open_positions=self.positions, live_price=live_price,
@@ -1544,14 +1564,21 @@ class PersistentAgent:
             )
             if paper_decision["approved"]:
                 adjusted_cfg = {**cfg}
-                adjusted_cfg["size_usdc"] = round(cfg["size_usdc"] * paper_decision["size_multiplier"], 2)
+                adjusted_cfg["size_usdc"] = round(
+                    cfg["size_usdc"] * paper_decision["size_multiplier"], 2
+                )
                 readiness = self.brain.is_strategy_live_ready(strat_key)
-                self._log(f"🧠 SHADOW PAPER {name} (live blocked: {rejection_reason}) "
-                          f"· training data {readiness['trades']}/{self.brain.MIN_PAPER_TRADES_FOR_LIVE} trades "
-                          f"· win rate {readiness['win_rate']:.0%}")
+                label = "SHADOW PAPER" if live_allowed else "TRAINING SHADOW"
+                self._log(
+                    f"🧠 {label} {name} (live blocked: {rejection_reason[:60]}) "
+                    f"· {readiness['trades']}/{self.brain.MIN_PAPER_TRADES_FOR_LIVE} trades "
+                    f"· win rate {readiness['win_rate']:.0%}"
+                )
                 self._open_position_paper_shadow(key, name, sig, adjusted_cfg, live_price)
             else:
-                self._log(f"🧠 BLOCKED {name} — {rejection_reason}")
+                self._log(f"🧠 BLOCKED {name} — {rejection_reason[:80]}")
+
+        # ── PAPER MODE (agent not in live mode) ───────────────────────────────
         else:
             decision = self.brain.evaluate_signal(
                 strategy_key=strat_key, strategy_name=name, signal=sig,
@@ -1561,9 +1588,13 @@ class PersistentAgent:
             )
             if decision["approved"]:
                 adjusted_cfg = {**cfg}
-                adjusted_cfg["size_usdc"] = round(cfg["size_usdc"] * decision["size_multiplier"], 2)
-                self._log(f"🧠 APPROVED {name} · conviction {decision['conviction']:.0%} "
-                          f"· size {decision['size_multiplier']:.0%} · {decision['reasoning']}")
+                adjusted_cfg["size_usdc"] = round(
+                    cfg["size_usdc"] * decision["size_multiplier"], 2
+                )
+                self._log(
+                    f"🧠 APPROVED {name} · conviction {decision['conviction']:.0%} "
+                    f"· size {decision['size_multiplier']:.0%} · {decision['reasoning']}"
+                )
                 self._open_position(key, name, sig, adjusted_cfg, live_price)
             else:
                 self._log(f"🧠 BLOCKED {name} — {decision['reasoning']}")
