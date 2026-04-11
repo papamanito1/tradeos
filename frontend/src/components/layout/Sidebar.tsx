@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, ShieldAlert,
-  BarChart2, Settings, LogOut, Bot, Twitter,
+  LayoutDashboard,
+  Settings, LogOut, Bot, Twitter,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Logo } from "@/components/ui/Logo";
@@ -24,8 +24,6 @@ const NAV_SECTIONS = [
   {
     label: "Tools",
     items: [
-      { label: "Risk Control", href: "/dashboard/risk",     icon: ShieldAlert },
-      { label: "Backtest",     href: "/dashboard/backtest", icon: BarChart2 },
       { label: "Settings",     href: "/dashboard/settings", icon: Settings },
     ],
   },

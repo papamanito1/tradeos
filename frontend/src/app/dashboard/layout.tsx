@@ -7,15 +7,12 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { usePathname } from "next/navigation";
-import { riskApi } from "@/lib/api";
 import { WSMessage } from "@/types";
 import { Logo } from "@/components/ui/Logo";
 import { ServerAgentProvider } from "@/context/ServerAgentContext";
 
 const PAGE_TITLES: Record<string, string> = {
   "/dashboard":          "Overview",
-  "/dashboard/risk":     "Risk Control",
-  "/dashboard/backtest": "Backtesting",
   "/dashboard/settings": "Settings",
   "/dashboard/agent":    "Live Agent",
   "/dashboard/x-agent":  "X Agent",
@@ -31,10 +28,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     if (!isLoading && !user) router.replace("/login");
   }, [user, isLoading, router]);
-
-  useEffect(() => {
-    riskApi.getStatus().then((data) => setKillSwitchActive(data.kill_switch_active)).catch(() => {});
-  }, []);
 
   const handleWsMessage = (msg: WSMessage) => {
     if (msg.event === "risk:kill_switch") setKillSwitchActive(true);
