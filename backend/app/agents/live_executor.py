@@ -213,22 +213,31 @@ class LiveExecutor:
                 self.last_error = f"Order too small: {btc_qty} BTC"
                 return None
 
-            logger.info(f"[LiveExecutor] Placing LIMIT {side.upper()} {btc_qty} BTC @ ${entry_price:.2f} "
-                        f"· notional ${notional:.0f} · lev {leverage}×")
+            pos_side = "LONG" if direction == "long" else "SHORT"
 
-            # Step 1: Place LIMIT order at signal entry price for better fills
+            logger.info(f"[LiveExecutor] Placing LIMIT {side.upper()} {btc_qty} BTC @ ${entry_price:.2f} "
+                        f"· notional ${notional:.0f} · lev {leverage}× "
+                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f}")
+
+            # Place LIMIT order with SL/TP attached directly to the position
+            order_params: dict = {"positionSide": pos_side}
+            if sl_price > 0:
+                order_params["stopLossPrice"] = round(sl_price, 2)
+            if tp_price > 0:
+                order_params["takeProfitPrice"] = round(tp_price, 2)
+
             order = await self._exchange.create_order(
                 SYMBOL,
                 "limit",
                 side,
                 btc_qty,
                 entry_price,
-                params={"positionSide": "LONG" if direction == "long" else "SHORT"},
+                params=order_params,
             )
             order_id = str(order.get("id", ""))
-            logger.info(f"[LiveExecutor] Limit order placed: id={order_id} @ ${entry_price:.2f}")
+            logger.info(f"[LiveExecutor] Limit order placed with SL/TP: id={order_id} @ ${entry_price:.2f}")
 
-            # Step 2: Poll for fill — up to 15 seconds (3 attempts × 5s)
+            # Poll for fill — up to 15 seconds (3 attempts × 5s)
             fill_price = 0.0
             POLL_INTERVAL = 5
             MAX_POLLS     = 3
@@ -251,7 +260,7 @@ class LiveExecutor:
                 except Exception as poll_err:
                     logger.warning(f"[LiveExecutor] Poll attempt {attempt+1} failed: {poll_err}")
 
-            # Step 3: If still not filled — cancel and abort
+            # If still not filled — cancel and abort
             if fill_price <= 0:
                 try:
                     await self._exchange.cancel_order(order_id, SYMBOL)
@@ -262,45 +271,11 @@ class LiveExecutor:
                 self.last_error = f"Limit order timed out (not filled in {POLL_INTERVAL * MAX_POLLS}s)"
                 return None
 
-            logger.info(f"[LiveExecutor] Limit order FILLED @ ${fill_price:.2f} (limit ${entry_price:.2f})")
+            logger.info(f"[LiveExecutor] Limit order FILLED @ ${fill_price:.2f} · "
+                        f"SL ${sl_price:.2f} · TP ${tp_price:.2f} (attached to position)")
 
-            # Step 4: SL/TP as stop-market orders now that we have a position
             sl_order_id = ""
             tp_order_id = ""
-            pos_side   = "LONG" if direction == "long" else "SHORT"
-            close_side = "sell" if direction == "long" else "buy"
-
-            try:
-                if sl_price > 0:
-                    sl_order = await self._exchange.create_order(
-                        SYMBOL, "market", close_side, btc_qty, None,
-                        params={
-                            "stopPrice":    round(sl_price, 2),
-                            "positionSide": pos_side,
-                            "reduceOnly":   True,
-                            "triggerType":  "MARK_PRICE",
-                        },
-                    )
-                    sl_order_id = str(sl_order.get("id", ""))
-                    logger.info(f"[LiveExecutor] SL placed @ ${sl_price:.2f} (order_id={sl_order_id})")
-            except Exception as sl_err:
-                logger.warning(f"[LiveExecutor] SL order failed (position still open): {sl_err}")
-
-            try:
-                if tp_price > 0:
-                    tp_order = await self._exchange.create_order(
-                        SYMBOL, "market", close_side, btc_qty, None,
-                        params={
-                            "stopPrice":    round(tp_price, 2),
-                            "positionSide": pos_side,
-                            "reduceOnly":   True,
-                            "triggerType":  "MARK_PRICE",
-                        },
-                    )
-                    tp_order_id = str(tp_order.get("id", ""))
-                    logger.info(f"[LiveExecutor] TP placed @ ${tp_price:.2f} (order_id={tp_order_id})")
-            except Exception as tp_err:
-                logger.warning(f"[LiveExecutor] TP order failed (position still open): {tp_err}")
 
             pos = {
                 "id":               f"{strategy_key}-live-{int(time.time()*1000)}",
@@ -336,45 +311,33 @@ class LiveExecutor:
             logger.error(f"[LiveExecutor] open_position FAILED for {strategy_key}: {self.last_error}")
             return None
 
-    # ── Cancel SL/TP orders for a specific position ─────────────────────────
+    # ── Cancel orphaned orders for a specific position ──────────────────────
 
     async def cancel_position_orders(self, strategy_key: str) -> None:
         """
-        Cancel only the SL and TP orders belonging to a specific trade.
-        Uses stored order IDs so other trades' SL/TP are not touched.
-        Falls back to cancelling all orders only if no other positions are open.
+        Clean up any leftover orders for a strategy.
+        With position-attached SL/TP, BingX auto-cancels the counterpart
+        when one fires. This is a safety-net for edge cases only.
         """
         pos = self.live_positions.get(strategy_key)
         order_ids_to_cancel: list[str] = []
 
         if pos:
-            if pos.get("sl_order_id"):
-                order_ids_to_cancel.append(pos["sl_order_id"])
-            if pos.get("tp_order_id"):
-                order_ids_to_cancel.append(pos["tp_order_id"])
+            for key in ("sl_order_id", "tp_order_id", "exchange_order_id"):
+                oid = pos.get(key, "")
+                if oid:
+                    order_ids_to_cancel.append(oid)
 
-        if order_ids_to_cancel:
-            for oid in order_ids_to_cancel:
-                try:
-                    await self._exchange.cancel_order(oid, SYMBOL)
-                    logger.info(f"[LiveExecutor] Cancelled order {oid} for {strategy_key}")
-                except Exception as ce:
-                    err_str = str(ce).lower()
-                    if any(kw in err_str for kw in ["not exist", "not found", "already", "cancelled"]):
-                        logger.info(f"[LiveExecutor] Order {oid} already gone (SL/TP fired)")
-                    else:
-                        logger.warning(f"[LiveExecutor] Failed to cancel order {oid}: {ce}")
-        else:
-            # No stored IDs (legacy position) — only safe to cancel all if no other live positions
-            other_positions = {k: v for k, v in self.live_positions.items() if k != strategy_key}
-            if not other_positions:
-                await self._cancel_all_open_orders()
-            else:
-                logger.warning(
-                    f"[LiveExecutor] No stored order IDs for {strategy_key} and "
-                    f"{len(other_positions)} other position(s) open — skipping blanket cancel "
-                    f"to protect other trades' SL/TP"
-                )
+        for oid in order_ids_to_cancel:
+            try:
+                await self._exchange.cancel_order(oid, SYMBOL)
+                logger.info(f"[LiveExecutor] Cancelled order {oid} for {strategy_key}")
+            except Exception as ce:
+                err_str = str(ce).lower()
+                if any(kw in err_str for kw in ["not exist", "not found", "already", "cancelled"]):
+                    logger.debug(f"[LiveExecutor] Order {oid} already gone")
+                else:
+                    logger.warning(f"[LiveExecutor] Failed to cancel order {oid}: {ce}")
 
     async def _cancel_all_open_orders(self) -> None:
         """Cancel every open order on SYMBOL. Only used when no other positions are open."""
@@ -432,8 +395,7 @@ class LiveExecutor:
 
             self.record_pnl(pnl)
 
-            # Cancel only THIS trade's remaining SL/TP (not other trades')
-            await self.cancel_position_orders(strategy_key)
+            # Position-attached SL/TP are auto-cancelled by BingX on close
             del self.live_positions[strategy_key]
 
             trade = {
@@ -462,8 +424,6 @@ class LiveExecutor:
                 diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
                 pnl  = round(diff * btc_qty * pos["leverage"], 2)
                 self.record_pnl(pnl)
-                # Cancel only THIS trade's counterpart order (e.g. TP when SL fired)
-                await self.cancel_position_orders(strategy_key)
                 del self.live_positions[strategy_key]
                 return {
                     **pos,
@@ -483,13 +443,12 @@ class LiveExecutor:
         """
         Sync with BingX exchange:
         1. Update unrealized P&L for all local positions
-        2. Detect positions closed on exchange by checking their SL/TP order status
-        3. Cancel orphaned counterpart orders when a trade's SL or TP already filled
+        2. Fetch actual exchange positions to detect which were closed by SL/TP
+        3. Clean up local tracking for positions no longer on exchange
         """
         closed_keys: list[str] = []
 
         if not self.live_positions:
-            # No local positions — but there might be orphaned stop orders from old trades
             try:
                 orphaned = await self._exchange.fetch_open_orders(SYMBOL)
                 if orphaned:
@@ -514,52 +473,30 @@ class LiveExecutor:
                 "unrealized_pct": pct,
             }
 
-        # Fetch open stop orders from BingX to detect which SL/TP have fired
-        try:
-            open_orders = await self._exchange.fetch_open_orders(SYMBOL)
-        except Exception as e:
-            logger.debug(f"[LiveExecutor] fetch_open_orders failed: {e}")
-            open_orders = []
-        open_order_ids = {str(o.get("id", "")) for o in open_orders}
-
-        # Also fetch actual exchange positions for total-gone detection
+        # Fetch actual exchange positions — this is the source of truth
         exchange_positions = await self.fetch_exchange_positions()
+
+        # Build a set of active directions on exchange (LONG/SHORT with non-zero qty)
+        active_sides: set[str] = set()
+        for ep in exchange_positions:
+            side = (ep.get("side") or "").lower()
+            if side:
+                active_sides.add(side)
+
         exchange_qty = sum(abs(p.get("contracts", 0)) for p in exchange_positions)
 
-        for key, pos in list(self.live_positions.items()):
-            sl_oid = pos.get("sl_order_id", "")
-            tp_oid = pos.get("tp_order_id", "")
-
-            if not sl_oid and not tp_oid:
-                continue
-
-            sl_still_open = sl_oid in open_order_ids if sl_oid else False
-            tp_still_open = tp_oid in open_order_ids if tp_oid else False
-
-            # If SL fired (gone from open orders) but TP is still there → SL closed this trade
-            sl_fired = sl_oid and not sl_still_open
-            tp_fired = tp_oid and not tp_still_open
-
-            if sl_fired and tp_still_open:
-                logger.info(f"[LiveExecutor] {key}: SL order {sl_oid} fired — "
-                            f"cancelling orphaned TP {tp_oid}")
-                await self.cancel_position_orders(key)
-                closed_keys.append(key)
-            elif tp_fired and sl_still_open:
-                logger.info(f"[LiveExecutor] {key}: TP order {tp_oid} fired — "
-                            f"cancelling orphaned SL {sl_oid}")
-                await self.cancel_position_orders(key)
-                closed_keys.append(key)
-            elif sl_fired and tp_fired:
-                logger.info(f"[LiveExecutor] {key}: Both SL and TP gone — "
-                            f"position fully closed on exchange")
-                closed_keys.append(key)
-
-        # Fallback: if exchange has zero position but we still track some, clean up all
-        if self.live_positions and exchange_qty == 0 and not closed_keys:
+        # If exchange has zero position, all our tracked positions were closed (SL/TP fired)
+        if exchange_qty == 0:
             for key in list(self.live_positions.keys()):
-                await self.cancel_position_orders(key)
-                logger.info(f"[LiveExecutor] {key} gone from exchange (zero net position) — cleaning up")
+                logger.info(f"[LiveExecutor] {key} closed on exchange (SL/TP fired) — cleaning up")
+                closed_keys.append(key)
+            return closed_keys
+
+        # Check each tracked position against exchange — if its side is gone, it was closed
+        for key, pos in list(self.live_positions.items()):
+            pos_dir = pos.get("direction", "")
+            if pos_dir not in active_sides:
+                logger.info(f"[LiveExecutor] {key} ({pos_dir}) no longer on exchange — SL/TP closed it")
                 closed_keys.append(key)
 
         return closed_keys
