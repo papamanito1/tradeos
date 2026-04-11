@@ -1,7 +1,7 @@
 """
 Persistent 24/7 Trading Agent
 ==============================
-Runs all 5 strategies on the backend server continuously.
+Runs all strategies on the backend server continuously.
 Positions survive browser close / page refreshes.
 State is persisted to a JSON file and reloaded on startup.
 
@@ -10,6 +10,7 @@ Strategies:
   - HFT Scalper 1m (EMA9/21 + OBI + TFI + microprice)
   - ORB-30 1m      (Opening Range Breakout, first 30 bars)
   - OBI Scalper 1m (Order Book Imbalance + EMA9/21 + RSI)
+  - Fusion          (Master Brain signal aggregation across all strategies)
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import os
 import time
 from datetime import datetime, timezone
@@ -53,14 +53,13 @@ DEFAULT_CONFIG = {
         "hft":      {**DEFAULT_STRATEGY_CFG},
         "orb":      {**DEFAULT_STRATEGY_CFG},
         "obi":      {**DEFAULT_STRATEGY_CFG},
-        "grid":     {**DEFAULT_STRATEGY_CFG, "leverage": 60, "min_conditions": 3},
     },
 }
 
 STRATEGY_KEYS = ["momentum", "hft", "orb", "obi", "fusion"]
 
 # Max hold time (minutes) for always-on shadow paper positions
-SHADOW_MAX_HOLD = {"momentum": 90, "hft": 20, "orb": 60, "obi": 10, "grid": 45}
+SHADOW_MAX_HOLD = {"momentum": 90, "hft": 20, "orb": 60, "obi": 10}
 
 # ── Indicator helpers ─────────────────────────────────────────────────────────
 
@@ -472,122 +471,6 @@ def _run_orb(candles1m: list[dict]) -> dict:
     return {"bias": bias, "signal": signal, "met_count": long_met if bias == "long" else short_met, "total": 4, "name": "ORB-30"}
 
 
-GRID_SIZE = 50.0  # $50 arithmetic grid
-
-
-def _run_grid(candles1m: list, live_price: float, grid_state: dict) -> dict:
-    """
-    $50 BTC Arithmetic Grid Strategy.
-    Buys on every $50 price drop, sells (via TP) on every $50 rise.
-    Returns the next actionable signal if a new grid level was crossed downward.
-    grid_state is mutated in-place so state persists between scans.
-    """
-    name = "Grid $50"
-    null = {"signal": None, "met_count": 0, "total": 5, "bias": "neutral", "name": name,
-            "grid_center": 0, "grid_min": 0, "grid_max": 0,
-            "current_level": 0, "daily_pnl": 0.0, "daily_trades": 0}
-
-    if live_price <= 0:
-        return null
-
-    MAX_LEVELS      = 20    # 20 levels each side → $1,000 range each way
-    MAX_CONCURRENT  = 5     # max open grid positions at once
-    DAILY_LOSS_LIM  = -300  # stop for the day if down more than $300
-    DAILY_PROF_LIM  = 1000  # pause if up more than $1,000 today
-
-    # ── Initialise grid centre on first call ──────────────────────────────────
-    if not grid_state.get("center"):
-        center = round(live_price / GRID_SIZE) * GRID_SIZE
-        grid_state.update({
-            "center":        center,
-            "last_price":    live_price,
-            "daily_pnl":     0.0,
-            "daily_trades":  0,
-            "last_reset":    datetime.now(timezone.utc).isoformat(),
-        })
-
-    center      = grid_state["center"]
-    last_price  = grid_state.get("last_price", live_price)
-    daily_pnl   = grid_state.get("daily_pnl",  0.0)
-    daily_trades= grid_state.get("daily_trades", 0)
-
-    grid_min = center - MAX_LEVELS * GRID_SIZE   # e.g. 72000 - 1000 = 71000
-    grid_max = center + MAX_LEVELS * GRID_SIZE   # e.g. 72000 + 1000 = 73000
-
-    # Reset daily state at UTC midnight
-    last_reset = grid_state.get("last_reset", "")
-    today_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if last_reset[:10] != today_str:
-        grid_state["daily_pnl"]    = 0.0
-        grid_state["daily_trades"] = 0
-        grid_state["last_reset"]   = datetime.now(timezone.utc).isoformat()
-        daily_pnl    = 0.0
-        daily_trades = 0
-
-    # ── Conditions ────────────────────────────────────────────────────────────
-    in_range  = grid_min <= live_price <= grid_max
-    pnl_ok    = DAILY_LOSS_LIM < daily_pnl < DAILY_PROF_LIM
-    has_data  = len(candles1m) >= 5
-
-    # Detect $50 level crossing (downward → BUY trigger)
-    cur_floor  = math.floor(live_price  / GRID_SIZE) * GRID_SIZE
-    last_floor = math.floor(last_price  / GRID_SIZE) * GRID_SIZE
-    crossed_down = cur_floor < last_floor   # dropped into a new lower $50 bucket
-
-    # Volume sanity check
-    vol_ok = False
-    if has_data:
-        vols = [c["volume"] for c in candles1m[-5:]]
-        vol_ok = sum(vols) > 0
-
-    conditions = {
-        "in_range":     in_range,
-        "pnl_ok":       pnl_ok,
-        "crossed_down": crossed_down,
-        "has_data":     has_data,
-        "volume":       vol_ok,
-    }
-    met = sum(conditions.values())
-
-    # Always update last_price for next scan
-    grid_state["last_price"] = live_price
-
-    bias    = "long" if in_range and pnl_ok else ("stopped" if not in_range else "paused")
-    signal  = None
-
-    if in_range and pnl_ok and crossed_down and has_data:
-        entry  = live_price                        # market entry at crossing price
-        tp     = cur_floor + GRID_SIZE             # collect profit $50 higher
-        sl     = cur_floor - GRID_SIZE             # stop 1 grid below (−$50)
-        # Confidence: higher when price is deep inside the range and vol is good
-        depth  = (live_price - grid_min) / (grid_max - grid_min)  # 0..1
-        conf   = round(max(0.60, min(0.78 + (vol_ok * 0.05) - abs(depth - 0.5) * 0.1, 0.85)), 3)
-        signal = {
-            "direction":  "long",
-            "entry":      round(entry, 2),
-            "tp":         round(tp,    2),
-            "sl":         round(sl,    2),
-            "confidence": conf,
-            "rr":         "1:1.0",   # $50 profit / $50 risk per level
-            "reasoning":  (f"Grid $50: price crossed ${cur_floor:,.0f}→${cur_floor+GRID_SIZE:,.0f} "
-                           f"· center ${center:,.0f} · {MAX_CONCURRENT} slots"),
-        }
-
-    return {
-        "signal":        signal,
-        "met_count":     met,
-        "total":         5,
-        "bias":          bias,
-        "name":          name,
-        "grid_center":   center,
-        "grid_min":      grid_min,
-        "grid_max":      grid_max,
-        "current_level": int(cur_floor),
-        "daily_pnl":     round(daily_pnl, 2),
-        "daily_trades":  daily_trades,
-    }
-
-
 # ── Persistent Agent ──────────────────────────────────────────────────────────
 
 class PersistentAgent:
@@ -606,7 +489,6 @@ class PersistentAgent:
         self.trades: list      = []   # closed/confirmed trades
         self.stats:  dict      = {}
         self.log:    list      = []   # last 200 lines
-        self.grid_state: dict  = {}   # Grid $50 strategy persistent state
         self.training_index: dict = {}  # per-strategy performance index (self-learning)
         self.scan_count        = 0
         self.last_scan: Optional[str] = None
@@ -653,7 +535,6 @@ class PersistentAgent:
             "brain":           self.brain.to_dict(),
             "stats":           self.stats,
             "log":             self.log[-100:],
-            "grid_state":      self.grid_state,
             "training_index":  self.training_index,
             "saved_at":        datetime.now(timezone.utc).isoformat(),
             # Shadow positions survive restarts so training data is continuous
@@ -671,7 +552,6 @@ class PersistentAgent:
                 self.positions[k] = v
         self.trades     = data.get("trades",     [])[-500:]   # keep up to 500 trades in memory
         self.log        = data.get("log",        [])[-100:]
-        self.grid_state      = data.get("grid_state", {})
         self.training_index  = data.get("training_index", {})
         # Always rebuild stats + training index from trade history
         self._rebuild_stats()
@@ -698,8 +578,6 @@ class PersistentAgent:
                 sk = t.get("strategy_key", "")
                 if sk.startswith("shadow_"):
                     sk = sk.replace("shadow_", "")
-                if sk.startswith("grid_"):
-                    sk = "grid"
                 if not sk:
                     continue
                 pnl = float(t.get("pnl_usd", 0) or 0)
@@ -831,13 +709,11 @@ class PersistentAgent:
         apply loss cooldowns, and weight strategies by recent performance.
         """
         KEY_TO_NAME = {"momentum": "momentum", "hft": "hft", "orb": "orb", "obi": "obi"}
-        by_strat: dict[str, list] = {"momentum": [], "hft": [], "orb": [], "obi": [], "grid": []}
+        by_strat: dict[str, list] = {"momentum": [], "hft": [], "orb": [], "obi": []}
 
         for t in self.trades:
             sk = t.get("strategy_key", "")
-            if sk.startswith("grid_"):
-                by_strat["grid"].append(t)
-            elif sk in by_strat:
+            if sk in by_strat:
                 by_strat[sk].append(t)
 
         idx: dict[str, dict] = {}
@@ -1340,51 +1216,6 @@ class PersistentAgent:
             elif self.scan_count % 5 == 0:
                 self._log(f"🎯 FUSION: no consensus · regime={self.brain.current_regime}")
 
-        # ── Grid $50 strategy (multi-position) ───────────────────────────────
-        grid_cfg = self._strategy_cfg("grid")
-        MAX_GRID_POSITIONS = 5
-        grid_result = _run_grid(candles1m, live_price, self.grid_state)
-        grid_sig    = grid_result.get("signal")
-        grid_met    = grid_result.get("met_count", 0)
-        grid_bias   = grid_result.get("bias", "neutral")
-        cur_level   = grid_result.get("current_level", 0)
-        grid_level_key = f"grid_{cur_level}"
-
-        if grid_cfg.get("enabled", True):
-            grid_ti = self.training_index.get("grid", {})
-            grid_conf_adj = grid_ti.get("conf_adj", 0)
-            grid_trust    = grid_ti.get("trust_score", 1.0)
-            grid_label    = grid_ti.get("label", "NORMAL")
-
-            open_grid_count = sum(1 for k, v in self.positions.items() if k.startswith("grid_") and v)
-
-            if grid_sig:
-                conf    = grid_sig.get("confidence", 0)
-                adj_conf = min(0.95, grid_cfg.get("min_confidence", 0.50) + grid_conf_adj)
-                conf_ok = conf >= adj_conf
-                cond_ok = grid_met >= grid_cfg.get("min_conditions", 3)
-                already_open = self.positions.get(grid_level_key)
-                slot_ok = open_grid_count < MAX_GRID_POSITIONS
-
-                block = ("POS@LEVEL" if already_open else
-                         "MAX_SLOTS" if not slot_ok else
-                         "conf_fail" if not conf_ok else
-                         "cond_fail" if not cond_ok else "")
-
-                ti_str = f" · trust {grid_trust:.2f} {grid_label}" if grid_ti.get("total_trades", 0) > 0 else ""
-                self._log(f"[Grid $50] SIGNAL LONG · {grid_met}/5 conds · conf {conf*100:.0f}% (min {adj_conf*100:.0f}%) "
-                          f"· level ${cur_level:,} · slots {open_grid_count}/{MAX_GRID_POSITIONS}{ti_str} · {block or 'EXECUTING'}")
-
-                if cond_ok and conf_ok and not already_open and slot_ok and grid_cfg.get("auto_execute", True):
-                    self._brain_gate_execute(grid_level_key, "Grid $50", grid_sig, grid_cfg, live_price)
-                    any_signal = True
-            elif self.scan_count % 5 == 0:
-                ti_str = f" · trust {grid_trust:.2f} {grid_label}" if grid_ti.get("total_trades", 0) > 0 else ""
-                self._log(f"[Grid $50] {grid_met}/5 conds · {grid_bias} · "
-                          f"center ${grid_result.get('grid_center', 0):,} · "
-                          f"range ${grid_result.get('grid_min', 0):,}–${grid_result.get('grid_max', 0):,} · "
-                          f"slots {open_grid_count}/{MAX_GRID_POSITIONS}{ti_str}")
-
         self._save_state()           # fast file cache
         await self._save_state_db()  # durable DB persist
 
@@ -1399,7 +1230,7 @@ class PersistentAgent:
             2. If live-approved → execute on BingX
             3. If live-rejected → fall back to paper shadow (trains the Brain)
         """
-        strat_key = key.split("_")[0] if key.startswith("grid_") else key
+        strat_key = key
         is_live_mode = self._is_live_mode()
 
         if is_live_mode:
@@ -1574,7 +1405,7 @@ class PersistentAgent:
         tp = ((entry + tp_dist) if d == "long" else (entry - tp_dist)) if tp_dist > 0 else sig_tp
 
         # Slippage guard — skip if price moved >0.3% from signal (chasing)
-        if sig_entry > 0 and not key.startswith("grid_"):
+        if sig_entry > 0:
             slip_pct = abs(entry - sig_entry) / sig_entry * 100
             if slip_pct > 0.30:
                 self._log(f"⚠ [{name}] SKIPPED — price moved {slip_pct:.2f}% from signal "
@@ -1650,13 +1481,10 @@ class PersistentAgent:
 
     # Max hold time in minutes per strategy before auto-close at market
     MAX_HOLD_MINUTES = {
-        "momentum": 240, "hft": 45, "orb": 180, "obi": 15, "grid": 120,
-        "fusion": 120,
+        "momentum": 240, "hft": 45, "orb": 180, "obi": 15, "fusion": 120,
     }
 
     def _max_hold_for_key(self, key: str) -> int:
-        if key.startswith("grid_"):
-            return self.MAX_HOLD_MINUTES["grid"]
         if key.startswith("shadow_"):
             # Shadow positions have shorter hold so training cycles faster
             strat = key.replace("shadow_", "")
@@ -1811,10 +1639,6 @@ class PersistentAgent:
         # Resolve canonical strategy key for brain learning
         if key.startswith("shadow_"):
             strat_key = key.replace("shadow_", "")
-            if strat_key.startswith("grid_"):
-                strat_key = "grid"
-        elif key.startswith("grid_"):
-            strat_key = "grid"
         else:
             strat_key = key
         won = pnl > 0
@@ -1859,18 +1683,16 @@ class PersistentAgent:
         self.trades     = []
         self.stats      = self._empty_stats()
         self.log        = []
-        self.grid_state      = {}   # reset grid centre so it re-anchors on next scan
         self.training_index  = {}   # clear training data — starts fresh
         self.scan_count = 0
-        self._log("Paper account reset — all positions cleared + grid re-anchored + training index cleared")
+        self._log("Account reset — all positions cleared + training index cleared")
         self._save_state()
         self._schedule_db_save()
 
     def _strategy_cfg(self, strategy_key: str) -> dict:
         """Resolve effective config for a strategy: per-strategy override merged over global."""
         overrides = self.config.get("strategy_overrides", {})
-        s_key = "grid" if strategy_key.startswith("grid_") else strategy_key
-        s_cfg = overrides.get(s_key, {})
+        s_cfg = overrides.get(strategy_key, {})
         return {
             "enabled":        s_cfg.get("enabled",        self.config.get("enabled", True)),
             "size_usdc":      s_cfg.get("size_usdc",      self.config.get("size_usdc", 100)),
@@ -1909,7 +1731,6 @@ class PersistentAgent:
                           if p and not k.startswith("shadow_")]
         shadow_positions = [p for k, p in self.positions.items()
                             if p and k.startswith("shadow_")]
-        open_grid      = [p for k, p in self.positions.items() if k.startswith("grid_") and p]
 
         live_executor_status = None
         # Eagerly init executor if BingX keys are configured, so status always shows
@@ -1932,8 +1753,6 @@ class PersistentAgent:
             "trades":               self.trades[:200],
             "stats":                self.stats,
             "log":                  self.log[:100],
-            "grid_state":           self.grid_state,
-            "grid_positions":       open_grid,
             "training_index":       self.training_index,
             "live_executor":        live_executor_status,
             "master_brain":         self.brain.get_status(self.positions, price),

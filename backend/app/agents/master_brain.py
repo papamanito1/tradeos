@@ -42,7 +42,7 @@ class MasterBrain:
 
         # ── Strategy trust scores (0.0 – 2.0, 1.0 = neutral) ────────────
         self.strategy_trust: dict[str, float] = {
-            "momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0, "grid": 1.0,
+            "momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0,
         }
 
         # ── Performance tracking ─────────────────────────────────────────
@@ -59,11 +59,11 @@ class MasterBrain:
 
         # ── Regime-strategy affinity map (base priors) ───────────────────
         self.REGIME_AFFINITY = {
-            "trending_up":   {"momentum": 1.4, "hft": 0.7, "orb": 1.2, "obi": 0.8, "grid": 0.6, "fusion": 1.0},
-            "trending_down": {"momentum": 1.3, "hft": 0.7, "orb": 1.1, "obi": 0.9, "grid": 0.5, "fusion": 1.0},
-            "ranging":       {"momentum": 0.5, "hft": 1.3, "orb": 0.6, "obi": 1.2, "grid": 1.5, "fusion": 1.0},
-            "volatile":      {"momentum": 0.8, "hft": 1.1, "orb": 0.9, "obi": 1.0, "grid": 0.4, "fusion": 1.0},
-            "unknown":       {"momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0, "grid": 1.0, "fusion": 1.0},
+            "trending_up":   {"momentum": 1.4, "hft": 0.7, "orb": 1.2, "obi": 0.8, "fusion": 1.0},
+            "trending_down": {"momentum": 1.3, "hft": 0.7, "orb": 1.1, "obi": 0.9, "fusion": 1.0},
+            "ranging":       {"momentum": 0.5, "hft": 1.3, "orb": 0.6, "obi": 1.2, "fusion": 1.0},
+            "volatile":      {"momentum": 0.8, "hft": 1.1, "orb": 0.9, "obi": 1.0, "fusion": 1.0},
+            "unknown":       {"momentum": 1.0, "hft": 1.0, "orb": 1.0, "obi": 1.0, "fusion": 1.0},
         }
 
         # ── Learned affinity — updated from every trade result ────────────
@@ -214,7 +214,7 @@ class MasterBrain:
         same_dir_count = 0
         opposite_dir_count = 0
         for k, pos in open_positions.items():
-            if pos and not k.startswith("grid_"):
+            if pos:
                 if pos.get("direction") == direction:
                     same_dir_count += 1
                 else:

@@ -22,7 +22,6 @@ const STRATEGIES = [
   { key: "hft",      label: "HFT Scalper",  color: "#a78bfa", icon: "⚡", tf: "1m"  },
   { key: "orb",      label: "ORB-30",       color: "#f59e0b", icon: "🔶", tf: "1m"  },
   { key: "obi",      label: "OBI Scalper",  color: "#10b981", icon: "📊", tf: "1m"  },
-  { key: "grid",     label: "Grid $50",     color: "#06b6d4", icon: "⊞",  tf: "cont" },
   { key: "fusion",   label: "Fusion",       color: "#f472b6", icon: "🧠", tf: "all"  },
 ] as const;
 
