@@ -456,6 +456,15 @@ class LiveExecutor:
         closed_keys: list[str] = []
 
         if not self.live_positions:
+            # No local positions — but there might be orphaned stop orders from old trades
+            try:
+                orphaned = await self._exchange.fetch_open_orders(SYMBOL)
+                if orphaned:
+                    logger.info(f"[LiveExecutor] 0 local positions but {len(orphaned)} orphaned "
+                                f"order(s) on BingX — cancelling all")
+                    await self._cancel_all_open_orders()
+            except Exception as e:
+                logger.debug(f"[LiveExecutor] orphan check failed: {e}")
             return closed_keys
 
         # Update P&L for all tracked positions

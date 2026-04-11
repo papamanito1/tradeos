@@ -214,6 +214,16 @@ async def reset_circuit_breaker():
     return {"ok": True, "message": "Circuit breaker reset — trading resumed"}
 
 
+@router.post("/live/cancel-orphaned-orders")
+async def cancel_orphaned_orders():
+    """Cancel all open stop orders on BingX when there are no active positions."""
+    agent = _get()
+    if not agent._live:
+        raise HTTPException(status_code=400, detail="Live executor not active")
+    await agent._live._cancel_all_open_orders()
+    return {"ok": True, "message": "All orphaned orders cancelled"}
+
+
 # ── Master Brain ──────────────────────────────────────────────────────────
 
 @router.get("/brain")
