@@ -20,7 +20,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-PAPER_DB_PATH = "/tmp/paper_trader.db"
+import os as _os
+# Prefer a persistent data directory (Railway volume mount or explicit env var).
+# Falls back to /tmp only if nothing else is configured — this is volatile on restarts.
+PAPER_DB_PATH = _os.environ.get(
+    "PAPER_DB_PATH",
+    _os.path.join(_os.environ.get("DATA_DIR", "/tmp"), "paper_trader.db"),
+)
 STARTING_BALANCE = 10_000.0
 
 try:

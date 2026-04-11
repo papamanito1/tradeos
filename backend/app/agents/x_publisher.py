@@ -3,33 +3,41 @@ XPublisher — Tradeous X/Twitter Intelligence Engine
 =====================================================
 Viral-optimised AI content for @Tradeous.
 
-Posts every 25 minutes. Has memory — never repeats the same content twice
-in a row. Dynamic content uses live BTC price, regime, and market context.
+Posts every 25 minutes. Has persistent memory — never repeats headlines or
+content. Uses Grok (xAI) with live X/web search to detect what's trending
+and craft hooks optimised for engagement and virality.
 
-Post types (each has a large content bank + memory rotation):
+Post types:
   0. Intro           — once on first startup
   1. Trade signal    — live trade opened (conviction ≥ threshold)
   2. Trade result    — live position closed
-  3. Hourly update   — BTC price + regime + witty commentary  (every 25 min)
+  3. Hourly update   — BTC price + regime + witty commentary (every 25 min)
   4. Daily summary   — midnight UTC digest
   5. Weekly recap    — Sunday 20:00 UTC
-  6. Crypto news     — hot story with sharp take (every 50 min)
+  6. Crypto news     — trending story with sharp unique take (every 50 min)
   7. Fear & Greed    — index commentary (every 2 h)
   8. Hot take        — spicy market opinion (every 60 min)
   9. Philosophy      — trader wisdom + algo twist (every 2 h)
  10. Engagement      — question to audience (every 2 h)
  11. BTC Move        — triggered when BTC moves ±1.5%+ between posts
  12. Algo Insight    — transparency post about how the system works
+ 13. Trending Hook   — Grok-powered post on what's viral on X right now
+ 14. Bold Prediction — contrarian market call with reasoning
+ 15. Milestone       — performance achievement posts
 
 Env vars required:
   X_AUTH_TOKEN  — from x.com cookies ("auth_token")
   X_CT0         — from x.com cookies ("ct0")
+  XAI_API_KEY   — xAI / Grok API key (for real-time X trend search)
+  GROQ_API_KEY  — Groq fallback (free)
+  GEMINI_API_KEY — Gemini fallback (free)
 """
 
 from __future__ import annotations
 
 import asyncio
 import collections
+import hashlib
 import json
 import logging
 import os
@@ -54,17 +62,23 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ── Timing constants (25-min cadence) ─────────────────────────────────────────
-SIGNAL_MIN_CONVICTION = 0.70
-SIGNAL_COOLDOWN     = 900     # 15 min
-HOURLY_COOLDOWN     = 1500    # 25 min  ← was 55 min
-NEWS_COOLDOWN       = 3000    # 50 min  ← was 2 h
-FEAR_GREED_COOLDOWN = 7200    # 2 h     ← was 4 h
-HOT_TAKE_COOLDOWN   = 3600    # 60 min  ← was 8 h
-PHILOSOPHY_COOLDOWN = 7200    # 2 h     ← was 12 h
-ENGAGEMENT_COOLDOWN = 7200    # 2 h     ← was 12 h
-BTC_MOVE_COOLDOWN   = 1800    # 30 min
-ALGO_INSIGHT_COOLDOWN = 10800 # 3 h
+# ── Timing constants ──────────────────────────────────────────────────────────
+SIGNAL_MIN_CONVICTION  = 0.70
+SIGNAL_COOLDOWN        = 900      # 15 min
+HOURLY_COOLDOWN        = 1500     # 25 min
+NEWS_COOLDOWN          = 3000     # 50 min
+FEAR_GREED_COOLDOWN    = 7200     # 2 h
+HOT_TAKE_COOLDOWN      = 3600     # 60 min
+PHILOSOPHY_COOLDOWN    = 7200     # 2 h
+ENGAGEMENT_COOLDOWN    = 7200     # 2 h
+BTC_MOVE_COOLDOWN      = 1800     # 30 min
+ALGO_INSIGHT_COOLDOWN  = 10800    # 3 h
+TRENDING_COOLDOWN      = 5400     # 90 min — Grok X-trend post
+PREDICTION_COOLDOWN    = 14400    # 4 h
+MILESTONE_COOLDOWN     = 3600     # 1 h (but only fires when milestone reached)
+
+# Headline dedup window: 72 hours
+NEWS_SEEN_TTL_HOURS = 72
 
 # ── X internal API ─────────────────────────────────────────────────────────────
 _X_QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
@@ -349,7 +363,8 @@ BTC_MOVE_ACTION_COMMENTS = [
 ]
 
 
-_TWEET_DB_PATH = "/tmp/tweet_history.db"
+_TWEET_DB_PATH   = "/tmp/tweet_history.db"
+_HEADLINE_DB_PATH = "/tmp/seen_headlines.db"
 
 
 class MoodState:

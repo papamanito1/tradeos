@@ -2,21 +2,28 @@
 Persistent Agent API
 ====================
 REST endpoints for controlling and monitoring the 24/7 trading agent.
-No auth required for read endpoints so the frontend can poll freely.
+
+Read endpoints (status, live/status, brain, paper-trader) are open so
+the dashboard can poll freely without a token.
+
+All write/control endpoints require a valid JWT — use the auth header:
+  Authorization: Bearer <token>
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+
+from app.core.security import get_current_user
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
-def _get() :
+def _get():
     from app.agents.persistent_agent import get_agent
     return get_agent()
 
 
-# ── Read ──────────────────────────────────────────────────────────────────────
+# ── Read (open — dashboard polls without token) ───────────────────────────────
 
 @router.get("/status")
 async def get_status():
@@ -24,13 +31,12 @@ async def get_status():
     return _get().get_status()
 
 
-# ── Control ───────────────────────────────────────────────────────────────────
+# ── Control (auth required) ───────────────────────────────────────────────────
 
 @router.post("/start")
-async def start_agent():
+async def start_agent(_: dict = Depends(get_current_user)):
     agent = _get()
     await agent.start()
-    # Force-enable trading even if stale DB config had it off
     agent.config["enabled"]      = True
     agent.config["auto_execute"] = True
     agent._schedule_db_save()
@@ -38,7 +44,7 @@ async def start_agent():
 
 
 @router.post("/stop")
-async def stop_agent():
+async def stop_agent(_: dict = Depends(get_current_user)):
     agent = _get()
     agent.config["enabled"] = False
     await agent.stop()
@@ -66,7 +72,7 @@ class ConfigPatch(BaseModel):
 
 
 @router.post("/config")
-async def update_config(patch: ConfigPatch):
+async def update_config(patch: ConfigPatch, _: dict = Depends(get_current_user)):
     agent = _get()
     data  = patch.model_dump(exclude_none=True)
     # Convert StrategyOverride models to plain dicts for the agent
@@ -80,13 +86,13 @@ async def update_config(patch: ConfigPatch):
 
 
 @router.post("/reset")
-async def reset_agent():
+async def reset_agent(_: dict = Depends(get_current_user)):
     _get().reset()
     return {"ok": True, "message": "Paper account reset"}
 
 
 @router.post("/close/{strategy_key}")
-async def close_position(strategy_key: str):
+async def close_position(strategy_key: str, _: dict = Depends(get_current_user)):
     ok = _get().close_position(strategy_key)
     if not ok:
         raise HTTPException(status_code=404, detail=f"No open position for {strategy_key}")
@@ -124,7 +130,7 @@ async def network_test():
 
 
 @router.get("/debug")
-async def debug_agent():
+async def debug_agent(_: dict = Depends(get_current_user)):
     """Detailed diagnostic — shows market data availability and strategy state."""
     from app.agents.live_market_stream import LIVE_CANDLES, LIVE_PRICES, LIVE_ORDERBOOK
     agent = _get()
@@ -145,7 +151,7 @@ async def debug_agent():
 
 
 @router.post("/force-scan")
-async def force_scan():
+async def force_scan(_: dict = Depends(get_current_user)):
     """Trigger an immediate strategy scan (for testing/debugging)."""
     agent = _get()
     if not agent._running:
@@ -177,7 +183,7 @@ async def live_status():
 
 
 @router.post("/live/close/{strategy_key}")
-async def live_close_position(strategy_key: str):
+async def live_close_position(strategy_key: str, _: dict = Depends(get_current_user)):
     """Manually close a live BingX position for the given strategy."""
     agent = _get()
     if not agent._live:
@@ -204,7 +210,7 @@ async def live_balance():
 
 
 @router.post("/live/reset-circuit-breaker")
-async def reset_circuit_breaker():
+async def reset_circuit_breaker(_: dict = Depends(get_current_user)):
     """Manually reset the daily loss circuit breaker (use with caution)."""
     agent = _get()
     if not agent._live:
@@ -215,7 +221,7 @@ async def reset_circuit_breaker():
 
 
 @router.post("/live/cancel-orphaned-orders")
-async def cancel_orphaned_orders():
+async def cancel_orphaned_orders(_: dict = Depends(get_current_user)):
     """Cancel all open stop orders on BingX when there are no active positions."""
     agent = _get()
     if not agent._live:
@@ -236,7 +242,7 @@ async def get_brain_status():
 
 
 @router.post("/brain/reset-trust")
-async def reset_brain_trust():
+async def reset_brain_trust(_: dict = Depends(get_current_user)):
     """Reset all strategy trust scores to neutral (1.0)."""
     agent = _get()
     agent.brain.strategy_trust = {k: 1.0 for k in agent.brain.strategy_trust}
@@ -255,7 +261,7 @@ async def get_paper_trader():
 
 
 @router.post("/paper-trader/reset")
-async def reset_paper_trader():
+async def reset_paper_trader(_: dict = Depends(get_current_user)):
     """Reset paper trader to $10K starting balance."""
     agent = _get()
     from app.agents.paper_trader import PaperTrader, STARTING_BALANCE

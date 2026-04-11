@@ -88,27 +88,31 @@ async def _background_init():
     except Exception as e:
         logger.warning(f"Seed skipped: {e}")
 
-    # 3 — Ensure Kashan/Manan admin always exists
-    async def _ensure_kashan():
+    # 3 — Ensure admin user exists (create only — never overwrite existing password)
+    async def _ensure_admin():
         from app.core.database import AsyncSessionLocal
         from app.core.security import hash_password
         from app.models.user import User
         from sqlalchemy import select
+        username = settings.admin_username
+        password = settings.admin_password
+        if not username or not password:
+            logger.warning("ADMIN_USERNAME / ADMIN_PASSWORD not set — skipping admin seed")
+            return
         async with AsyncSessionLocal() as s:
-            r = await s.execute(select(User).where(User.username == "Kashan"))
+            r = await s.execute(select(User).where(User.username == username))
             u = r.scalar_one_or_none()
             if not u:
-                s.add(User(username="Kashan", hashed_password=hash_password("Manan"),
+                s.add(User(username=username, hashed_password=hash_password(password),
                             is_active=True, is_admin=True))
+                await s.commit()
+                logger.info(f"Admin user '{username}' created")
             else:
-                u.hashed_password = hash_password("Manan")
-                u.is_active = True
-            await s.commit()
-            logger.info("Admin Kashan ensured")
+                logger.info(f"Admin user '{username}' already exists — password unchanged")
     try:
-        await asyncio.wait_for(_ensure_kashan(), timeout=8)
+        await asyncio.wait_for(_ensure_admin(), timeout=8)
     except Exception as e:
-        logger.warning(f"Kashan admin ensure failed: {e}")
+        logger.warning(f"Admin ensure failed: {e}")
 
     # 4 — Redis listener (background, non-blocking by design)
     channels = [
@@ -170,60 +174,65 @@ async def shutdown():
 
 @app.get("/health")
 async def health():
-    import os
     return {
         "status":           "ok",
         "version":          "1.0.4",
         "mode":             settings.trading_mode,
         "bingx_configured": bool(settings.bingx_api_key),
-        "admin_username":   settings.admin_username,   # shows expected login username
     }
 
 
+def _check_admin_secret(secret: str) -> None:
+    """Validate the ADMIN_RESET_SECRET env var for emergency routes."""
+    import os
+    from fastapi import HTTPException
+    expected = os.environ.get("ADMIN_RESET_SECRET", "")
+    if not expected or secret != expected:
+        raise HTTPException(status_code=403, detail="Invalid or missing admin secret")
+
+
 @app.post("/force-reseed")
-async def force_reseed():
-    """Emergency: re-create admin user with current env var credentials. Call once after deploy."""
+async def force_reseed(secret: str = ""):
+    """Emergency: re-create admin user from env vars. Requires ADMIN_RESET_SECRET query param."""
+    _check_admin_secret(secret)
     try:
         from app.seeds.seed_data import seed
         await seed()
         return {
-            "ok":       True,
-            "username": settings.admin_username,
-            "message":  f"Admin user '{settings.admin_username}' created/updated. Use this username to log in.",
+            "ok":      True,
+            "message": "Admin user created/updated from env vars.",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 class AdminCredentials(BaseModel):
-    username: str = "Kashan"
-    password: str = "Manan"
+    username: str
+    password: str
+    secret:   str = ""
 
 @app.post("/reset-admin-password")
-async def reset_admin_password(creds: AdminCredentials = AdminCredentials()):
-    """Emergency: create/update admin user with given credentials."""
+async def reset_admin_password(creds: AdminCredentials):
+    """Emergency: update admin password. Requires ADMIN_RESET_SECRET in body."""
+    _check_admin_secret(creds.secret)
+    if not creds.username or not creds.password or len(creds.password) < 8:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Username required and password must be ≥8 chars")
     try:
         from app.core.database import AsyncSessionLocal
         from app.core.security import hash_password
         from app.models.user import User
-        from sqlalchemy import select, delete
+        from sqlalchemy import select
 
         async with AsyncSessionLocal() as session:
-            # Delete all existing users to avoid conflicts
-            await session.execute(delete(User))
-            # Create fresh admin
-            user = User(
-                username=creds.username,
-                hashed_password=hash_password(creds.password),
-                is_active=True,
-                is_admin=True,
-            )
-            session.add(user)
+            r = await session.execute(select(User).where(User.username == creds.username))
+            user = r.scalar_one_or_none()
+            if not user:
+                user = User(username=creds.username, is_active=True, is_admin=True)
+                session.add(user)
+            user.hashed_password = hash_password(creds.password)
+            user.is_active = True
             await session.commit()
-        return {
-            "ok":       True,
-            "username": creds.username,
-            "message":  f"Admin user set to '{creds.username}'. You can now log in.",
-        }
+        return {"ok": True, "message": f"Password updated for '{creds.username}'."}
     except Exception as e:
         return {"ok": False, "error": str(e)}

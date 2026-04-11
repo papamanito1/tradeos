@@ -831,9 +831,11 @@ class PersistentAgent:
             self._load_state()  # file fallback (local dev)
         # Load paper trader's own persistent DB (separate from main agent state)
         await self.paper_trader.load_from_db()
-        # Always force trading-active flags on start regardless of stale DB config
-        self.config["enabled"]      = True
-        self.config["auto_execute"] = True
+        # On first run (no saved state), enable trading by default.
+        # If state was loaded from DB, preserve whatever the user had set.
+        if not loaded_from_db:
+            self.config.setdefault("enabled", True)
+            self.config.setdefault("auto_execute", True)
         self._running = True
         self._task = asyncio.create_task(self._loop())
         asyncio.create_task(self._x_scheduler())
@@ -1763,9 +1765,10 @@ class PersistentAgent:
 
         s = self.stats
         s["total_trades"] += 1
-        if reason == "tp":
+        # Count win/loss by actual PnL — covers tp, sl, manual, timeout, and all other reasons
+        if pnl > 0:
             s["wins"]   += 1
-        elif reason == "sl":
+        else:
             s["losses"] += 1
         s["total_pnl"]   = round(s["total_pnl"] + pnl, 2)
         s["win_rate"]    = round(s["wins"] / s["total_trades"] * 100, 1) if s["total_trades"] > 0 else 0

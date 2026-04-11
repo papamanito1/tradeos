@@ -36,7 +36,9 @@ async def list_entries(
     if symbol:
         query = query.where(JournalEntry.symbol == symbol)
     if search:
-        query = query.where(JournalEntry.message.ilike(f"%{search}%"))
+        # Escape SQL wildcard chars to prevent pattern abuse / full-table scans
+        safe_search = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.where(JournalEntry.message.ilike(f"%{safe_search}%", escape="\\"))
     query = query.offset(offset).limit(limit)
 
     result = await db.execute(query)

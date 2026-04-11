@@ -82,7 +82,8 @@ class MasterBrain:
         self.MAX_DAILY_TRADES = 50
         self.MAX_CONSECUTIVE_LOSSES = 5
         self.MAX_OPEN_POSITIONS = 8   # across all strategies + shadows
-        self.MAX_DAILY_LOSS = -300.0  # hard stop
+        # Set via PersistentAgent from config["daily_loss_limit"] — single source of truth
+        self.MAX_DAILY_LOSS = -50.0
         self.CORRELATION_PENALTY = 0.5  # reduce size if same-direction positions open
 
         # ── Regime history for stability ──────────────────────────────────

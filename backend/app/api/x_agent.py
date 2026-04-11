@@ -1,12 +1,17 @@
 """
 X Agent API — dashboard control for @Tradeous X posting.
+
+Read endpoints (status, next-post, confirm-post) are open so the local
+poster script can operate without a token. All write/trigger endpoints
+require a valid JWT.
 """
 from __future__ import annotations
 
 import random
 import time
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from app.core.security import get_current_user
 
 router = APIRouter(prefix="/api/x-agent", tags=["x-agent"])
 
@@ -36,19 +41,6 @@ async def get_status():
     return pub.status()
 
 
-@router.get("/creds")
-async def get_creds(secret: str = ""):
-    """Return auth cookies so local_poster.py can post from the residential IP.
-    Requires POSTER_SECRET env var to match the `secret` query param."""
-    import os
-    expected = os.environ.get("POSTER_SECRET", "")
-    if not expected or secret != expected:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Forbidden")
-    pub = _publisher()
-    if not pub or not pub.enabled:
-        return {"ok": False}
-    return {"ok": True, "a": pub._auth_token, "c": pub._ct0}
 
 
 
@@ -105,7 +97,7 @@ def _gen_hourly_text(pub) -> str:
 
 
 @router.post("/trigger/news")
-async def trigger_news():
+async def trigger_news(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["news"] = 0
@@ -127,7 +119,7 @@ async def trigger_news():
 
 
 @router.post("/trigger/fear-greed")
-async def trigger_fear_greed():
+async def trigger_fear_greed(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["fear_greed"] = 0
@@ -143,7 +135,7 @@ async def trigger_fear_greed():
 
 
 @router.post("/trigger/hot-take")
-async def trigger_hot_take():
+async def trigger_hot_take(_: dict = Depends(get_current_user)):
     from app.agents.x_publisher import HOT_TAKES
     pub = _publisher()
     if err := _check(pub): return err
@@ -153,7 +145,7 @@ async def trigger_hot_take():
 
 
 @router.post("/trigger/philosophy")
-async def trigger_philosophy():
+async def trigger_philosophy(_: dict = Depends(get_current_user)):
     from app.agents.x_publisher import PHILOSOPHY_POSTS
     pub = _publisher()
     if err := _check(pub): return err
@@ -163,7 +155,7 @@ async def trigger_philosophy():
 
 
 @router.post("/trigger/engagement")
-async def trigger_engagement():
+async def trigger_engagement(_: dict = Depends(get_current_user)):
     from app.agents.x_publisher import ENGAGEMENT_QUESTIONS
     pub = _publisher()
     if err := _check(pub): return err
@@ -173,7 +165,7 @@ async def trigger_engagement():
 
 
 @router.post("/trigger/hourly")
-async def trigger_hourly():
+async def trigger_hourly(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["hourly"] = 0
@@ -183,7 +175,7 @@ async def trigger_hourly():
 # ── Test post (debug) ─────────────────────────────────────────────────────────
 
 @router.post("/test-post")
-async def test_post():
+async def test_post(_: dict = Depends(get_current_user)):
     """Debug endpoint — tries to post a test tweet and returns the exact error."""
     pub = _publisher()
     if err := _check(pub): return err
@@ -204,7 +196,7 @@ class ManualPostRequest(BaseModel):
 
 
 @router.post("/post")
-async def manual_post(req: ManualPostRequest):
+async def manual_post(req: ManualPostRequest, _: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
     if not req.text or len(req.text.strip()) < 3:
@@ -218,7 +210,7 @@ async def manual_post(req: ManualPostRequest):
 # ── Reset cooldowns ───────────────────────────────────────────────────────────
 
 @router.post("/reset-cooldowns")
-async def reset_cooldowns():
+async def reset_cooldowns(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if not pub:
         return {"ok": False}
@@ -230,7 +222,7 @@ async def reset_cooldowns():
 # ── Fire all now ──────────────────────────────────────────────────────────────
 
 @router.post("/fire-all")
-async def fire_all():
+async def fire_all(_: dict = Depends(get_current_user)):
     """Reset all cooldowns and immediately post every content type directly."""
     pub = _publisher()
     if err := _check(pub): return err

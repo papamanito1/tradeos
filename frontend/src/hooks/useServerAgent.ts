@@ -238,12 +238,8 @@ export function useServerAgent() {
     return await apiFetch("/api/agent/live/balance");
   }, []);
 
-  // Auto-start the agent when the hook mounts if it's not running
-  useEffect(() => {
-    if (status && !status.running) {
-      apiFetch("/api/agent/start", { method: "POST" }).then(() => refresh()).catch(() => {});
-    }
-  }, [status?.running, refresh]);
+  // No auto-start — let the user explicitly start the agent from the dashboard.
+  // Auto-starting on every mount caused every browser tab to hammer POST /start.
 
   return {
     status, error, loading,

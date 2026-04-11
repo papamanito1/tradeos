@@ -320,31 +320,31 @@ export default function XAgentPage() {
     {
       icon: "◈", label: "Crypto News",
       description: "CoinDesk / CoinTelegraph headline with sharp commentary",
-      nextPost: nextIn(status?.last_news || 0, 7200),
+      nextPost: nextIn(status?.last_news || 0, 3000),
       endpoint: "/api/x-agent/trigger/news",
     },
     {
       icon: "◐", label: "Fear & Greed",
       description: "Alternative.me index with market psychology take",
-      nextPost: nextIn(status?.last_fear_greed || 0, 14400),
+      nextPost: nextIn(status?.last_fear_greed || 0, 7200),
       endpoint: "/api/x-agent/trigger/fear-greed",
     },
     {
       icon: "◆", label: "Hot Take",
       description: "Spicy market opinion engineered for engagement",
-      nextPost: nextIn(status?.last_hot_take || 0, 28800),
+      nextPost: nextIn(status?.last_hot_take || 0, 3600),
       endpoint: "/api/x-agent/trigger/hot-take",
     },
     {
       icon: "◇", label: "Philosophy",
       description: "Trading wisdom from legends, twisted by algorithm",
-      nextPost: nextIn(status?.last_philosophy || 0, 43200),
+      nextPost: nextIn(status?.last_philosophy || 0, 7200),
       endpoint: "/api/x-agent/trigger/philosophy",
     },
     {
       icon: "○", label: "Engagement",
       description: "Audience question designed to drive replies",
-      nextPost: nextIn(status?.last_engagement || 0, 43200),
+      nextPost: nextIn(status?.last_engagement || 0, 7200),
       endpoint: "/api/x-agent/trigger/engagement",
     },
     {

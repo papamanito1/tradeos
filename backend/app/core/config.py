@@ -48,3 +48,17 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Warn loudly if running with insecure defaults
+import logging as _logging
+_log = _logging.getLogger(__name__)
+if settings.secret_key == "INSECURE_CHANGE_ME":
+    _log.critical(
+        "SECRET_KEY is the insecure default — set the SECRET_KEY environment variable "
+        "before deploying to production. JWTs are currently forgeable."
+    )
+if settings.environment == "production" and settings.admin_password in ("Manan", "admin", "password", ""):
+    _log.critical(
+        "ADMIN_PASSWORD is a known weak/default value in production. "
+        "Set a strong ADMIN_PASSWORD environment variable immediately."
+    )

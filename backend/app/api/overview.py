@@ -30,9 +30,13 @@ async def get_overview(
     # Total unrealized PnL
     unrealized_pnl = sum(p.unrealized_pnl for p in open_positions)
 
-    # Daily PnL from Redis
-    daily_pnl_raw = await redis_get("risk:daily_pnl")
-    daily_pnl = float(daily_pnl_raw) if daily_pnl_raw is not None else 0.0
+    # Daily PnL from the live agent (source of truth) — Redis key is stale/unused
+    try:
+        from app.agents.persistent_agent import get_agent as _get_agent
+        _agent = _get_agent()
+        daily_pnl = _agent.brain.daily_pnl if _agent else 0.0
+    except Exception:
+        daily_pnl = 0.0
 
     # Win rate
     trades_result = await db.execute(select(Trade))
@@ -53,13 +57,20 @@ async def get_overview(
 
     kill_switch = await redis_get("risk:kill_switch_active")
 
-    # Get real trading mode from the persistent agent
+    # Get real trading mode and exchange connection from the persistent agent
+    trading_mode = "paper"
+    exchange_connected = False
     try:
         from app.agents.persistent_agent import get_agent
         agent = get_agent()
-        trading_mode = agent.config.get("mode", "paper") if agent else "paper"
+        if agent:
+            trading_mode = agent.config.get("mode", "paper")
+            if trading_mode == "live" and agent._live:
+                exchange_connected = not agent._live.halted and agent._live._cached_balance.get("total", 0) > 0
+            else:
+                exchange_connected = False
     except Exception:
-        trading_mode = "paper"
+        pass
 
     return {
         "equity": balance.get("equity", balance.get("balance_usd", 10000)),
@@ -73,7 +84,7 @@ async def get_overview(
         "open_positions": len(open_positions),
         "kill_switch_active": bool(kill_switch),
         "trading_mode": trading_mode,
-        "exchange_connected": True,
+        "exchange_connected": exchange_connected,
         "positions": [
             {
                 "id": p.id, "symbol": p.symbol, "side": p.side, "size": p.size,

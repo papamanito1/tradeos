@@ -391,7 +391,8 @@ class LiveExecutor:
 
             fill_price = float(order.get("average") or order.get("price") or exit_price)
             diff       = (fill_price - entry) if direction == "long" else (entry - fill_price)
-            pnl        = round(diff * btc_qty * pos["leverage"], 2)
+            # USDT-margined perps: PnL = price_diff * BTC_qty (leverage already priced in via qty)
+            pnl        = round(diff * btc_qty, 2)
 
             self.record_pnl(pnl)
 
@@ -422,7 +423,7 @@ class LiveExecutor:
                 logger.info(f"[LiveExecutor] Position {strategy_key} already closed on exchange "
                             f"(SL/TP fired) — cancelling counterpart order")
                 diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
-                pnl  = round(diff * btc_qty * pos["leverage"], 2)
+                pnl  = round(diff * btc_qty, 2)
                 self.record_pnl(pnl)
                 del self.live_positions[strategy_key]
                 return {
@@ -464,7 +465,7 @@ class LiveExecutor:
             entry = pos["entry"]
             d     = pos["direction"]
             diff  = (live_price - entry) if d == "long" else (entry - live_price)
-            pnl   = round(diff * pos["btc_size"] * pos["leverage"], 2)
+            pnl   = round(diff * pos["btc_size"], 2)  # USDT-margined: PnL = diff * qty
             pct   = round(diff / entry * 100, 4) if entry > 0 else 0
             self.live_positions[key] = {
                 **pos,

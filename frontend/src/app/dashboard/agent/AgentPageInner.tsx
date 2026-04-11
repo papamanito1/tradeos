@@ -1164,7 +1164,7 @@ function AgentContent() {
           <FileText size={13} className="text-violet-400 flex-shrink-0" />
           <div className="text-[11px] text-violet-300">
             <strong>Paper training active</strong> — all strategies are shadow-training · Master Brain learning from every trade ·
-            strategies must prove &gt;45% win rate on 10+ trades before live BingX execution
+            strategies must prove &gt;40% win rate on 5+ trades before live BingX execution
           </div>
         </div>
       ) : (

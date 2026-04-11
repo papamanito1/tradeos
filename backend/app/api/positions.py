@@ -68,11 +68,13 @@ async def close_position(
         paper_pos = state["positions"][pos.symbol]
         reduce_amount = paper_pos["size"] * (req.reduce_pct / 100)
         current_price = paper_pos.get("current_price", pos.entry_price)
-        side = paper_pos.get("side", "long")
-        realized = (current_price - paper_pos["entry_price"]) * reduce_amount
+        entry_price   = paper_pos.get("entry_price", pos.entry_price)
+        side          = paper_pos.get("side", "long")
+        realized      = (current_price - entry_price) * reduce_amount
         if side == "short":
             realized = -realized
-        state["balance_usd"] = state.get("balance_usd", 10000) + current_price * reduce_amount + realized
+        # Return the original margin (entry_price * size) plus PnL — not current_price * size + PnL
+        state["balance_usd"] = state.get("balance_usd", 10000) + entry_price * reduce_amount + realized
 
         if req.reduce_pct >= 100:
             del state["positions"][pos.symbol]
