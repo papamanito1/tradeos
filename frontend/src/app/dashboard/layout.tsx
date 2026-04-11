@@ -19,6 +19,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/dashboard/backtest":   "Backtesting",
   "/dashboard/settings":   "Settings",
   "/dashboard/agent":      "Live Agent",
+  "/dashboard/x-agent":   "X Agent",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

@@ -11,9 +11,9 @@ router = APIRouter(prefix="/api/x-agent", tags=["x-agent"])
 
 def _publisher():
     try:
-        from app.agents.persistent_agent import _agent_instance
-        if _agent_instance and hasattr(_agent_instance, "x_publisher"):
-            return _agent_instance.x_publisher
+        from app.agents.persistent_agent import _agent
+        if _agent and hasattr(_agent, "x_publisher"):
+            return _agent.x_publisher
     except Exception:
         pass
     return None
