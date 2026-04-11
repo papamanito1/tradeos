@@ -1216,6 +1216,22 @@ class PersistentAgent:
                           f"conf {conf*100:.0f}% (min {adj_min_conf*100:.0f}%){ti_str}{cd_str} · {block or 'EXECUTING'}")
 
                 if cond_ok and conf_ok and not open_pos and not in_cooldown and s_cfg.get("auto_execute", True):
+                    # Directional lock: if live mode, check that no live position
+                    # is open in the opposite direction before even attempting
+                    if self._is_live_mode():
+                        sig_dir = sig.get("direction", "")
+                        live_conflict = False
+                        for pk, pv in self.positions.items():
+                            if not pv or pk.startswith("shadow_") or pk.startswith("paper_"):
+                                continue
+                            if pv.get("mode") in ("shadow", "paper_trader"):
+                                continue
+                            if pv.get("direction") and pv["direction"] != sig_dir:
+                                live_conflict = True
+                                break
+                        if live_conflict:
+                            self._log(f"⛔ [{name}] BLOCKED — opposite direction position already open (directional lock)")
+                            continue
                     self._brain_gate_execute(key, name, sig, s_cfg, live_price)
                     any_signal = True
             else:
@@ -1534,6 +1550,21 @@ class PersistentAgent:
             else:
                 live_leverage = min(leverage, 60)  # hard cap 60x
 
+                # Set a placeholder immediately to prevent race conditions
+                # (next scan seeing positions[key] as empty and opening duplicates)
+                self.positions[key] = {
+                    "id": f"{key}-pending-{int(time.time()*1000)}",
+                    "strategy_key": key, "strategy_name": name,
+                    "direction": d, "entry": entry, "mode": "live",
+                    "is_live": True, "_pending": True,
+                    "sl": round(sl, 2), "tp": round(tp, 2),
+                    "current_price": entry, "unrealized_pnl": 0,
+                    "unrealized_pct": 0, "btc_size": btc_size,
+                    "size_usdc": cfg["size_usdc"], "leverage": live_leverage,
+                    "confidence": sig.get("confidence", 0),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+
                 async def _do_live_open():
                     pos = await executor.open_position(
                         strategy_key=key,
@@ -1555,7 +1586,8 @@ class PersistentAgent:
                     else:
                         err_msg = getattr(executor, "last_error", None) or "unknown error"
                         self._log(f"✗ [LIVE] [{name}] BingX FAILED — {err_msg}")
-                        # Refund the daily trade counter — the trade never executed
+                        # Remove placeholder — trade never executed
+                        self.positions.pop(key, None)
                         if self.brain.daily_trades > 0:
                             self.brain.daily_trades -= 1
 

@@ -210,22 +210,44 @@ class MasterBrain:
                 score *= 0.7
                 reasons.append("regime unstable (3+ changes in 5 readings)")
 
-        # ── Factor 4: Confluence — how many strategies agree? ────────────
+        # ── Factor 4: Directional lock + confluence ──────────────────────
+        # Count live/paper (non-shadow, non-paper_trader) positions by direction
         same_dir_count = 0
         opposite_dir_count = 0
+        live_dir_count = 0
+        live_opposite_count = 0
         for k, pos in open_positions.items():
-            if pos:
-                if pos.get("direction") == direction:
-                    same_dir_count += 1
-                else:
-                    opposite_dir_count += 1
+            if not pos:
+                continue
+            if k.startswith("shadow_") or k.startswith("paper_"):
+                continue
+            if isinstance(pos, dict) and (pos.get("is_shadow") or pos.get("mode") == "paper_trader"):
+                continue
+            if pos.get("direction") == direction:
+                same_dir_count += 1
+                if pos.get("mode") == "live" or pos.get("is_live"):
+                    live_dir_count += 1
+            else:
+                opposite_dir_count += 1
+                if pos.get("mode") == "live" or pos.get("is_live"):
+                    live_opposite_count += 1
+
+        # HARD GATE: never open opposite direction while live positions exist
+        if is_live and live_opposite_count > 0:
+            return self._reject(strategy_key, strategy_name, signal,
+                                f"Direction conflict — {live_opposite_count} live position(s) in opposite direction")
+
+        # HARD GATE for all modes: don't fight yourself
+        if opposite_dir_count >= 1 and is_live:
+            return self._reject(strategy_key, strategy_name, signal,
+                                f"Directional lock — {opposite_dir_count} position(s) already open in opposite direction")
 
         if same_dir_count >= 2:
             score *= 1.15
             reasons.append(f"{same_dir_count} positions confirm {direction}")
         if opposite_dir_count >= 2:
-            score *= 0.7
-            reasons.append(f"{opposite_dir_count} positions oppose — conflict")
+            score *= 0.5
+            reasons.append(f"{opposite_dir_count} positions oppose — strong conflict")
 
         # ── Factor 5: Risk gates ─────────────────────────────────────────
         # Only count real (non-shadow) positions toward the cap
@@ -256,6 +278,47 @@ class MasterBrain:
             reasons.append("low signal confidence")
         elif confidence > 0.75:
             reasons.append("strong signal confidence")
+
+        # ── Factor 6b: Minimum risk-reward ratio ──────────────────────────
+        sig_entry = signal.get("entry", live_price) or live_price
+        sig_sl = signal.get("sl", 0) or 0
+        sig_tp = signal.get("tp", 0) or 0
+        if sig_sl and sig_tp and sig_entry > 0:
+            sl_dist = abs(sig_entry - sig_sl)
+            tp_dist = abs(sig_tp - sig_entry)
+            rr_ratio = tp_dist / sl_dist if sl_dist > 0 else 0
+            if is_live and rr_ratio < 1.5:
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Poor R:R ratio ({rr_ratio:.1f}:1, need 1.5:1+)")
+            elif rr_ratio < 1.0:
+                score *= 0.6
+                reasons.append(f"weak R:R ({rr_ratio:.1f}:1)")
+            elif rr_ratio >= 2.0:
+                score *= 1.1
+                reasons.append(f"excellent R:R ({rr_ratio:.1f}:1)")
+
+        # ── Factor 6c: Regime-direction alignment ─────────────────────────
+        # Don't short in uptrends, don't long in downtrends (for live)
+        if is_live:
+            if self.current_regime == "trending_up" and direction == "short":
+                if self.regime_confidence > 0.5:
+                    return self._reject(strategy_key, strategy_name, signal,
+                                        f"Shorting against uptrend (regime conf {self.regime_confidence:.0%})")
+            elif self.current_regime == "trending_down" and direction == "long":
+                if self.regime_confidence > 0.5:
+                    return self._reject(strategy_key, strategy_name, signal,
+                                        f"Longing against downtrend (regime conf {self.regime_confidence:.0%})")
+
+        # Regime alignment bonus/penalty for all modes
+        if self.current_regime == "trending_up" and direction == "long":
+            score *= 1.15
+            reasons.append("trading with uptrend")
+        elif self.current_regime == "trending_down" and direction == "short":
+            score *= 1.15
+            reasons.append("trading with downtrend")
+        elif self.current_regime in ("trending_up", "trending_down"):
+            score *= 0.75
+            reasons.append("trading against trend")
 
         # ── Factor 7: Correlation penalty ────────────────────────────────
         size_mult = 1.0
@@ -418,8 +481,8 @@ class MasterBrain:
             direction, signals, win_w = "short", short_signals, short_w
 
         consensus = win_w / total_w
-        # Require consensus AND at least 1 contributing strategy
-        if consensus < 0.40 or not signals:
+        # Require consensus AND at least 2 contributing strategies (confluence)
+        if consensus < 0.50 or len(signals) < 2:
             return None
 
         # Weighted SL/TP from contributing strategies
@@ -438,8 +501,8 @@ class MasterBrain:
             fused_sl = sl_sum / w_sum
             fused_tp = tp_sum / w_sum
         else:
-            sl_dist  = live_price * 0.004
-            tp_dist  = live_price * 0.009
+            sl_dist  = live_price * 0.003
+            tp_dist  = live_price * 0.006
             fused_sl = (live_price - sl_dist) if direction == "long" else (live_price + sl_dist)
             fused_tp = (live_price + tp_dist) if direction == "long" else (live_price - tp_dist)
 
