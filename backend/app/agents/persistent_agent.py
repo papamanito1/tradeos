@@ -365,7 +365,7 @@ def _run_hft(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
     long_met  = sum(1 for c in long_conds if c)
     short_met = sum(1 for c in short_conds if c)
     bias = "long" if long_met >= 3 else "short" if short_met >= 3 else "neutral"
-    met_count = long_met if long_bias else short_met
+    met_count = max(long_met, short_met)   # always show the strongest side in logs
 
     signal = None
     if long_met >= 3 or short_met >= 3:
@@ -373,7 +373,7 @@ def _run_hft(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
         if long_met == short_met:
             d = "long" if obi > 0 else "short" if obi < 0 else None
             if d is None:
-                return None  # genuine indecision — no trade
+                return null  # genuine indecision — no trade, return standard dict shape
         else:
             d = "long" if long_met > short_met else "short"
         e    = cur1m["close"]
@@ -553,8 +553,9 @@ class PersistentAgent:
             "shadow_positions": {k: v for k, v in self.positions.items()
                                  if k.startswith("shadow_") and v},
             # X posts survive restarts — last 50 posts persisted
-            "x_recent_posts":  self.x_publisher._recent_posts[-50:],
-            "x_last_times":    self.x_publisher._last,
+            "x_recent_posts":   self.x_publisher._recent_posts[-50:],
+            "x_last_times":     self.x_publisher._last,
+            "x_intro_posted":   self.x_publisher._intro_posted,
             # Paper trader state survives restarts
             "paper_trader":    self.paper_trader.to_dict(),
         }
@@ -584,6 +585,8 @@ class PersistentAgent:
             self.x_publisher._recent_posts = data["x_recent_posts"]
         if data.get("x_last_times"):
             self.x_publisher._last.update(data["x_last_times"])
+        if data.get("x_intro_posted"):
+            self.x_publisher._intro_posted = True
         # Restore paper trader
         if data.get("paper_trader"):
             self.paper_trader.from_dict(data["paper_trader"])
@@ -699,11 +702,10 @@ class PersistentAgent:
     def _schedule_db_save(self) -> None:
         """Fire-and-forget DB save from a sync context."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self._save_state_db())
-        except Exception:
-            pass
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._save_state_db())
+        except RuntimeError:
+            pass  # not in async context — skip; next scheduled save will catch it
 
     def _empty_stats(self) -> dict:
         return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
@@ -718,8 +720,8 @@ class PersistentAgent:
             s["total_trades"] += 1
             if reason == "tp" or pnl > 0:
                 s["wins"] += 1
-            elif reason == "sl" or pnl < 0:
-                s["losses"] += 1
+            else:
+                s["losses"] += 1   # sl hits, manual closes, and breakeven all counted as losses
             s["total_pnl"]   = round(s["total_pnl"] + pnl, 2)
             s["best_trade"]  = max(s["best_trade"],  pnl)
             s["worst_trade"] = min(s["worst_trade"], pnl)
@@ -1233,6 +1235,10 @@ class PersistentAgent:
         # Sync with BingX exchange — detect positions closed by SL/TP
         if self._is_live_mode() and self._live:
             await self._sync_exchange_positions(live_price)
+            # Software SL/TP safety-net: fires if exchange orders somehow didn't close the position
+            async def _async_close(key: str, price: float, reason: str) -> None:
+                self._close_position(key, price, reason)
+            await self._live.check_sl_tp(live_price, _async_close)
 
         # ── Paper Trader price update + SL/TP always runs — never blocked ──────
         # Paper trader and shadow training run 24/7 regardless of circuit breaker,
@@ -1827,15 +1833,26 @@ class PersistentAgent:
                 sl = pos.get("sl") or 0
                 tp = pos.get("tp") or 0
 
-                # Determine which stop fired based on price proximity
+                # Try to get actual fill price from exchange order history
+                actual_fill: Optional[float] = None
+                try:
+                    recent_trades = await self._live._exchange.fetch_my_trades(
+                        "BTC/USDT:USDT", limit=5
+                    )
+                    if recent_trades:
+                        actual_fill = float(recent_trades[-1].get("price") or 0) or None
+                except Exception:
+                    pass
+
+                # Determine which stop fired based on price proximity to SL/TP
                 sl_dist = abs(live_price - sl) if sl else float("inf")
                 tp_dist = abs(live_price - tp) if tp else float("inf")
                 if tp_dist < sl_dist:
                     reason = "tp"
-                    exit_price = tp if tp else live_price
+                    exit_price = actual_fill or (tp if tp else live_price)
                 else:
                     reason = "sl"
-                    exit_price = sl if sl else live_price
+                    exit_price = actual_fill or (sl if sl else live_price)
 
                 diff = (exit_price - entry) if d == "long" else (entry - exit_price)
                 pnl = round(diff * pos.get("btc_size", 0), 2)

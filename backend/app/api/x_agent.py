@@ -185,7 +185,7 @@ async def test_post(_: dict = Depends(get_current_user)):
         "ok": ok,
         "method_tried": "v1.1 + GraphQL",
         "last_error": pub._last_error if not ok else None,
-        "curl_cffi_available": True,  # it's installed per requirements.txt
+        "curl_cffi_available": (lambda: __import__("app.agents.x_publisher", fromlist=["_CURL_AVAILABLE"])._CURL_AVAILABLE)(),
     }
 
 

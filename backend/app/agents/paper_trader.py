@@ -110,6 +110,9 @@ class PaperTrader:
         notional = margin * lev
         btc_size = notional / entry_price if entry_price > 0 else 0
 
+        # Deduct margin from available balance immediately (correct margin-model accounting)
+        self.balance = round(self.balance - margin, 2)
+
         rr = 0.0
         sl_dist = abs(entry_price - sl_price) if sl_price else 0
         tp_dist = abs(tp_price - entry_price) if tp_price else 0
@@ -151,7 +154,9 @@ class PaperTrader:
             entry = pos["entry"]
             d = pos["direction"]
             diff = (live_price - entry) if d == "long" else (entry - live_price)
-            pnl = round(diff * pos["btc_size"] * pos["leverage"], 2)
+            # btc_size = notional / entry = margin * leverage / entry
+            # PnL = diff * btc_size  (leverage already baked into btc_size — no second multiply)
+            pnl = round(diff * pos["btc_size"], 2)
             pct = round(diff / entry * 100, 4) if entry > 0 else 0
             self.positions[key] = {
                 **pos,
@@ -202,13 +207,16 @@ class PaperTrader:
         if not pos:
             return None
 
-        entry = pos["entry"]
-        d     = pos["direction"]
-        diff  = (exit_price - entry) if d == "long" else (entry - exit_price)
-        pnl   = round(diff * pos["btc_size"] * pos["leverage"], 2)
-        pct   = round(diff / entry * 100, 4) if entry > 0 else 0
+        entry  = pos["entry"]
+        d      = pos["direction"]
+        diff   = (exit_price - entry) if d == "long" else (entry - exit_price)
+        # btc_size = margin * leverage / entry — leverage already baked in; no second multiply
+        pnl    = round(diff * pos["btc_size"], 2)
+        pct    = round(diff / entry * 100, 4) if entry > 0 else 0
+        margin = pos.get("margin_usdc", 0)
 
-        self.balance = round(self.balance + pnl, 2)
+        # Return margin + realised PnL to balance
+        self.balance = round(self.balance + margin + pnl, 2)
         self._check_day()
         self._daily_pnl = round(self._daily_pnl + pnl, 2)
 
@@ -245,7 +253,11 @@ class PaperTrader:
         logger.info(f"[PaperTrader] CLOSED {pos['strategy_name']} {reason.upper()} @ ${exit_price:.0f} "
                     f"· P&L {'+' if pnl>=0 else ''}${pnl:.2f} · bal ${self.balance:.2f}")
 
-        asyncio.get_event_loop().create_task(self._save_to_db()) if _SQLITE else None
+        if _SQLITE:
+            try:
+                asyncio.get_running_loop().create_task(self._save_to_db())
+            except RuntimeError:
+                pass  # not in async context — DB write skipped, in-memory still updated
         return trade
 
     # ── Status for API ───────────────────────────────────────────────────────
@@ -316,7 +328,7 @@ class PaperTrader:
             if pnl > 0:
                 s["wins"] += 1
             else:
-                s["losses"] += 1
+                s["losses"] += 1   # breakeven (pnl == 0) counted as loss — consistent with brain
             s["total_pnl"]   = round(s["total_pnl"] + pnl, 2)
             s["best_trade"]  = max(s["best_trade"], pnl)
             s["worst_trade"] = min(s["worst_trade"], pnl)

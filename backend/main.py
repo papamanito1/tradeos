@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -28,9 +28,17 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+import os as _os
+_FRONTEND_URL = _os.environ.get("FRONTEND_URL", "").strip()
+_ALLOWED_ORIGINS = (
+    [_FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000"]
+    if _FRONTEND_URL
+    else ["*"]   # dev fallback only — set FRONTEND_URL in production
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -182,19 +190,29 @@ async def health():
     }
 
 
-def _check_admin_secret(secret: str) -> None:
-    """Validate the ADMIN_RESET_SECRET env var for emergency routes."""
+import time as _time
+_admin_route_attempts: dict[str, float] = {}  # ip → last-call timestamp
+
+def _check_admin_secret(secret: str, request_ip: str = "global") -> None:
+    """Validate ADMIN_RESET_SECRET and enforce 60 s per-IP rate-limit on emergency routes."""
     import os
     from fastapi import HTTPException
+    now = _time.time()
+    last = _admin_route_attempts.get(request_ip, 0)
+    if now - last < 60:
+        raise HTTPException(status_code=429, detail="Rate-limit: wait 60 s between admin calls")
+    _admin_route_attempts[request_ip] = now
     expected = os.environ.get("ADMIN_RESET_SECRET", "")
     if not expected or secret != expected:
+        logger.warning(f"[Security] Failed admin route attempt from {request_ip}")
         raise HTTPException(status_code=403, detail="Invalid or missing admin secret")
+    logger.warning(f"[Security] Admin emergency route accessed from {request_ip}")
 
 
 @app.post("/force-reseed")
-async def force_reseed(secret: str = ""):
+async def force_reseed(request: Request, secret: str = ""):
     """Emergency: re-create admin user from env vars. Requires ADMIN_RESET_SECRET query param."""
-    _check_admin_secret(secret)
+    _check_admin_secret(secret, request.client.host if request.client else "unknown")
     try:
         from app.seeds.seed_data import seed
         await seed()
@@ -212,9 +230,9 @@ class AdminCredentials(BaseModel):
     secret:   str = ""
 
 @app.post("/reset-admin-password")
-async def reset_admin_password(creds: AdminCredentials):
+async def reset_admin_password(request: Request, creds: AdminCredentials):
     """Emergency: update admin password. Requires ADMIN_RESET_SECRET in body."""
-    _check_admin_secret(creds.secret)
+    _check_admin_secret(creds.secret, request.client.host if request.client else "unknown")
     if not creds.username or not creds.password or len(creds.password) < 8:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Username required and password must be ≥8 chars")

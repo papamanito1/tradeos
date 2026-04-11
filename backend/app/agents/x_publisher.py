@@ -339,8 +339,10 @@ BTC_MOVE_ACTION_COMMENTS = [
 ]
 
 
-_TWEET_DB_PATH   = "/tmp/tweet_history.db"
-_HEADLINE_DB_PATH = "/tmp/seen_headlines.db"
+import tempfile as _tempfile
+_DATA_DIR        = os.environ.get("DATA_DIR", _tempfile.gettempdir())
+_TWEET_DB_PATH   = os.path.join(_DATA_DIR, "tweet_history.db")
+_HEADLINE_DB_PATH = os.path.join(_DATA_DIR, "seen_headlines.db")
 
 
 class MoodState:
@@ -460,6 +462,8 @@ class XPublisher:
         self.grok: Optional[object] = _GrokIntelligence() if _GROK_AVAILABLE else None
         # Last time background Grok trend refresh ran
         self._last_grok_refresh: float = 0.0
+        # Shared httpx client — reused across all API calls (connection pooling, lower overhead)
+        self._http = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
         self._init_client()
 
     def _init_client(self) -> None:
@@ -626,8 +630,7 @@ class XPublisher:
             "temperature": 0.92,
         }
         try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                r = await client.post(url, json=payload,
+            r = await self._http.post(url, json=payload,
                                       headers={"Authorization": f"Bearer {api_key}",
                                                "Content-Type": "application/json"})
             if r.status_code == 200:
@@ -640,14 +643,15 @@ class XPublisher:
         return None
 
     async def _call_gemini(self, api_key: str, user_prompt: str, max_chars: int) -> Optional[str]:
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"gemini-1.5-flash:generateContent?key={api_key}")
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         full_prompt = f"{self._SYSTEM_PROMPT}\n\n{user_prompt}"
         payload = {"contents": [{"parts": [{"text": full_prompt}]}],
                    "generationConfig": {"maxOutputTokens": 120, "temperature": 0.92}}
         try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                r = await client.post(url, json=payload)
+            r = await self._http.post(
+                url, json=payload,
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            )
             if r.status_code == 200:
                 text = (r.json().get("candidates", [{}])[0]
                         .get("content", {}).get("parts", [{}])[0]
@@ -726,8 +730,7 @@ class XPublisher:
         headlines = []
         for feed_url in feeds[:2]:
             try:
-                async with httpx.AsyncClient(timeout=6.0) as client:
-                    resp = await client.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = await self._http.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code != 200:
                     continue
                 root = ET.fromstring(resp.text)
@@ -831,8 +834,7 @@ class XPublisher:
                     resp = await session.post(url, data=body, headers=headers, timeout=20)
                 status_code, resp_text = resp.status_code, resp.text
             else:
-                async with httpx.AsyncClient(timeout=20.0) as client:
-                    r = await client.post(url, content=body, headers=headers)
+                r = await self._http.post(url, content=body, headers=headers)
                 status_code, resp_text = r.status_code, r.text
 
             if status_code == 200:
@@ -899,8 +901,7 @@ class XPublisher:
                     resp = await session.post(_X_CREATE_TWEET_URL, json=payload, headers=headers, timeout=20)
                 status_code, resp_text = resp.status_code, resp.text
             else:
-                async with httpx.AsyncClient(timeout=20.0) as client:
-                    r = await client.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
+                r = await self._http.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
                 status_code, resp_text = r.status_code, r.text
 
             if status_code == 200:
@@ -1035,8 +1036,7 @@ class XPublisher:
                     resp = await session.post(_X_CREATE_TWEET_URL, json=payload, headers=headers, timeout=20)
                 status_code, resp_text = resp.status_code, resp.text
             else:
-                async with httpx.AsyncClient(timeout=20.0) as client:
-                    r = await client.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
+                r = await self._http.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
                 status_code, resp_text = r.status_code, r.text
 
             if status_code == 200:
@@ -1385,8 +1385,7 @@ class XPublisher:
         random.shuffle(feeds)
         for feed_url in feeds:
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = await self._http.get(feed_url, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code != 200:
                     continue
                 root = ET.fromstring(resp.text)
@@ -1426,8 +1425,7 @@ class XPublisher:
 
     async def _fetch_fear_greed(self) -> Optional[dict]:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get("https://api.alternative.me/fng/?limit=1")
+            resp = await self._http.get("https://api.alternative.me/fng/?limit=1")
             if resp.status_code == 200:
                 return resp.json().get("data", [{}])[0]
         except Exception as e:

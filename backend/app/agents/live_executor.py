@@ -4,11 +4,12 @@ LiveExecutor — BingX Perpetual Futures Live Trading
 Wraps CCXT BingX async to execute real trades.
 Called by PersistentAgent when mode == "live".
 
-Safety controls built in:
+Safety controls:
   - Daily loss limit (hard circuit-breaker)
-  - Max position size cap
-  - SL/TP placed as exchange orders (survive server restart)
-  - Position sync from exchange (source of truth)
+  - Position size: respects size_usdc from strategy config,
+    capped by max_position_usdc and free account balance
+  - SL/TP attached directly to the market order (survive restarts)
+  - Position sync from exchange — BingX is the source of truth
 """
 
 import asyncio
@@ -30,9 +31,9 @@ class LiveExecutor:
     One instance shared by PersistentAgent.
     """
 
-    FIXED_MARGIN_USD    = 5.0    # fixed $5 margin per trade
+    MIN_MARGIN_USD      = 5.0    # BingX minimum margin floor
     MAX_LEVERAGE        = 60     # hard cap on leverage
-    RISK_PER_TRADE_PCT  = 0.02   # 2% risk per trade (display / logging only)
+    DEFAULT_MARGIN_USD  = 10.0   # used only when caller passes size_usdc=0
 
     def __init__(
         self,
@@ -68,7 +69,7 @@ class LiveExecutor:
         if testnet:
             logger.warning("[LiveExecutor] BingX testnet not available via CCXT — using live API")
 
-        logger.info(f"[LiveExecutor] Initialized · risk_per_trade={self.RISK_PER_TRADE_PCT:.0%} "
+        logger.info(f"[LiveExecutor] Initialized · min_margin=${self.MIN_MARGIN_USD} "
                     f"· max_leverage={self.MAX_LEVERAGE}× · daily_loss_limit=${daily_loss_limit}")
 
     # ── Daily P&L tracker ────────────────────────────────────────────────────
@@ -133,11 +134,14 @@ class LiveExecutor:
             logger.error(f"[LiveExecutor] fetch_balance failed: {e}")
             return self._cached_balance if self._cached_balance["total"] > 0 else {"total": 0, "free": 0, "used": 0}
 
-    MIN_MARGIN_USD = 5.0   # BingX minimum order floor
-
-    def compute_trade_size(self, total_capital: float) -> float:
-        """Fixed $5 margin per trade regardless of account size."""
-        return self.FIXED_MARGIN_USD
+    def _resolve_margin(self, size_usdc: float, free_capital: float) -> float:
+        """
+        Determine the actual margin to use for a trade.
+        Priority: caller's size_usdc → cap by free capital → floor at MIN_MARGIN_USD.
+        """
+        requested = size_usdc if size_usdc > 0 else self.DEFAULT_MARGIN_USD
+        capped    = min(requested, self.max_position_usdc, free_capital * 0.95)
+        return max(capped, self.MIN_MARGIN_USD)
 
     async def fetch_exchange_positions(self) -> list[dict]:
         """Return all open BTC perp positions from BingX."""
@@ -155,7 +159,7 @@ class LiveExecutor:
         strategy_key: str,
         strategy_name: str,
         direction: str,          # "long" or "short"
-        size_usdc: float,        # requested size (may be overridden by 2% rule)
+        size_usdc: float,        # requested margin from Brain/strategy config (respected, not ignored)
         leverage: int,
         sl_price: float,
         tp_price: float,
@@ -163,7 +167,8 @@ class LiveExecutor:
     ) -> Optional[dict]:
         """
         Opens a leveraged BTC/USDT:USDT perp position on BingX.
-        Position size = 2% of total BingX capital (margin), leverage capped at 30x.
+        Margin = size_usdc from caller, capped by max_position_usdc and free balance.
+        Leverage capped at MAX_LEVERAGE (60×).
         Returns a position dict compatible with the paper position format.
         """
         if self.halted:
@@ -171,22 +176,19 @@ class LiveExecutor:
             self.last_error = "Circuit breaker active"
             return None
 
-        # Fetch live balance to compute dynamic position size
+        # Fetch live balance — always fresh before opening a position
         balance = await self.fetch_balance(force=True)
         total_capital = balance["total"]
-        free_capital = balance["free"]
+        free_capital  = balance["free"]
 
         if total_capital <= 0:
             self.last_error = f"No capital on BingX (total=${total_capital:.2f})"
             logger.warning(f"[LiveExecutor] {self.last_error}")
             return None
 
-        # Fixed $5 margin per trade — capped by available free margin
-        risk_size = self.compute_trade_size(total_capital)
-        max_available = max(1.0, free_capital * 0.95)
-        capped_usdc = min(risk_size, max_available)
+        # Resolve margin: honour caller's size_usdc, cap by max_position_usdc + free balance
+        capped_usdc = self._resolve_margin(size_usdc, free_capital)
 
-        # Ensure we can at least meet BingX minimum (0.0001 BTC)
         if capped_usdc < self.MIN_MARGIN_USD and free_capital < self.MIN_MARGIN_USD:
             self.last_error = f"Insufficient capital (free=${free_capital:.2f}, need=${self.MIN_MARGIN_USD:.0f})"
             logger.warning(f"[LiveExecutor] {self.last_error}")
@@ -508,8 +510,8 @@ class LiveExecutor:
             "halted":            self._halted,
             "daily_pnl":         round(self._daily_pnl, 2),
             "daily_loss_limit":  self.daily_loss_limit,
-            "max_position_usdc": round(self.compute_trade_size(total_cap), 2) if total_cap > 0 else self.max_position_usdc,
-            "risk_per_trade_pct": self.RISK_PER_TRADE_PCT,
+            "max_position_usdc": self.max_position_usdc,
+            "min_margin_usd":    self.MIN_MARGIN_USD,
             "max_leverage":      self.MAX_LEVERAGE,
             "account_balance":   round(total_cap, 2),
             "free_balance":      round(self._cached_balance.get("free", 0), 2),

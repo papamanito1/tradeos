@@ -89,6 +89,8 @@ class MasterBrain:
         self.daily_pnl: float = 0.0
         self.daily_wins: int = 0
         self.daily_losses_count: int = 0
+        self.daily_wins_live: int = 0        # live-trade wins only (for risk reporting)
+        self.daily_losses_live: int = 0      # live-trade losses only
         self._day_str: str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # ── Decision log ─────────────────────────────────────────────────
@@ -147,6 +149,8 @@ class MasterBrain:
             self.daily_pnl = 0.0
             self.daily_wins = 0
             self.daily_losses_count = 0
+            self.daily_wins_live = 0
+            self.daily_losses_live = 0
             self.consecutive_losses = 0
             logger.info("[MasterBrain] New day — daily counters reset")
 
@@ -808,10 +812,12 @@ class MasterBrain:
             self.daily_wins += 1
             if was_live:
                 self.consecutive_losses = 0
+                self.daily_wins_live += 1
         else:
             self.daily_losses_count += 1
             if was_live:
                 self.consecutive_losses += 1
+                self.daily_losses_live += 1
 
         # ── Strategy stats ────────────────────────────────────────────────
         s = self.strategy_stats.setdefault(strategy_key, {
@@ -898,6 +904,9 @@ class MasterBrain:
         for k, pos in positions.items():
             if not pos:
                 continue
+            # Exclude shadow/paper positions from live portfolio exposure reporting
+            if pos.get("is_shadow") or k.startswith("shadow_") or k.startswith("paper_"):
+                continue
             position_count += 1
             size = pos.get("size_usdc", 0) * pos.get("leverage", 1)
             total_unrealized += pos.get("unrealized_pnl", 0)
@@ -919,9 +928,11 @@ class MasterBrain:
             "direction_bias":   "LONG" if net_exposure > 50 else ("SHORT" if net_exposure < -50 else "NEUTRAL"),
             "daily_pnl":        round(self.daily_pnl, 2),
             "daily_trades":     self.daily_trades,
-            "daily_wins":       self.daily_wins,
-            "daily_losses":     self.daily_losses_count,
-            "consec_losses":    self.consecutive_losses,
+            "daily_wins":        self.daily_wins,
+            "daily_losses":      self.daily_losses_count,
+            "daily_wins_live":   self.daily_wins_live,
+            "daily_losses_live": self.daily_losses_live,
+            "consec_losses":     self.consecutive_losses,
         }
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1026,6 +1037,8 @@ class MasterBrain:
             "daily_pnl":           self.daily_pnl,
             "daily_wins":          self.daily_wins,
             "daily_losses_count":  self.daily_losses_count,
+            "daily_wins_live":     self.daily_wins_live,
+            "daily_losses_live":   self.daily_losses_live,
             "_day_str":            self._day_str,
             "decisions":           self.decisions[:20],
             "_learned_affinity":   self._learned_affinity,
@@ -1052,6 +1065,8 @@ class MasterBrain:
         self.daily_pnl          = data.get("daily_pnl", 0.0)
         self.daily_wins         = data.get("daily_wins", 0)
         self.daily_losses_count = data.get("daily_losses_count", 0)
+        self.daily_wins_live    = data.get("daily_wins_live", 0)
+        self.daily_losses_live  = data.get("daily_losses_live", 0)
         self._day_str           = data.get("_day_str", self._day_str)
         self.decisions          = data.get("decisions", [])
 
