@@ -440,13 +440,76 @@ class XPublisher:
             "posts_per_hour":   self.memory.posts_per_hour(),
             "total_posts":      self.memory.total_posts(),
             "next_post_in_sec": max(0, HOURLY_COOLDOWN - (time.time() - self._last.get("hourly", 0))),
+            "last_error":       self._last_error,
         }
 
-    # ── Core send ──────────────────────────────────────────────────────────────
+    # ── Core send (tries multiple methods) ────────────────────────────────────
+
+    _last_error: str = ""
 
     async def _send_tweet(self, text: str, post_type: str = "manual") -> bool:
         if not self._enabled:
+            self._last_error = "X_AUTH_TOKEN / X_CT0 not configured"
             return False
+
+        text = text[:280]
+
+        # Method 1: X v1.1 client endpoint (more reliable from server IPs)
+        ok = await self._post_v1(text, post_type)
+        if ok:
+            return True
+
+        # Method 2: GraphQL CreateTweet (original method)
+        ok = await self._post_graphql(text, post_type)
+        if ok:
+            return True
+
+        return False
+
+    async def _post_v1(self, text: str, post_type: str) -> bool:
+        """Post via Twitter v1.1 client API — works better from server IPs."""
+        url = "https://api.x.com/1.1/statuses/update.json"
+        headers = {
+            "authorization": f"Bearer {_X_BEARER}",
+            "x-csrf-token": self._ct0,
+            "cookie": f"auth_token={self._auth_token}; ct0={self._ct0}",
+            "content-type": "application/x-www-form-urlencoded",
+            "x-twitter-active-user": "yes",
+            "x-twitter-auth-type": "OAuth2Session",
+            "x-twitter-client-language": "en",
+            "origin": "https://x.com",
+            "referer": "https://x.com",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        }
+        import urllib.parse
+        body = urllib.parse.urlencode({"status": text})
+        try:
+            if _CURL_AVAILABLE:
+                async with CurlSession(impersonate="edge101") as session:
+                    resp = await session.post(url, data=body, headers=headers, timeout=20)
+                status_code, resp_text = resp.status_code, resp.text
+            else:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    r = await client.post(url, content=body, headers=headers)
+                status_code, resp_text = r.status_code, r.text
+
+            if status_code == 200:
+                import json as _json
+                data = _json.loads(resp_text)
+                tweet_id = str(data.get("id_str", ""))
+                self._record_success(tweet_id, text, post_type)
+                logger.info(f"[XPublisher] [{post_type}] ✓ v1.1 Posted: {text[:60]}…")
+                return True
+            self._last_error = f"v1.1 HTTP {status_code}: {resp_text[:150]}"
+            logger.warning(f"[XPublisher] v1.1 failed: {self._last_error}")
+            return False
+        except Exception as e:
+            self._last_error = f"v1.1 error: {e}"
+            logger.warning(f"[XPublisher] {self._last_error}")
+            return False
+
+    async def _post_graphql(self, text: str, post_type: str) -> bool:
+        """Post via X GraphQL CreateTweet endpoint."""
         headers = {
             "authorization": f"Bearer {_X_BEARER}",
             "x-csrf-token": self._ct0,
@@ -457,13 +520,11 @@ class XPublisher:
             "x-twitter-client-language": "en",
             "referer": "https://x.com/compose/post",
             "origin": "https://x.com",
-            "sec-ch-ua-platform": '"Windows"',
-            "sec-ch-ua": '"Microsoft Edge";v="124", "Chromium";v="124"',
-            "sec-ch-ua-mobile": "?0",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
         }
         payload = {
             "variables": {
-                "tweet_text": text[:280],
+                "tweet_text": text,
                 "dark_request": False,
                 "media": {"media_entities": [], "possibly_sensitive": False},
                 "semantic_annotation_ids": [],
@@ -494,36 +555,41 @@ class XPublisher:
             if _CURL_AVAILABLE:
                 async with CurlSession(impersonate="edge101") as session:
                     resp = await session.post(_X_CREATE_TWEET_URL, json=payload, headers=headers, timeout=20)
-                status, body = resp.status_code, resp.text
+                status_code, resp_text = resp.status_code, resp.text
             else:
                 async with httpx.AsyncClient(timeout=20.0) as client:
                     r = await client.post(_X_CREATE_TWEET_URL, json=payload, headers=headers)
-                status, body = r.status_code, r.text
+                status_code, resp_text = r.status_code, r.text
 
-            if status == 200:
+            if status_code == 200:
                 import json as _json
                 tweet_id = (
-                    _json.loads(body).get("data", {})
+                    _json.loads(resp_text).get("data", {})
                         .get("create_tweet", {})
                         .get("tweet_results", {})
                         .get("result", {})
                         .get("rest_id", "")
                 )
-                self._recent_posts.append({
-                    "id": tweet_id,
-                    "type": post_type,
-                    "text": text[:120] + ("…" if len(text) > 120 else ""),
-                    "ts": time.time(),
-                    "url": f"https://x.com/tradeous/status/{tweet_id}" if tweet_id else "",
-                })
-                self.memory.record_post(post_type, text)
-                logger.info(f"[XPublisher] [{post_type}] ✓ Posted: {text[:60]}…")
+                self._record_success(tweet_id, text, post_type)
+                logger.info(f"[XPublisher] [{post_type}] ✓ GraphQL Posted: {text[:60]}…")
                 return True
-            logger.warning(f"[XPublisher] HTTP {status}: {body[:200]}")
+            self._last_error = f"GraphQL HTTP {status_code}: {resp_text[:150]}"
+            logger.warning(f"[XPublisher] GraphQL failed: {self._last_error}")
             return False
         except Exception as e:
-            logger.warning(f"[XPublisher] Send error: {e}")
+            self._last_error = f"GraphQL error: {e}"
+            logger.warning(f"[XPublisher] {self._last_error}")
             return False
+
+    def _record_success(self, tweet_id: str, text: str, post_type: str) -> None:
+        self._recent_posts.append({
+            "id": tweet_id,
+            "type": post_type,
+            "text": text[:120] + ("…" if len(text) > 120 else ""),
+            "ts": time.time(),
+            "url": f"https://x.com/tradeous/status/{tweet_id}" if tweet_id else "",
+        })
+        self.memory.record_post(post_type, text)
 
     def _fire(self, text: str, post_type: str = "manual") -> None:
         """Fire-and-forget tweet."""

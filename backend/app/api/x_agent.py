@@ -175,6 +175,23 @@ async def trigger_algo_insight():
     return await _send_now(pub, "algo_insight", text)
 
 
+# ── Test post (debug) ─────────────────────────────────────────────────────────
+
+@router.post("/test-post")
+async def test_post():
+    """Debug endpoint — tries to post a test tweet and returns the exact error."""
+    pub = _publisher()
+    if err := _check(pub): return err
+    text = f"Test post from Tradeous · {int(time.time())}"
+    ok = await pub._send_tweet(text, "test")
+    return {
+        "ok": ok,
+        "method_tried": "v1.1 + GraphQL",
+        "last_error": pub._last_error if not ok else None,
+        "curl_cffi_available": True,  # it's installed per requirements.txt
+    }
+
+
 # ── Manual compose ────────────────────────────────────────────────────────────
 
 class ManualPostRequest(BaseModel):
