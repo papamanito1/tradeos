@@ -307,11 +307,12 @@ class LiveExecutor:
             logger.warning(f"[LiveExecutor] close_position: no live pos for {strategy_key}")
             return None
 
-        try:
-            direction = pos["direction"]
-            side      = "sell" if direction == "long" else "buy"
-            btc_qty   = pos["btc_size"]
+        direction = pos["direction"]
+        side      = "sell" if direction == "long" else "buy"
+        btc_qty   = pos["btc_size"]
+        entry     = pos["entry"]
 
+        try:
             order = await self._exchange.create_order(
                 SYMBOL,
                 "market",
@@ -325,7 +326,6 @@ class LiveExecutor:
             )
 
             fill_price = float(order.get("average") or order.get("price") or exit_price)
-            entry      = pos["entry"]
             diff       = (fill_price - entry) if direction == "long" else (entry - fill_price)
             pnl        = round(diff * btc_qty * pos["leverage"], 2)
 
@@ -347,13 +347,50 @@ class LiveExecutor:
             return trade
 
         except Exception as e:
+            err_str = str(e).lower()
+            already_closed = any(kw in err_str for kw in [
+                "insufficient", "no position", "position not exist",
+                "reduce only", "order would not reduce", "80014",
+            ])
+            if already_closed:
+                logger.info(f"[LiveExecutor] Position {strategy_key} already closed on exchange "
+                            f"(SL/TP fired) — cleaning up locally")
+                diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
+                pnl  = round(diff * btc_qty * pos["leverage"], 2)
+                self.record_pnl(pnl)
+                del self.live_positions[strategy_key]
+                return {
+                    **pos,
+                    "exit_price":  exit_price,
+                    "exit_reason": f"{reason}_exchange_closed",
+                    "pnl_usd":     pnl,
+                    "pnl_pct":     round(diff / entry * 100, 4) if entry > 0 else 0,
+                    "closed_at":   datetime.now(timezone.utc).isoformat(),
+                    "status":      "confirmed",
+                }
             logger.error(f"[LiveExecutor] close_position FAILED for {strategy_key}: {type(e).__name__}: {e}")
             return None
 
     # ── Sync open positions with exchange (source of truth) ──────────────────
 
-    async def sync_positions(self, live_price: float) -> None:
-        """Update unrealized P&L for all open live positions from live_price."""
+    async def sync_positions(self, live_price: float) -> list[str]:
+        """
+        Sync with BingX exchange:
+        1. Update unrealized P&L for all local positions
+        2. Detect positions that were closed on exchange (by SL/TP stop orders)
+           and return their keys so the agent can record the closure.
+        """
+        closed_keys: list[str] = []
+
+        if not self.live_positions:
+            return closed_keys
+
+        # Fetch actual exchange positions to detect SL/TP closures
+        exchange_positions = await self.fetch_exchange_positions()
+        exchange_has_btc = any(
+            abs(p.get("contracts", 0)) > 0 for p in exchange_positions
+        )
+
         for key, pos in list(self.live_positions.items()):
             entry = pos["entry"]
             d     = pos["direction"]
@@ -366,6 +403,16 @@ class LiveExecutor:
                 "unrealized_pnl": pnl,
                 "unrealized_pct": pct,
             }
+
+        # If we have local positions but the exchange has NONE, the SL/TP orders
+        # already fired and closed everything. Clean up.
+        if self.live_positions and not exchange_has_btc:
+            for key in list(self.live_positions.keys()):
+                logger.info(f"[LiveExecutor] Position {key} gone from exchange — "
+                            f"SL/TP closed it. Cleaning up.")
+                closed_keys.append(key)
+
+        return closed_keys
 
     # ── Check if SL/TP hit (fallback if exchange orders didn't fire) ──────────
 

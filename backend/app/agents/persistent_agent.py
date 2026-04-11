@@ -1001,6 +1001,10 @@ class PersistentAgent:
         # Update open position P&L
         self._update_positions(live_price)
 
+        # Sync with BingX exchange — detect positions closed by SL/TP
+        if self._is_live_mode() and self._live:
+            await self._sync_exchange_positions(live_price)
+
         if not cfg.get("enabled", True):
             return
 
@@ -1357,6 +1361,46 @@ class PersistentAgent:
             return self.MAX_HOLD_MINUTES["grid"]
         return self.MAX_HOLD_MINUTES.get(key, 120)
 
+    async def _sync_exchange_positions(self, live_price: float) -> None:
+        """Check BingX for positions closed by exchange SL/TP orders."""
+        try:
+            closed_keys = await self._live.sync_positions(live_price)
+            for key in closed_keys:
+                pos = self.positions.get(key)
+                if not pos or pos.get("mode") != "live":
+                    continue
+                # Position was closed on exchange by SL/TP
+                entry = pos["entry"]
+                d = pos["direction"]
+                sl = pos.get("sl") or 0
+                tp = pos.get("tp") or 0
+
+                # Determine which stop fired based on price proximity
+                sl_dist = abs(live_price - sl) if sl else float("inf")
+                tp_dist = abs(live_price - tp) if tp else float("inf")
+                if tp_dist < sl_dist:
+                    reason = "tp"
+                    exit_price = tp if tp else live_price
+                else:
+                    reason = "sl"
+                    exit_price = sl if sl else live_price
+
+                diff = (exit_price - entry) if d == "long" else (entry - exit_price)
+                pnl = round(diff * pos.get("btc_size", 0) * pos.get("leverage", 1), 2)
+
+                self._log(f"🔄 [LIVE] [{pos.get('strategy_name', key)}] Exchange SL/TP fired — "
+                          f"{reason.upper()} @ ${exit_price:.0f} · P&L {'+' if pnl >= 0 else ''}${pnl:.2f}")
+
+                # Clean up executor's local tracking
+                if key in self._live.live_positions:
+                    self._live.record_pnl(pnl)
+                    del self._live.live_positions[key]
+
+                self._record_trade_closure(key, pos, pnl, exit_price, reason, is_live=True)
+        except Exception as e:
+            if self.scan_count % 10 == 0:
+                logger.warning(f"[Agent] Exchange sync failed: {type(e).__name__}: {e}")
+
     def _update_positions(self, price: float) -> None:
         now_utc = datetime.now(timezone.utc)
         for key in list(self.positions.keys()):
@@ -1403,9 +1447,19 @@ class PersistentAgent:
             async def _do_live_close():
                 trade = await self._live.close_position(key, exit_price, reason)
                 if trade:
-                    self._record_trade_closure(key, pos, trade["pnl_usd"], exit_price, reason, is_live=True)
+                    actual_reason = trade.get("exit_reason", reason)
+                    if "_exchange_closed" in actual_reason:
+                        self._log(f"🔄 [LIVE] [{pos.get('strategy_name', key)}] Already closed on exchange "
+                                  f"(SL/TP fired) — recorded P&L {'+' if trade['pnl_usd'] >= 0 else ''}${trade['pnl_usd']:.2f}")
+                    self._record_trade_closure(key, pos, trade["pnl_usd"], trade.get("exit_price", exit_price),
+                                               reason, is_live=True)
                 else:
-                    self._log(f"⚠ [LIVE] close_position FAILED for {key} — position may still be open on exchange")
+                    self._log(f"⚠ [LIVE] close FAILED for {key} — forcing local cleanup")
+                    # Force close locally to prevent stuck positions
+                    d = pos["direction"]
+                    diff = (exit_price - pos["entry"]) if d == "long" else (pos["entry"] - exit_price)
+                    pnl = round(diff * pos.get("btc_size", 0) * pos.get("leverage", 1), 2)
+                    self._record_trade_closure(key, pos, pnl, exit_price, f"{reason}_forced", is_live=True)
             asyncio.create_task(_do_live_close())
             return
 
