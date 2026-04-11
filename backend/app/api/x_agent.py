@@ -40,13 +40,21 @@ async def get_status():
 
 # ── Manual triggers ───────────────────────────────────────────────────────────
 
-def _queue_tweet(post_type: str, text: str) -> dict:
-    """Add tweet to local poster queue. Returns immediately — local_poster.py sends it."""
+async def _send_now(pub, post_type: str, text: str) -> dict:
+    """
+    Post directly via Railway using the publisher's _send_tweet (curl_cffi impersonation).
+    Falls back to local poster queue if direct send fails.
+    """
+    ok = await pub._send_tweet(text[:280], post_type)
+    if ok:
+        pub._touch(post_type.replace("-", "_"))
+        return {"ok": True, "queued": False, "message": "Posted ✓"}
+    # Fallback: add to local poster queue
     import uuid
     qid = str(uuid.uuid4())[:8] + f"_{post_type}"
     _tweet_queue.append({"id": qid, "type": post_type, "text": text[:280], "ts": time.time()})
     return {"ok": True, "queued": True, "id": qid,
-            "message": "Queued — local_poster.py will send within 5 minutes"}
+            "message": "Queued — local_poster.py will send it"}
 
 
 def _check(pub) -> dict | None:
@@ -86,18 +94,18 @@ async def trigger_news():
     story = await pub._fetch_top_news()
     if not story:
         return {"ok": False, "error": "Could not fetch news"}
-    import random
-    hooks = ["My take:", "Translation for traders:", "Signal implication:", "Algo opinion:"]
-    comments = ["Watching for BTC reaction.", "Monitoring closely.", "Eyes on $BTC."]
+    hooks = ["My take:", "Translation for traders:", "Signal implication:", "Algo opinion:", "The real story:"]
+    comments = ["Watching for BTC reaction.", "Monitoring closely.", "Eyes on $BTC.", "Price is the final word."]
     text = (
         f"\U0001f4f0 CRYPTO NEWS\n\n"
         f"\u201c{story['title'][:120]}\u201d\n\n"
         f"{random.choice(hooks)} {random.choice(comments)}\n\n"
-        f""
     )
     if story.get("link"):
-        text += f"\n\n{story['link']}"
-    return _queue_tweet("news", text)
+        remaining = 280 - len(text)
+        if remaining > 30:
+            text += story["link"][:remaining]
+    return await _send_now(pub, "news", text)
 
 
 @router.post("/trigger/fear-greed")
@@ -108,43 +116,42 @@ async def trigger_fear_greed():
     data = await pub._fetch_fear_greed()
     if not data:
         return {"ok": False, "error": "Could not fetch Fear & Greed"}
-    import random
     from app.agents.x_publisher import FEAR_GREED_COMMENTARY
     score = int(data.get("value", 50))
     label = data.get("value_classification", "Neutral")
     templates = FEAR_GREED_COMMENTARY.get(label, FEAR_GREED_COMMENTARY["Neutral"])
-    text = random.choice(templates).format(score=score, label=label)
-    return _queue_tweet("fear_greed", text)
+    text = pub.memory.pick(f"fear_greed_{label}", templates).format(score=score, label=label)
+    return await _send_now(pub, "fear_greed", text)
 
 
 @router.post("/trigger/hot-take")
 async def trigger_hot_take():
-    import random
     from app.agents.x_publisher import HOT_TAKES
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["hot_take"] = 0
-    return _queue_tweet("hot_take", random.choice(HOT_TAKES))
+    text = pub.memory.pick("hot_take", HOT_TAKES)
+    return await _send_now(pub, "hot_take", text)
 
 
 @router.post("/trigger/philosophy")
 async def trigger_philosophy():
-    import random
     from app.agents.x_publisher import PHILOSOPHY_POSTS
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["philosophy"] = 0
-    return _queue_tweet("philosophy", random.choice(PHILOSOPHY_POSTS))
+    text = pub.memory.pick("philosophy", PHILOSOPHY_POSTS)
+    return await _send_now(pub, "philosophy", text)
 
 
 @router.post("/trigger/engagement")
 async def trigger_engagement():
-    import random
     from app.agents.x_publisher import ENGAGEMENT_QUESTIONS
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["engagement"] = 0
-    return _queue_tweet("engagement", random.choice(ENGAGEMENT_QUESTIONS))
+    text = pub.memory.pick("engagement", ENGAGEMENT_QUESTIONS)
+    return await _send_now(pub, "engagement", text)
 
 
 @router.post("/trigger/hourly")
@@ -152,7 +159,7 @@ async def trigger_hourly():
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["hourly"] = 0
-    return _queue_tweet("hourly", _gen_hourly_text(pub))
+    return await _send_now(pub, "hourly", _gen_hourly_text(pub))
 
 
 @router.post("/trigger/algo-insight")
@@ -162,7 +169,7 @@ async def trigger_algo_insight():
     if err := _check(pub): return err
     pub._last["algo_insight"] = 0
     text = pub.memory.pick("algo_insight", ALGO_INSIGHTS)
-    return _queue_tweet("algo_insight", text)
+    return await _send_now(pub, "algo_insight", text)
 
 
 # ── Manual compose ────────────────────────────────────────────────────────────
@@ -177,7 +184,10 @@ async def manual_post(req: ManualPostRequest):
     if err := _check(pub): return err
     if not req.text or len(req.text.strip()) < 3:
         return {"ok": False, "error": "Text too short"}
-    return _queue_tweet("manual", req.text.strip())
+    ok = await pub._send_tweet(req.text.strip(), "manual")
+    if ok:
+        return {"ok": True, "message": "Posted ✓"}
+    return {"ok": False, "error": "Post failed — check X credentials in Railway env vars"}
 
 
 # ── Reset cooldowns ───────────────────────────────────────────────────────────
@@ -196,45 +206,56 @@ async def reset_cooldowns():
 
 @router.post("/fire-all")
 async def fire_all():
-    """Reset all cooldowns and immediately post every content type."""
+    """Reset all cooldowns and immediately post every content type directly."""
     pub = _publisher()
     if err := _check(pub): return err
 
     results = {}
 
-    # Reset all cooldowns
+    # Reset all cooldowns first
     for k in list(pub._last.keys()):
         pub._last[k] = 0
 
-    # Sync posts (fire-and-forget via create_task)
-    pub.post_hot_take()
-    results["hot_take"] = "fired"
-
-    pub.post_philosophy()
-    results["philosophy"] = "fired"
-
-    pub.post_engagement()
-    results["engagement"] = "fired"
-
-    # Async posts
     try:
         from app.agents.live_market_stream import LIVE_PRICES
         price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
     except Exception:
         price = 0.0
 
-    pub._last["hourly"] = 0
-    pub.post_hourly(btc_price=price, open_positions=[], daily_pnl=0.0,
-                    regime="unknown", regime_stability="starting up")
-    results["hourly"] = "fired"
+    # Post hourly/update first
+    hourly_text = _gen_hourly_text(pub)
+    ok = await pub._send_tweet(hourly_text, "hourly")
+    results["hourly"] = "posted ✓" if ok else "failed"
+    if ok:
+        pub._touch("hourly")
+    await __import__("asyncio").sleep(3)
 
+    # Hot take
+    from app.agents.x_publisher import HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS
+    ok = await pub._send_tweet(pub.memory.pick("hot_take", HOT_TAKES), "hot_take")
+    results["hot_take"] = "posted ✓" if ok else "failed"
+    if ok:
+        pub._touch("hot_take")
+    await __import__("asyncio").sleep(3)
+
+    # Philosophy
+    ok = await pub._send_tweet(pub.memory.pick("philosophy", PHILOSOPHY_POSTS), "philosophy")
+    results["philosophy"] = "posted ✓" if ok else "failed"
+    if ok:
+        pub._touch("philosophy")
+    await __import__("asyncio").sleep(3)
+
+    # News
     ok_news = await pub.post_news()
-    results["news"] = "posted" if ok_news else "failed"
+    results["news"] = "posted ✓" if ok_news else "failed"
+    await __import__("asyncio").sleep(3)
 
+    # Fear & Greed
     ok_fg = await pub.post_fear_greed()
-    results["fear_greed"] = "posted" if ok_fg else "failed"
+    results["fear_greed"] = "posted ✓" if ok_fg else "failed"
 
-    return {"ok": True, "results": results}
+    n_ok = sum(1 for v in results.values() if "✓" in str(v))
+    return {"ok": True, "results": results, "posted": n_ok}
 
 
 # ── Local poster queue (bypasses datacenter IP block) ─────────────────────────

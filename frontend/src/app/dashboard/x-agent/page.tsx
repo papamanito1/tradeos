@@ -107,7 +107,7 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
     setResult(null);
     const res = await queueViaRailway(endpoint);
     if (res.ok) {
-      setResult({ ok: true, msg: res.queued ? "Queued ✓" : "Posted ✓" });
+      setResult({ ok: true, msg: res.queued ? "Queued ✓" : "Posted ✓ on X" });
       onTriggered();
     } else {
       setResult({ ok: false, msg: res.msg });
