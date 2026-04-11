@@ -1800,6 +1800,20 @@ export default function OverviewPage() {
   // Server agent — shared 24/7 backend positions, trades, stats (single poll for all routes)
   const serverAgent = useSharedServerAgent();
 
+  // Fallback ticker synthesized from backend live_price when BingX stream hasn't populated yet
+  const effectiveTicker: BinanceTicker | null = useMemo(() => {
+    if (btcTicker) return btcTicker;
+    const lp = serverAgent.status?.live_price;
+    if (lp && lp > 0) {
+      return {
+        symbol: "BTC/USDT", last: lp, bid: lp, ask: lp,
+        open_24h: lp, high_24h: lp, low_24h: lp,
+        volume: 0, quote_volume: 0, change_pct: 0, updated_ms: Date.now(),
+      };
+    }
+    return null;
+  }, [btcTicker, serverAgent.status?.live_price]);
+
   const masterAgent = useMasterAgent(
     strategyResult, orbResult, hftResult, obiResult,
     chartCandles, candles1m,
@@ -1970,7 +1984,7 @@ export default function OverviewPage() {
 
         {/* ── 1. Command Bar ── */}
         <CommandBar
-          ticker={btcTicker}
+          ticker={effectiveTicker}
           agent={masterAgent}
           strategyResult={strategyResult}
           orbResult={orbResult}
@@ -1984,7 +1998,7 @@ export default function OverviewPage() {
         <SignalCommandCenter agent={masterAgent} strategyResult={strategyResult} orbResult={orbResult} serverAgent={serverAgent} />
 
         {/* ── 3. Market Pulse Strip ── */}
-        <MarketPulseStrip ticker={btcTicker} orderBook={btcOrderBook} chartCandles={chartCandles} />
+        <MarketPulseStrip ticker={effectiveTicker} orderBook={btcOrderBook} chartCandles={chartCandles} />
 
         {/* ── 4. Main analysis grid: Chart · Conditions · Order Book ── */}
         <div className="grid grid-cols-12 gap-3">
@@ -2005,7 +2019,7 @@ export default function OverviewPage() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {btcTicker && <span className="text-[13px] font-mono font-bold text-white">{formatUSD(btcTicker.last)}</span>}
+                {effectiveTicker && <span className="text-[13px] font-mono font-bold text-white">{formatUSD(effectiveTicker.last)}</span>}
                 <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full ${strategyResult.bias === "long" ? "text-green-400" : strategyResult.bias === "short" ? "text-red-400" : "text-neutral-600"}`}
                   style={{ background: strategyResult.bias === "long" ? "rgba(34,197,94,0.1)" : strategyResult.bias === "short" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)", border: strategyResult.bias === "long" ? "1px solid rgba(34,197,94,0.25)" : strategyResult.bias === "short" ? "1px solid rgba(239,68,68,0.25)" : "1px solid rgba(255,255,255,0.06)" }}>
                   {strategyResult.bias === "long" ? "▲ BULLISH" : strategyResult.bias === "short" ? "▼ BEARISH" : "NEUTRAL"}
@@ -2047,7 +2061,7 @@ export default function OverviewPage() {
                 : <span className="flex items-center gap-1 text-[8px] text-neutral-600"><WifiOff size={8} />Connecting</span>}
             </div>
             <div className="p-4">
-              <BTCMarketPanel ticker={btcTicker} orderBook={btcOrderBook} />
+              <BTCMarketPanel ticker={effectiveTicker} orderBook={btcOrderBook} />
             </div>
           </div>
         </div>
@@ -2064,7 +2078,7 @@ export default function OverviewPage() {
               orbResult={orbResult}
               chartCandles={chartCandles}
               activity={activity}
-              btcTicker={btcTicker}
+              btcTicker={effectiveTicker}
               serverAgent={serverAgent}
               masterAgent={masterAgent}
             />

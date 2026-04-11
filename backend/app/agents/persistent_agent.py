@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -1069,11 +1070,25 @@ class PersistentAgent:
         if age_1m >= 3 * 60 and self.scan_count % 5 == 0:
             self._log(f"⚠ 1m candles stale ({age_1m/60:.1f}m old) — 1m strategies paused")
 
+        def _safe_run(key: str, fn, *args) -> dict:
+            """Run a strategy function and return null result on any error."""
+            null_map = {"momentum": {"bias": "neutral", "signal": None, "met_count": 0, "total": 7, "name": "Momentum 15m"},
+                        "hft":      {"bias": "neutral", "signal": None, "met_count": 0, "total": 5, "name": "HFT Scalper"},
+                        "orb":      {"bias": "neutral", "signal": None, "met_count": 0, "total": 4, "name": "ORB-30"},
+                        "obi":      {"bias": "neutral", "signal": None, "met_count": 0, "total": 3, "name": "OBI Scalper"}}
+            try:
+                return fn(*args)
+            except Exception as exc:
+                logger.error(f"[Agent] Strategy '{key}' crashed: {type(exc).__name__}: {exc}", exc_info=True)
+                if self.scan_count % 5 == 0:
+                    self._log(f"⚠ [{key}] strategy error: {type(exc).__name__}: {exc}")
+                return null_map.get(key, {"bias": "neutral", "signal": None, "met_count": 0, "total": 0, "name": key})
+
         strategies = [
-            ("momentum", _run_momentum(candles15m) if use_momentum  else {"bias": "neutral", "signal": None, "met_count": 0, "total": 7, "name": "Momentum 15m"}),
-            ("hft",      _run_hft(candles1m, orderbook) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 5, "name": "HFT Scalper"}),
-            ("orb",      _run_orb(candles1m) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 4, "name": "ORB-30"}),
-            ("obi",      _run_obi(candles1m, orderbook) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 3, "name": "OBI Scalper"}),
+            ("momentum", _safe_run("momentum", _run_momentum, candles15m) if use_momentum  else {"bias": "neutral", "signal": None, "met_count": 0, "total": 7, "name": "Momentum 15m"}),
+            ("hft",      _safe_run("hft",      _run_hft,      candles1m, orderbook) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 5, "name": "HFT Scalper"}),
+            ("orb",      _safe_run("orb",      _run_orb,      candles1m) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 4, "name": "ORB-30"}),
+            ("obi",      _safe_run("obi",      _run_obi,      candles1m, orderbook) if use_1m_strats else {"bias": "neutral", "signal": None, "met_count": 0, "total": 3, "name": "OBI Scalper"}),
         ]
 
         # Rebuild training index periodically (every 10 scans or after trades)
