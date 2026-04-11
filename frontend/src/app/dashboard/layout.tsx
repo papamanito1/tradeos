@@ -13,13 +13,12 @@ import { Logo } from "@/components/ui/Logo";
 import { ServerAgentProvider } from "@/context/ServerAgentContext";
 
 const PAGE_TITLES: Record<string, string> = {
-  "/dashboard":            "Overview",
-  "/dashboard/strategies": "Strategies",
-  "/dashboard/risk":       "Risk Control",
-  "/dashboard/backtest":   "Backtesting",
-  "/dashboard/settings":   "Settings",
-  "/dashboard/agent":      "Live Agent",
-  "/dashboard/x-agent":   "X Agent",
+  "/dashboard":          "Overview",
+  "/dashboard/risk":     "Risk Control",
+  "/dashboard/backtest": "Backtesting",
+  "/dashboard/settings": "Settings",
+  "/dashboard/agent":    "Live Agent",
+  "/dashboard/x-agent":  "X Agent",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

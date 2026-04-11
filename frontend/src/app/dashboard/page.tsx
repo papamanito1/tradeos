@@ -19,7 +19,6 @@ import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngin
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
 import { useHFTScalper, type HFTResult } from "@/hooks/useHFTScalper";
 import { useOBIScalper, type OBIResult } from "@/hooks/useOBIScalper";
-import { useGridStrategy } from "@/hooks/useGridStrategy";
 import { useSharedServerAgent } from "@/context/ServerAgentContext";
 import { useServerAgent } from "@/hooks/useServerAgent";
 import { useMasterAgent, type MasterSignal, type ConvictionGrade, type ChatMessage } from "@/hooks/useMasterAgent";
@@ -1153,7 +1152,7 @@ function AllAgentsPanel({
   serverAgent: ReturnType<typeof useServerAgent>;
   masterAgent: ReturnType<typeof useMasterAgent>;
 }) {
-  const activeCount = [strategyResult, hftResult, obiResult, orbResult].filter(r => r.bias !== "neutral" || r.met_count >= 2).length + 1; // +1 for Grid always running
+  const activeCount = [strategyResult, hftResult, obiResult, orbResult].filter(r => r.bias !== "neutral" || r.met_count >= 2).length;
   return (
     <div className="space-y-3">
       {/* Section header */}
@@ -1165,7 +1164,7 @@ function AllAgentsPanel({
           <span className="text-[13px] font-bold text-white">Individual Agents</span>
           <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.18)" }}>
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-[8px] text-green-400 font-bold">5 RUNNING</span>
+            <span className="text-[8px] text-green-400 font-bold">4 RUNNING</span>
           </div>
           {serverAgent.running && (
             <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.18)" }}>
@@ -1177,8 +1176,8 @@ function AllAgentsPanel({
         <a href="/dashboard/agent" className="text-[9px] text-neutral-600 hover:text-blue-400 transition-colors">Full control →</a>
       </div>
 
-      {/* Agent cards — all 5 live */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {/* Agent cards — all 4 live */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
 
         {/* Momentum Velocity 15m agent */}
         <AgentCard
@@ -1226,35 +1225,6 @@ function AllAgentsPanel({
           ticker={btcTicker}
         />
 
-        {/* Grid $50 — show server state */}
-        <div className="rounded-2xl p-4 flex flex-col gap-2"
-          style={{ background: "rgba(6,182,212,0.03)", border: `1px solid rgba(6,182,212,${masterAgent.votes.find(v => v.name === "Grid $50")?.signal ? "0.25" : "0.1"})` }}>
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[11px] font-bold text-white">Grid $50</div>
-              <div className="text-[8px] text-neutral-600">±$50 levels · 5 slots</div>
-            </div>
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.2)" }}>
-              <span className="w-1 h-1 rounded-full bg-cyan-400 animate-pulse" />
-              <span className="text-[8px] text-cyan-400 font-bold">LIVE</span>
-            </div>
-          </div>
-          <div className="space-y-1">
-            {[
-              ["Slots", `${serverAgent.openPositions.filter(p => p.strategy_name === "Grid $50").length}/5`, "text-cyan-400"],
-              ["Center", serverAgent.gridState?.center ? `$${serverAgent.gridState.center.toLocaleString()}` : "—", "text-neutral-300"],
-              ["Daily P&L", serverAgent.gridState?.daily_pnl != null ? `${serverAgent.gridState.daily_pnl >= 0 ? "+" : ""}$${serverAgent.gridState.daily_pnl.toFixed(2)}` : "—", (serverAgent.gridState?.daily_pnl ?? 0) >= 0 ? "text-green-400" : "text-red-400"],
-            ].map(([l, v, cls]) => (
-              <div key={l} className="flex items-center justify-between text-[9px]">
-                <span className="text-neutral-700">{l}</span>
-                <span className={`font-mono font-bold ${cls}`}>{v}</span>
-              </div>
-            ))}
-          </div>
-          <div className="text-[8px] text-cyan-400/60 text-center mt-auto">
-            <a href="/dashboard/agent" className="hover:text-cyan-400 transition-colors">Configure →</a>
-          </div>
-        </div>
       </div>
 
       {/* Last 5 trades from server */}
@@ -1315,9 +1285,6 @@ function CommandBar({
     { label: "ORB",    bias: orbResult.bias,       met: orbResult.met_count,       total: orbResult.total ?? 6 },
     { label: "HFT",    bias: hftResult.bias,       met: hftResult.met_count,       total: hftResult.total ?? 5 },
     { label: "OBI",    bias: obiResult.bias,       met: obiResult.met_count,       total: obiResult.total ?? 3 },
-    { label: "Grid",   bias: agent.votes.find(v => v.name === "Grid $50")?.bias ?? "neutral",
-                       met: Math.round((agent.votes.find(v => v.name === "Grid $50")?.met_pct ?? 0) * 5),
-                       total: 5 },
   ];
 
   return (
@@ -1833,14 +1800,8 @@ export default function OverviewPage() {
   // Server agent — shared 24/7 backend positions, trades, stats (single poll for all routes)
   const serverAgent = useSharedServerAgent();
 
-  const gridResult      = useGridStrategy(
-    candles1m,
-    btcTicker?.last ?? (candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0),
-    serverAgent.gridState,
-  );
-
   const masterAgent = useMasterAgent(
-    strategyResult, orbResult, hftResult, obiResult, gridResult,
+    strategyResult, orbResult, hftResult, obiResult,
     chartCandles, candles1m,
     btcTicker, btcOrderBook,
     serverAgent.status,

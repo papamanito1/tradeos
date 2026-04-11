@@ -32,7 +32,6 @@ import { StrategyResult } from "./useStrategyEngine";
 import { ORBResult } from "./useORBStrategy";
 import { HFTResult } from "./useHFTScalper";
 import { OBIResult } from "./useOBIScalper";
-import { GridResult } from "./useGridStrategy";
 import { BinanceCandle, BinanceTicker, BinanceOrderBook } from "./useBingXStream";
 import { ServerStatus } from "./useServerAgent";
 
@@ -158,10 +157,10 @@ function grade(conviction: number): ConvictionGrade {
 
 // ─── Regime ↔ Strategy optimal-fit weights ────────────────────────────────────
 const REGIME_WEIGHTS: Record<string, Record<string, number>> = {
-  TRENDING:  { "Momentum 15m": 1.40, "ORB-30": 1.25, "HFT Scalper": 1.10, "OBI Scalper": 0.90, "Grid $50": 0.65 },
-  RANGING:   { "Momentum 15m": 0.70, "ORB-30": 0.80, "HFT Scalper": 1.10, "OBI Scalper": 1.30, "Grid $50": 1.50 },
-  VOLATILE:  { "Momentum 15m": 0.80, "ORB-30": 0.75, "HFT Scalper": 1.30, "OBI Scalper": 1.35, "Grid $50": 0.70 },
-  UNKNOWN:   { "Momentum 15m": 1.00, "ORB-30": 1.00, "HFT Scalper": 1.00, "OBI Scalper": 1.00, "Grid $50": 1.00 },
+  TRENDING:  { "Momentum 15m": 1.40, "ORB-30": 1.25, "HFT Scalper": 1.10, "OBI Scalper": 0.90 },
+  RANGING:   { "Momentum 15m": 0.70, "ORB-30": 0.80, "HFT Scalper": 1.10, "OBI Scalper": 1.30 },
+  VOLATILE:  { "Momentum 15m": 0.80, "ORB-30": 0.75, "HFT Scalper": 1.30, "OBI Scalper": 1.35 },
+  UNKNOWN:   { "Momentum 15m": 1.00, "ORB-30": 1.00, "HFT Scalper": 1.00, "OBI Scalper": 1.00 },
 };
 
 // ─── Session intelligence ─────────────────────────────────────────────────────
@@ -180,11 +179,10 @@ function computeStrategyPerf(
   trades: Array<{ strategy_key?: string; strategy_name?: string; exit_reason?: string; pnl_usd?: number; closed_at?: string }>,
   regime: MarketRegime,
 ): Record<string, StrategyPerfData> {
-  // Normalize key: "grid_84000" → "Grid $50", "momentum" → "Momentum 15m", etc.
+  // Normalize strategy key to display name
   const keyToName = (k: string, n?: string): string => {
-    if (k?.startsWith("grid_") || n === "Grid $50") return "Grid $50";
     const map: Record<string, string> = {
-      momentum: "Momentum 15m", hft: "HFT Scalper", orb: "ORB-30", obi: "OBI Scalper"
+      momentum: "Momentum 15m", hft: "HFT Scalper", orb: "ORB-30", obi: "OBI Scalper", fusion: "Fusion",
     };
     return map[k?.toLowerCase()] ?? n ?? k;
   };
@@ -196,7 +194,7 @@ function computeStrategyPerf(
     byStrategy[name].push(t);
   }
 
-  const allNames = ["Momentum 15m", "HFT Scalper", "ORB-30", "OBI Scalper", "Grid $50"];
+  const allNames = ["Momentum 15m", "HFT Scalper", "ORB-30", "OBI Scalper"];
   const result: Record<string, StrategyPerfData> = {};
 
   for (const name of allNames) {
@@ -576,7 +574,7 @@ function generateResponse(userMsg: string, ctx: ResponseCtx): string {
       `UTC hour: ${si.hour}:00  ·  Liquidity multiplier: ${si.multiplier >= 1 ? "+" : ""}${((si.multiplier - 1) * 100).toFixed(0)}%`,
       si.peak
         ? `✓ Peak hours — full conviction active`
-        : `⏰ Off-peak — conviction reduced ${((1 - si.multiplier) * 100).toFixed(0)}%, Grid/OBI preferred`,
+        : `⏰ Off-peak — conviction reduced ${((1 - si.multiplier) * 100).toFixed(0)}%, OBI preferred`,
       `Best trading windows (UTC): 09:00-17:00 (London/NY), 21:00-00:00 (Asia open)`,
     ].join("\n");
   }
@@ -650,7 +648,6 @@ export function useMasterAgent(
   orbResult:      ORBResult,
   hftResult:      HFTResult,
   obiResult:      OBIResult,
-  gridResult:     GridResult,
   candles15m:     BinanceCandle[],
   candles1m:      BinanceCandle[],
   ticker:         BinanceTicker | null,
@@ -700,7 +697,7 @@ export function useMasterAgent(
     const atrVal   = atr(candles15m.slice(-20));
     const atrPct   = price && !isNaN(atrVal) ? atrVal / price : null;
 
-    // Strategy votes — all 5, with adaptive trust weights
+    // Strategy votes — 4 strategies, with adaptive trust weights
     const votes: StrategyVote[] = [
       {
         name: "Momentum 15m",
@@ -742,16 +739,6 @@ export function useMasterAgent(
         weight: strategyPerf["OBI Scalper"]?.trustScore ?? 1.0,
         reasoning: obiResult.signal?.reasoning,
       },
-      {
-        name: "Grid $50",
-        bias: gridResult.bias === "stopped" || gridResult.bias === "paused" ? "neutral" : gridResult.bias,
-        signal: !!gridResult.signal,
-        conf: gridResult.signal?.confidence ?? (gridResult.metCount / (gridResult.total ?? 5)) * 0.60,
-        met_pct: gridResult.metCount / (gridResult.total ?? 5),
-        timeframe: "continuous",
-        weight: strategyPerf["Grid $50"]?.trustScore ?? 1.0,
-        reasoning: gridResult.signal?.reasoning,
-      },
     ];
 
     // Consensus direction — need ≥2/5 strategies aligned
@@ -780,7 +767,6 @@ export function useMasterAgent(
         orbResult.signal?.direction === dir       ? orbResult.signal      : null,
         hftResult.signal?.direction === dir       ? { ...hftResult.signal, sl: hftResult.signal.sl, tp: hftResult.signal.tp1 } : null,
         obiResult.signal?.direction === dir       ? obiResult.signal      : null,
-        gridResult.signal?.direction === dir      ? gridResult.signal     : null,
       ].filter(Boolean) as Array<{ direction: string; entry: number; sl: number; tp: number; confidence: number; reasoning?: string }>;
 
       // Best signal = highest confidence among aligned ones
