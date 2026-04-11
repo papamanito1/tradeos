@@ -213,28 +213,61 @@ class LiveExecutor:
                 self.last_error = f"Order too small: {btc_qty} BTC"
                 return None
 
-            logger.info(f"[LiveExecutor] Placing {side.upper()} {btc_qty} BTC @ ~${entry_price:.0f} "
+            logger.info(f"[LiveExecutor] Placing LIMIT {side.upper()} {btc_qty} BTC @ ${entry_price:.2f} "
                         f"· notional ${notional:.0f} · lev {leverage}×")
 
-            # Step 1: Place market order (without SL/TP — more reliable across exchanges)
+            # Step 1: Place LIMIT order at signal entry price for better fills
             order = await self._exchange.create_order(
                 SYMBOL,
-                "market",
+                "limit",
                 side,
                 btc_qty,
-                None,
+                entry_price,
                 params={"positionSide": "LONG" if direction == "long" else "SHORT"},
             )
+            order_id = str(order.get("id", ""))
+            logger.info(f"[LiveExecutor] Limit order placed: id={order_id} @ ${entry_price:.2f}")
 
-            fill_price = float(order.get("average") or order.get("price") or entry_price)
-            order_id   = str(order.get("id", ""))
+            # Step 2: Poll for fill — up to 15 seconds (3 attempts × 5s)
+            fill_price = 0.0
+            POLL_INTERVAL = 5
+            MAX_POLLS     = 3
+            for attempt in range(MAX_POLLS):
+                await asyncio.sleep(POLL_INTERVAL)
+                try:
+                    fetched = await self._exchange.fetch_order(order_id, SYMBOL)
+                    status  = (fetched.get("status") or "").lower()
+                    filled  = float(fetched.get("filled") or 0)
+                    avg     = float(fetched.get("average") or fetched.get("price") or 0)
+                    logger.info(f"[LiveExecutor] Limit order poll {attempt+1}/{MAX_POLLS}: "
+                                f"status={status} filled={filled}/{btc_qty} BTC avg=${avg:.2f}")
+                    if status in ("closed", "filled") or filled >= btc_qty * 0.95:
+                        fill_price = avg if avg > 0 else entry_price
+                        break
+                    if status in ("canceled", "cancelled", "rejected", "expired"):
+                        logger.warning(f"[LiveExecutor] Limit order {order_id} {status} — no trade")
+                        self.last_error = f"Limit order {status}"
+                        return None
+                except Exception as poll_err:
+                    logger.warning(f"[LiveExecutor] Poll attempt {attempt+1} failed: {poll_err}")
 
-            logger.info(f"[LiveExecutor] Market order filled: id={order_id} @ ${fill_price:.2f}")
+            # Step 3: If still not filled — cancel and abort
+            if fill_price <= 0:
+                try:
+                    await self._exchange.cancel_order(order_id, SYMBOL)
+                    logger.warning(f"[LiveExecutor] Limit order {order_id} not filled in "
+                                   f"{POLL_INTERVAL * MAX_POLLS}s — cancelled, no trade placed")
+                except Exception:
+                    pass
+                self.last_error = f"Limit order timed out (not filled in {POLL_INTERVAL * MAX_POLLS}s)"
+                return None
 
-            # Step 2: Place SL/TP as separate stop orders, track their IDs
+            logger.info(f"[LiveExecutor] Limit order FILLED @ ${fill_price:.2f} (limit ${entry_price:.2f})")
+
+            # Step 4: SL/TP as stop-market orders now that we have a position
             sl_order_id = ""
             tp_order_id = ""
-            pos_side = "LONG" if direction == "long" else "SHORT"
+            pos_side   = "LONG" if direction == "long" else "SHORT"
             close_side = "sell" if direction == "long" else "buy"
 
             try:
@@ -242,10 +275,10 @@ class LiveExecutor:
                     sl_order = await self._exchange.create_order(
                         SYMBOL, "market", close_side, btc_qty, None,
                         params={
-                            "stopPrice": round(sl_price, 2),
+                            "stopPrice":    round(sl_price, 2),
                             "positionSide": pos_side,
-                            "reduceOnly": True,
-                            "triggerType": "MARK_PRICE",
+                            "reduceOnly":   True,
+                            "triggerType":  "MARK_PRICE",
                         },
                     )
                     sl_order_id = str(sl_order.get("id", ""))
@@ -258,10 +291,10 @@ class LiveExecutor:
                     tp_order = await self._exchange.create_order(
                         SYMBOL, "market", close_side, btc_qty, None,
                         params={
-                            "stopPrice": round(tp_price, 2),
+                            "stopPrice":    round(tp_price, 2),
                             "positionSide": pos_side,
-                            "reduceOnly": True,
-                            "triggerType": "MARK_PRICE",
+                            "reduceOnly":   True,
+                            "triggerType":  "MARK_PRICE",
                         },
                     )
                     tp_order_id = str(tp_order.get("id", ""))
