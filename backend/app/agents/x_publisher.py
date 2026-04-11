@@ -3,6 +3,9 @@ XPublisher — Tradeous X/Twitter Integration
 ============================================
 Witty, humorous, viral-optimised trading commentary for @Tradeous.
 
+Uses twikit (unofficial X internal API) — completely free, no API keys,
+no rate-limit payments. Authenticates with X username + email + password.
+
 Post types:
   0. Intro post     — fires once on first agent startup
   1. Trade signal   — live trade opened, conviction >= threshold
@@ -12,7 +15,9 @@ Post types:
   5. Weekly recap   — Sunday 20:00 UTC
 
 Env vars required:
-  X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
+  X_USERNAME   — your X / Twitter username (without @)
+  X_EMAIL      — email address linked to your X account
+  X_PASSWORD   — your X / Twitter password
 """
 
 from __future__ import annotations
@@ -114,28 +119,20 @@ class XPublisher:
         self._init_client()
 
     def _init_client(self) -> None:
-        api_key    = os.environ.get("X_API_KEY", "")
-        api_secret = os.environ.get("X_API_SECRET", "")
-        acc_token  = os.environ.get("X_ACCESS_TOKEN", "")
-        acc_secret = os.environ.get("X_ACCESS_TOKEN_SECRET", "")
+        self._x_username = os.environ.get("X_USERNAME", "")
+        self._x_email    = os.environ.get("X_EMAIL", "")
+        self._x_password = os.environ.get("X_PASSWORD", "")
 
-        if not all([api_key, api_secret, acc_token, acc_secret]):
-            logger.info("[XPublisher] X env vars not set — posting disabled")
+        if not self._x_username or not self._x_password:
+            logger.info("[XPublisher] X_USERNAME / X_PASSWORD not set — posting disabled")
             return
         try:
-            import tweepy
-            self._client = tweepy.Client(
-                consumer_key=api_key,
-                consumer_secret=api_secret,
-                access_token=acc_token,
-                access_token_secret=acc_secret,
-            )
+            import twikit  # noqa: F401 — just check it's installed
+            # Actual login is async — deferred to first post via _ensure_client()
             self._enabled = True
-            logger.info("[XPublisher] X client initialised — @Tradeous posting enabled")
+            logger.info(f"[XPublisher] twikit ready — will sign in as @{self._x_username} on first post")
         except ImportError:
-            logger.warning("[XPublisher] tweepy not installed — posting disabled")
-        except Exception as e:
-            logger.warning(f"[XPublisher] Failed to init X client: {e}")
+            logger.warning("[XPublisher] twikit not installed — posting disabled")
 
     @property
     def enabled(self) -> bool:
@@ -143,25 +140,65 @@ class XPublisher:
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
-    def _post(self, text: str) -> bool:
-        if not self._enabled or not self._client:
-            return False
+    async def _ensure_client(self) -> bool:
+        """Login to X via twikit (async). Reuses session file if available."""
+        if self._client is not None:
+            return True
         try:
-            self._client.create_tweet(text=text[:280])
-            logger.info(f"[XPublisher] Posted ({len(text)} chars): {text[:60]}…")
+            from twikit import Client
+            cookies_path = "/tmp/tradeos_twikit_cookies.json"
+            client = Client("en-US")
+            import os as _os
+            if _os.path.exists(cookies_path):
+                client.load_cookies(cookies_path)
+                logger.info("[XPublisher] Loaded saved X session from cookies")
+            else:
+                await client.login(
+                    auth_info_1=self._x_username,
+                    auth_info_2=self._x_email if self._x_email else self._x_username,
+                    password=self._x_password,
+                )
+                client.save_cookies(cookies_path)
+                logger.info(f"[XPublisher] Signed in to X as @{self._x_username}")
+            self._client = client
             return True
         except Exception as e:
-            logger.warning(f"[XPublisher] Post failed: {e}")
+            logger.warning(f"[XPublisher] X login failed: {e}")
+            self._client = None
             return False
 
+    async def _post_async_impl(self, text: str) -> bool:
+        """Async implementation — called from _post_async."""
+        if not self._enabled:
+            return False
+        try:
+            ok = await self._ensure_client()
+            if not ok:
+                return False
+            await self._client.create_tweet(text[:280])
+            logger.info(f"[XPublisher] Posted: {text[:60]}…")
+            return True
+        except Exception as e:
+            logger.warning(f"[XPublisher] Post failed: {e} — clearing session for retry")
+            self._client = None
+            # Clear stale cookie so next call re-authenticates
+            try:
+                import os as _os
+                _os.remove("/tmp/tradeos_twikit_cookies.json")
+            except Exception:
+                pass
+            return False
+
+    def _post(self, text: str) -> bool:
+        """Sync wrapper (unused — kept for interface compatibility)."""
+        return False
+
     def _post_async(self, text: str) -> None:
-        async def _send():
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._post, text)
+        """Fire-and-forget: schedules an async tweet without blocking the caller."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.create_task(_send())
+                asyncio.create_task(self._post_async_impl(text))
         except Exception as e:
             logger.debug(f"[XPublisher] _post_async error: {e}")
 
