@@ -1,70 +1,65 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useState, useEffect, useCallback } from "react";
 import {
-  Bot, Power, RefreshCw, ExternalLink, Zap, Shield,
-  CheckCircle2, XCircle, TrendingUp, TrendingDown,
-  AlertTriangle, Activity, ChevronRight, Trash2, Copy,
-  FileText, RotateCcw, X, DollarSign, Save, Loader2,
-  Brain, MessageSquare, Send, ArrowUpRight, ArrowDownRight, Square,
+  Bot, Power, RefreshCw, AlertTriangle, Activity, Brain,
+  TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
+  ChevronRight, RotateCcw, Zap, Shield, X, CheckCircle2, XCircle,
+  Save, Loader2, DollarSign, FileText, Cpu, Wifi, WifiOff,
 } from "lucide-react";
-import type { useMasterAgent } from "@/hooks/useMasterAgent";
-import { SolanaProvider } from "@/providers/SolanaProvider";
-import { usePhantomAgent, AgentState, AgentConfig, PaperPosition, PaperStats } from "@/hooks/usePhantomAgent";
-import { useStrategyEngine, StrategyResult } from "@/hooks/useStrategyEngine";
-import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalper";
-import { useORBStrategy } from "@/hooks/useORBStrategy";
-import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
-import { useGridStrategy, GridResult } from "@/hooks/useGridStrategy";
-import { useBingXStream, seedBingXCandles, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBingXStream";
-import { useServerAgent, type ServerAgentConfig } from "@/hooks/useServerAgent";
-import { formatUSD } from "@/lib/utils";
+import {
+  useServerAgent,
+  type ServerAgentConfig,
+  type MasterBrainStatus,
+  type LiveExecutorStatus,
+  type ServerPosition,
+  type ServerTrade,
+} from "@/hooks/useServerAgent";
 
+// ─── Strategy metadata ────────────────────────────────────────────────────────
+const STRATEGIES = [
+  { key: "momentum", label: "Momentum 15m", color: "#0a84ff", icon: "📈", tf: "15m" },
+  { key: "hft",      label: "HFT Scalper",  color: "#a78bfa", icon: "⚡", tf: "1m"  },
+  { key: "orb",      label: "ORB-30",       color: "#f59e0b", icon: "🔶", tf: "1m"  },
+  { key: "obi",      label: "OBI Scalper",  color: "#10b981", icon: "📊", tf: "1m"  },
+  { key: "grid",     label: "Grid $50",     color: "#06b6d4", icon: "⊞",  tf: "cont" },
+  { key: "fusion",   label: "Fusion",       color: "#f472b6", icon: "🧠", tf: "all"  },
+] as const;
 
-// ─── State colours ────────────────────────────────────────────────────────────
-const STATE_META: Record<AgentState, { label: string; color: string; pulse: boolean }> = {
-  idle:             { label: "IDLE",             color: "#4b5563", pulse: false },
-  scanning:         { label: "SCANNING",         color: "#0a84ff", pulse: true  },
-  signal_detected:  { label: "SIGNAL DETECTED",  color: "#f59e0b", pulse: true  },
-  executing:        { label: "EXECUTING",         color: "#8b5cf6", pulse: true  },
-  position_open:    { label: "IN POSITION",      color: "#22c55e", pulse: true  },
-  error:            { label: "ERROR",             color: "#ef4444", pulse: false },
+type StrategyKey = typeof STRATEGIES[number]["key"];
+type StratOverride = { enabled: boolean; size_usdc: number; leverage: number; min_confidence: number; min_conditions: number };
+const DEFAULT_STRAT: StratOverride = { enabled: true, size_usdc: 100, leverage: 1, min_confidence: 0.50, min_conditions: 2 };
+
+// ─── Regime colours ───────────────────────────────────────────────────────────
+const REGIME_META: Record<string, { color: string; bg: string; label: string }> = {
+  trending_up:   { color: "#22c55e", bg: "rgba(34,197,94,0.12)",   label: "Trending Up"   },
+  trending_down: { color: "#ef4444", bg: "rgba(239,68,68,0.12)",   label: "Trending Down" },
+  ranging:       { color: "#f59e0b", bg: "rgba(245,158,11,0.12)",  label: "Ranging"       },
+  volatile:      { color: "#f97316", bg: "rgba(249,115,22,0.12)",  label: "Volatile"      },
+  unknown:       { color: "#6b7280", bg: "rgba(107,114,128,0.12)", label: "Unknown"       },
 };
 
-// ─── Wallet info ─────────────────────────────────────────────────────────────
-function WalletInfo() {
-  const { publicKey, connected } = useWallet();
-  const [copied, setCopied] = useState(false);
-  const addr = publicKey?.toBase58() ?? "";
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const pnlCls = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-400";
+const fmtPnl = (v: number) => `${v >= 0 ? "+" : ""}$${Math.abs(v).toFixed(2)}`;
 
-  const copy = () => {
-    navigator.clipboard.writeText(addr);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  if (!connected) return null;
-  return (
-    <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-1.5">
-      <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-      <span className="text-[10px] font-mono text-green-400">{addr.slice(0, 6)}…{addr.slice(-4)}</span>
-      <button onClick={copy} className="text-neutral-600 hover:text-white transition-colors">
-        {copied ? <CheckCircle2 size={11} className="text-green-400" /> : <Copy size={11} />}
-      </button>
-    </div>
-  );
-}
-
-// ─── Pending trade modal ──────────────────────────────────────────────────────
 // ─── Agent log feed ───────────────────────────────────────────────────────────
 function AgentLog({ logs }: { logs: string[] }) {
   return (
-    <div className="h-48 overflow-y-auto font-mono text-[10px] space-y-0.5 bg-black/30 rounded-xl p-3 border border-neutral-800">
-      {logs.length === 0 && <div className="text-neutral-700">Agent log will appear here…</div>}
-      {logs.map((line, i) => (
-        <div key={i} className={`leading-relaxed ${line.includes("★") ? "text-yellow-400" : line.includes("error") || line.includes("failed") ? "text-red-400" : line.includes("Submitted") || line.includes("STARTED") || line.includes("position") ? "text-green-400" : "text-neutral-500"}`}>
+    <div className="h-64 overflow-y-auto font-mono text-[10px] space-y-0.5 bg-black/40 rounded-xl p-3 border border-neutral-800">
+      {logs.length === 0 && (
+        <div className="text-neutral-700 py-2">Server log will appear here…</div>
+      )}
+      {[...logs].reverse().map((line, i) => (
+        <div key={i} className={`leading-relaxed ${
+          line.includes("WIN") || line.includes("✓") || line.includes("OPEN") ? "text-green-400" :
+          line.includes("LOSS") || line.includes("✗") || line.includes("ERROR") || line.includes("error") ? "text-red-400" :
+          line.includes("FUSION") || line.includes("fuse") ? "text-pink-400" :
+          line.includes("Brain") || line.includes("regime") ? "text-violet-400" :
+          line.includes("LIVE") || line.includes("BingX") ? "text-amber-400" :
+          line.includes("shadow") || line.includes("PAPER") ? "text-sky-400" :
+          "text-neutral-500"
+        }`}>
           {line}
         </div>
       ))}
@@ -72,343 +67,7 @@ function AgentLog({ logs }: { logs: string[] }) {
   );
 }
 
-// ─── Trade row ────────────────────────────────────────────────────────────────
-function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades"][0] }) {
-  const isLong = trade.direction === "long";
-  const statusColor = { pending: "#f59e0b", submitted: "#8b5cf6", confirmed: "#22c55e", failed: "#ef4444" }[trade.status];
-  return (
-    <div className="flex items-center gap-3 py-2 border-b border-neutral-800/60">
-      <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${isLong ? "bg-green-500/15" : "bg-red-500/15"}`}>
-        {isLong ? <TrendingUp size={11} className="text-green-400" /> : <TrendingDown size={11} className="text-red-400" />}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={`text-[11px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>{trade.direction.toUpperCase()} BTC</span>
-          <span className="text-[9px] text-neutral-700">{new Date(trade.timestamp).toLocaleTimeString()}</span>
-        </div>
-        <div className="text-[9px] text-neutral-600 truncate">{trade.reasoning.slice(0, 60)}…</div>
-      </div>
-      <div className="text-right flex-shrink-0">
-        <div className="text-[10px] font-mono text-white">{formatUSD(trade.entry)}</div>
-        {trade.is_paper && trade.pnl_usd != null ? (
-          <div className={`text-[9px] font-bold ${trade.pnl_usd >= 0 ? "text-green-400" : "text-red-400"}`}>
-            {trade.pnl_usd >= 0 ? "+" : ""}${trade.pnl_usd.toFixed(2)} {trade.exit_reason?.toUpperCase()}
-          </div>
-        ) : (
-          <div className="text-[9px] font-bold" style={{ color: statusColor }}>
-            {trade.is_paper ? "📄 " : ""}{trade.status.toUpperCase()}
-          </div>
-        )}
-      </div>
-      {trade.tx_signature && (
-        <a href={`https://solscan.io/tx/${trade.tx_signature}`} target="_blank" rel="noopener noreferrer"
-          className="text-neutral-700 hover:text-blue-400 transition-colors flex-shrink-0">
-          <ExternalLink size={11} />
-        </a>
-      )}
-    </div>
-  );
-}
-
-// ─── Candle seeder (BingX primary, Bybit fallback) ────────────────────────────
-async function seedCandles(tf: "1m" | "15m"): Promise<BinanceCandle[]> {
-  const limit = tf === "1m" ? 300 : 120;
-  return seedBingXCandles(tf, limit);
-}
-
-// ─── HFT Indicator bar ────────────────────────────────────────────────────────
-function HFTBar({ label, value, min, max, goodHigh }: { label: string; value: number | null; min: number; max: number; goodHigh: boolean }) {
-  if (value === null) return (
-    <div><div className="text-[9px] text-neutral-700 mb-0.5">{label}</div><div className="h-1.5 bg-neutral-800 rounded-full" /></div>
-  );
-  const pct = Math.min(Math.max((value - min) / (max - min) * 100, 0), 100);
-  const isGood = goodHigh ? value > 0 : value < 0;
-  return (
-    <div>
-      <div className="flex justify-between mb-0.5">
-        <span className="text-[9px] text-neutral-600">{label}</span>
-        <span className={`text-[9px] font-mono ${isGood ? "text-green-400" : value === 0 ? "text-neutral-600" : "text-red-400"}`}>{value.toFixed(3)}</span>
-      </div>
-      <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all duration-200"
-          style={{ width: `${pct}%`, background: isGood ? "#22c55e" : "#ef4444" }} />
-      </div>
-    </div>
-  );
-}
-
-// ─── Paper trading P&L panel ──────────────────────────────────────────────────
-function PaperPanel({
-  openPositions, stats, trades, onClose, onReset,
-}: {
-  openPositions: PaperPosition[];
-  stats: PaperStats;
-  trades: ReturnType<typeof usePhantomAgent>["trades"];
-  onClose: (key: string) => void;
-  onReset: () => void;
-}) {
-  const paperTrades = trades.filter(t => t.is_paper && t.exit_price != null);
-  const pnlColor = (v: number) => v > 0 ? "text-green-400" : v < 0 ? "text-red-400" : "text-neutral-400";
-  const totalUnrealized = openPositions.reduce((s, p) => s + p.unrealized_pnl, 0);
-
-  return (
-    <div className="card p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <FileText size={13} className="text-violet-400" />
-          <span className="text-[13px] font-semibold text-white">Paper Trading</span>
-          <span className="text-[9px] bg-violet-500/10 border border-violet-500/20 text-violet-400 px-1.5 py-0.5 rounded font-mono">
-            {openPositions.length > 0 ? `${openPositions.length} OPEN` : "PAPER"}
-          </span>
-        </div>
-        <button onClick={onReset} className="flex items-center gap-1.5 text-[10px] text-neutral-600 hover:text-red-400 transition-colors">
-          <RotateCcw size={11} /> Reset
-        </button>
-      </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-4 gap-2">
-        {[
-          ["Total P&L",    `${stats.total_pnl >= 0 ? "+" : ""}$${stats.total_pnl.toFixed(2)}`,   pnlColor(stats.total_pnl)],
-          ["Unrealized",   openPositions.length > 0 ? `${totalUnrealized >= 0 ? "+" : ""}$${totalUnrealized.toFixed(2)}` : "—", pnlColor(totalUnrealized)],
-          ["Win Rate",     stats.total_trades > 0 ? `${stats.win_rate.toFixed(1)}%` : "—",        "text-blue-400"],
-          ["Closed",       `${stats.total_trades} (${stats.wins}W / ${stats.losses}L)`,            "text-neutral-400"],
-        ].map(([l, v, cls]) => (
-          <div key={l} className="rounded-xl p-3 text-center" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
-            <div className={`text-[11px] font-bold font-mono ${cls}`}>{v}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Open positions — one card per strategy */}
-      {openPositions.length > 0 ? (
-        <div className="space-y-2">
-          {openPositions.map(position => (
-            <div key={position.id} className="rounded-xl p-4 space-y-3"
-              style={{
-                background: position.direction === "long" ? "rgba(34,197,94,.06)" : "rgba(239,68,68,.06)",
-                border: `1px solid ${position.direction === "long" ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.2)"}`,
-              }}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full animate-pulse ${position.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
-                  <span className={`text-[11px] font-bold ${position.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                    {position.direction.toUpperCase()} — {position.strategy_name}
-                  </span>
-                </div>
-                <button onClick={() => onClose(position.strategy_key)} className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 rounded-lg px-2 py-1">
-                  <X size={9} /> Close
-                </button>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
-                <div><span className="text-neutral-600 block">Entry</span><span className="text-white">${position.entry.toFixed(0)}</span></div>
-                <div><span className="text-neutral-600 block">Current</span><span className="text-white">${position.current_price.toFixed(0)}</span></div>
-                <div>
-                  <span className="text-neutral-600 block">Unrealized P&L</span>
-                  <span className={pnlColor(position.unrealized_pnl)}>
-                    {position.unrealized_pnl >= 0 ? "+" : ""}${position.unrealized_pnl.toFixed(2)}
-                    <span className="text-[9px] ml-1">({position.unrealized_pct >= 0 ? "+" : ""}{position.unrealized_pct.toFixed(3)}%)</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* SL/TP bar */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-[9px]">
-                  <span className="text-red-400">SL ${position.sl?.toFixed(0) ?? "—"}</span>
-                  <span className="text-neutral-600">${ position.size_usdc} · {position.btc_size.toFixed(5)} BTC</span>
-                  <span className="text-green-400">TP ${position.tp?.toFixed(0) ?? "—"}</span>
-                </div>
-                {position.sl && position.tp && (() => {
-                  const range   = position.tp - position.sl;
-                  const pct     = ((position.current_price - position.sl) / range * 100);
-                  const clamped = Math.min(Math.max(pct, 0), 100);
-                  return (
-                    <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden relative">
-                      <div className="absolute inset-0 flex">
-                        <div className="h-full bg-red-900/50"  style={{ width: "33%" }} />
-                        <div className="h-full bg-neutral-900/30" style={{ width: "34%" }} />
-                        <div className="h-full bg-green-900/50" style={{ width: "33%" }} />
-                      </div>
-                      <div className="absolute top-0 h-full w-0.5 bg-white rounded-full transition-all duration-200"
-                        style={{ left: `${clamped}%` }} />
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-          <DollarSign size={13} className="text-neutral-700" />
-          <span className="text-[11px] text-neutral-700">No open paper positions · all 5 strategies scanning for signals…</span>
-        </div>
-      )}
-
-      {/* Closed paper trades */}
-      {paperTrades.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-[10px] text-neutral-600 mb-1.5">Closed Trades</div>
-          <div className="max-h-36 overflow-y-auto space-y-1">
-            {paperTrades.slice(0, 30).map(t => (
-              <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg" style={{ background: "rgba(255,255,255,0.02)" }}>
-                <span className={`text-[9px] font-bold w-8 ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                  {t.direction === "long" ? "▲" : "▼"} {t.direction.toUpperCase().slice(0,1)}
-                </span>
-                <span className="text-[9px] text-neutral-700 font-mono">{t.strategy_name ?? "—"}</span>
-                <span className="text-[9px] text-neutral-600 font-mono flex-1">${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"}</span>
-                <span className={`text-[9px] font-mono font-bold ${pnlColor(t.pnl_usd ?? 0)}`}>
-                  {(t.pnl_usd ?? 0) >= 0 ? "+" : ""}${t.pnl_usd?.toFixed(2) ?? "0"}
-                </span>
-                <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
-                  t.exit_reason === "tp" ? "bg-green-500/10 text-green-400"
-                  : t.exit_reason === "sl" ? "bg-red-500/10 text-red-400"
-                  : "bg-neutral-800 text-neutral-500"
-                }`}>{(t.exit_reason ?? "—").toUpperCase()}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Convert HFT result → StrategyResult ─────────────────────────────────────
-function hftToStrategy(hft: HFTResult): StrategyResult {
-  const sig = hft.signal;
-  const rr = sig
-    ? Math.abs(sig.tp2 - sig.entry) / Math.abs(sig.entry - sig.sl)
-    : 0;
-  return {
-    bias:       hft.bias,
-    conditions: hft.conditions,
-    met_count:  hft.met_count,
-    total:      7,
-    all_met:    hft.all_met,
-    signal:     sig ? {
-      direction:  sig.direction,
-      entry:      sig.entry,
-      sl:         sig.sl,
-      tp:         sig.tp2,
-      confidence: sig.confidence,
-      reasoning:  `[HFT] ${sig.reasoning}`,
-      timestamp:  sig.timestamp,
-      rr:         `1 : ${rr > 0 ? rr.toFixed(1) : "1.2"}`,
-    } : null,
-    indicators: { rsi: null, ema50: null, ema21: null, vwap: null, atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null },
-  };
-}
-
-function orbToStrategy(orb: ReturnType<typeof useORBStrategy>): StrategyResult {
-  return {
-    bias:       orb.bias,
-    conditions: orb.conditions,
-    met_count:  orb.met_count,
-    total:      6,
-    all_met:    orb.all_met,
-    signal:     orb.signal ? {
-      direction:  orb.signal.direction,
-      entry:      orb.signal.entry,
-      sl:         orb.signal.sl,
-      tp:         orb.signal.tp,
-      confidence: orb.signal.confidence,
-      reasoning:  `[ORB-30] ${orb.signal.reasoning}`,
-      timestamp:  orb.signal.timestamp,
-      rr:         orb.signal.rr,
-    } : null,
-    indicators: { rsi: null, ema50: null, ema21: null, vwap: null, atr: null, atr_pct: null, vol_ratio: null, ema50_slope: null },
-  };
-}
-
-// ─── Mini Master Agent Chat ───────────────────────────────────────────────────
-function MiniMasterAgentChat({ masterAgent }: { masterAgent: ReturnType<typeof useMasterAgent> }) {
-  const [input, setInput] = useState("");
-  const { chat: messages, sendMessage } = masterAgent;
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const GRADE_COL: Record<string, string> = {
-    "S+": "#fde68a", "S": "#fbbf24", "A+": "#34d399", "A": "#22c55e",
-    "B+": "#60a5fa", "B": "#3b82f6", "C": "#a78bfa", "X": "#374151",
-  };
-  const gradCol = GRADE_COL[masterAgent.grade] ?? "#60aaff";
-
-  const submit = () => {
-    const q = input.trim();
-    if (!q) return;
-    sendMessage(q);
-    setInput("");
-  };
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
-
-  return (
-    <div className="card overflow-hidden flex flex-col" style={{ minHeight: 280 }}>
-      <div className="flex items-center gap-2 px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <Brain size={12} style={{ color: gradCol }} />
-        <span className="text-[12px] font-bold text-white">Master Agent · Chat</span>
-        <span className="text-[8px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${gradCol}18`, color: gradCol, border: `1px solid ${gradCol}30` }}>
-          {masterAgent.grade} · {masterAgent.conviction}/100
-        </span>
-        <span className={`ml-auto text-[9px] font-bold ${masterAgent.direction === "LONG" ? "text-green-400" : masterAgent.direction === "SHORT" ? "text-red-400" : "text-neutral-600"}`}>
-          {masterAgent.direction === "LONG" ? "▲ LONG" : masterAgent.direction === "SHORT" ? "▼ SHORT" : "FLAT"}
-        </span>
-      </div>
-      <div className="flex-1 overflow-y-auto p-3 space-y-2" style={{ maxHeight: 220 }}>
-        {messages.slice(-10).map((m: { role: string; content: string }, i: number) => (
-          <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] rounded-xl px-3 py-2 text-[10px] leading-relaxed ${m.role === "user" ? "bg-blue-500/10 border border-blue-500/20 text-blue-200" : "text-neutral-300"}`}
-              style={m.role !== "user" ? { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" } : {}}>
-              {m.content}
-            </div>
-          </div>
-        ))}
-        {messages.length === 0 && (
-          <div className="text-center py-6 text-[10px] text-neutral-700">
-            Ask the Master Agent anything — signals, regime, strategies…
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-      <div className="flex items-center gap-2 px-3 py-2.5 flex-shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-        <input
-          className="flex-1 bg-transparent text-[10px] text-white placeholder-neutral-700 outline-none"
-          placeholder="Ask signal, regime, strategy performance…"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && submit()}
-        />
-        <button
-          onClick={submit}
-          disabled={!input.trim()}
-          className="w-6 h-6 rounded-lg flex items-center justify-center disabled:opacity-30 transition-opacity"
-          style={{ background: "rgba(10,132,255,0.2)", border: "1px solid rgba(10,132,255,0.3)" }}
-        >
-          <Send size={10} style={{ color: "#60aaff" }} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main inner component (wrapped in SolanaProvider) ────────────────────────
-// ─── Config panel — draft state + Make Changes ────────────────────────────────
-// ─── Strategy metadata ─────────────────────────────────────────────────────
-const STRATEGIES = [
-  { key: "momentum", label: "Momentum 15m", color: "#0a84ff", icon: "📈", tf: "15m" },
-  { key: "hft",      label: "HFT Scalper",  color: "#a78bfa", icon: "⚡", tf: "1m"  },
-  { key: "orb",      label: "ORB-30",       color: "#f59e0b", icon: "🔶", tf: "1m"  },
-  { key: "obi",      label: "OBI Scalper",   color: "#10b981", icon: "📊", tf: "1m"  },
-  { key: "grid",     label: "Grid $50",      color: "#06b6d4", icon: "⊞",  tf: "cont" },
-] as const;
-
-type StratOverride = { enabled: boolean; size_usdc: number; leverage: number; min_confidence: number; min_conditions: number };
-const DEFAULT_STRAT: StratOverride = { enabled: true, size_usdc: 100, leverage: 1, min_confidence: 0.50, min_conditions: 2 };
-
+// ─── Config panel ─────────────────────────────────────────────────────────────
 function ConfigPanel({
   serverConfig,
   onSave,
@@ -416,11 +75,11 @@ function ConfigPanel({
   serverConfig: ServerAgentConfig | null;
   onSave: (patch: Partial<ServerAgentConfig>) => Promise<void>;
 }) {
-  const [draft, setDraft]     = useState<ServerAgentConfig | null>(null);
-  const [saving, setSaving]   = useState(false);
-  const [saved, setSaved]     = useState(false);
-  const [dirty, setDirty]     = useState(false);
-  const [tab, setTab]         = useState<"global" | string>("global");
+  const [draft, setDraft]   = useState<ServerAgentConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved]   = useState(false);
+  const [dirty, setDirty]   = useState(false);
+  const [tab, setTab]       = useState<"global" | string>("global");
 
   useEffect(() => {
     if (serverConfig && !dirty) setDraft(serverConfig);
@@ -458,7 +117,7 @@ function ConfigPanel({
   const d = draft ?? serverConfig;
   if (!d) {
     return (
-      <div className="col-span-12 lg:col-span-5 card p-5 flex items-center gap-3 text-neutral-600">
+      <div className="card p-5 flex items-center gap-3 text-neutral-600">
         <Loader2 size={14} className="animate-spin" />
         <span className="text-[12px]">Loading agent config…</span>
       </div>
@@ -468,7 +127,8 @@ function ConfigPanel({
   const activeStrat = tab !== "global" ? (d.strategy_overrides?.[tab] ?? DEFAULT_STRAT) : null;
 
   return (
-    <div className="col-span-12 lg:col-span-5 card p-5 space-y-4">
+    <div className="card p-5 space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Shield size={13} className="text-neutral-500" />
@@ -481,7 +141,7 @@ function ConfigPanel({
         )}
       </div>
 
-      {/* ── Tab bar: Global + per-strategy ──────────────────────────────── */}
+      {/* Tab bar */}
       <div className="flex gap-1 overflow-x-auto pb-1 -mx-1 px-1">
         <button onClick={() => setTab("global")}
           className="px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all whitespace-nowrap flex-shrink-0"
@@ -491,8 +151,7 @@ function ConfigPanel({
           ⚙ Global
         </button>
         {STRATEGIES.map(s => {
-          const sOver = d.strategy_overrides?.[s.key];
-          const isEnabled = sOver?.enabled ?? true;
+          const isEnabled = d.strategy_overrides?.[s.key]?.enabled ?? true;
           return (
             <button key={s.key} onClick={() => setTab(s.key)}
               className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1"
@@ -507,7 +166,7 @@ function ConfigPanel({
         })}
       </div>
 
-      {/* ═══════ GLOBAL TAB ═══════ */}
+      {/* ═══ GLOBAL TAB ═══ */}
       {tab === "global" && (
         <div className="space-y-4">
           {/* Mode */}
@@ -529,14 +188,12 @@ function ConfigPanel({
                 🔴 Live (BingX)
               </button>
             </div>
-            <div className="text-[9px] mt-1.5"
-              style={{ color: d.mode === "live" ? "#f87171" : "#4b5563" }}>
+            <div className="text-[9px] mt-1.5" style={{ color: d.mode === "live" ? "#f87171" : "#4b5563" }}>
               {d.mode === "paper"
                 ? "Simulated fills · live P&L tracking · no real money"
                 : "⚠ Real money · BingX perpetual futures · requires API keys in Railway"}
             </div>
 
-            {/* Live mode: risk controls */}
             {d.mode === "live" && (
               <div className="mt-3 space-y-3 p-3 rounded-xl border border-red-500/20 bg-red-500/5">
                 <div className="text-[9px] font-bold text-red-400 uppercase tracking-wide flex items-center gap-1.5">
@@ -548,8 +205,7 @@ function ConfigPanel({
                     <span className="text-[9px] font-mono text-red-400">${d.daily_loss_limit ?? 200}</span>
                   </div>
                   <input type="range" min={50} max={1000} step={50} value={d.daily_loss_limit ?? 200}
-                    onChange={e => set("daily_loss_limit", Number(e.target.value))}
-                    className="w-full accent-red-500" />
+                    onChange={e => set("daily_loss_limit", Number(e.target.value))} className="w-full accent-red-500" />
                   <div className="flex justify-between text-[8px] text-neutral-700 mt-0.5"><span>$50</span><span>$1000</span></div>
                 </div>
                 <div>
@@ -558,8 +214,7 @@ function ConfigPanel({
                     <span className="text-[9px] font-mono text-orange-400">${d.max_position_usdc ?? 500}</span>
                   </div>
                   <input type="range" min={50} max={2000} step={50} value={d.max_position_usdc ?? 500}
-                    onChange={e => set("max_position_usdc", Number(e.target.value))}
-                    className="w-full accent-orange-500" />
+                    onChange={e => set("max_position_usdc", Number(e.target.value))} className="w-full accent-orange-500" />
                   <div className="flex justify-between text-[8px] text-neutral-700 mt-0.5"><span>$50</span><span>$2000</span></div>
                 </div>
               </div>
@@ -586,7 +241,7 @@ function ConfigPanel({
             </div>
           </div>
 
-          {/* Default Min confidence */}
+          {/* Min confidence */}
           <div>
             <div className="flex justify-between mb-1.5">
               <label className="text-[10px] text-neutral-600">Default Min Confidence</label>
@@ -597,7 +252,7 @@ function ConfigPanel({
             <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>Aggressive (40%)</span><span>Conservative (95%)</span></div>
           </div>
 
-          {/* Default Min conditions */}
+          {/* Min conditions */}
           <div>
             <div className="flex justify-between mb-1.5">
               <label className="text-[10px] text-neutral-600">Default Min Conditions</label>
@@ -612,7 +267,7 @@ function ConfigPanel({
           <div className="flex items-center justify-between py-3 px-4 rounded-xl border border-neutral-800 bg-neutral-900">
             <div>
               <div className="text-[11px] font-semibold text-white">Auto-Execute</div>
-              <div className="text-[9px] text-neutral-600 mt-0.5">Execute immediately on signal</div>
+              <div className="text-[9px] text-neutral-600 mt-0.5">Execute immediately on signal — no manual confirm</div>
             </div>
             <button onClick={() => set("auto_execute", !d.auto_execute)}
               className="relative w-10 h-5 rounded-full border transition-colors flex-shrink-0"
@@ -645,10 +300,10 @@ function ConfigPanel({
             </div>
           </div>
 
-          {/* Per-strategy summary */}
+          {/* Per-strategy overrides summary */}
           <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-3">
             <div className="text-[9px] text-neutral-600 mb-2 font-bold uppercase tracking-wide">Per-Strategy Overrides</div>
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               {STRATEGIES.map(s => {
                 const so = d.strategy_overrides?.[s.key] ?? DEFAULT_STRAT;
                 return (
@@ -668,13 +323,13 @@ function ConfigPanel({
         </div>
       )}
 
-      {/* ═══════ STRATEGY TAB ═══════ */}
+      {/* ═══ STRATEGY TAB ═══ */}
       {tab !== "global" && activeStrat && (() => {
         const meta = STRATEGIES.find(s => s.key === tab)!;
+        if (!meta) return null;
         const so = activeStrat;
         return (
           <div className="space-y-4">
-            {/* Strategy header */}
             <div className="flex items-center gap-2 p-3 rounded-xl border bg-neutral-900" style={{ borderColor: `${meta.color}30` }}>
               <span className="text-lg">{meta.icon}</span>
               <div className="flex-1">
@@ -698,7 +353,6 @@ function ConfigPanel({
               </div>
             )}
 
-            {/* Position Size */}
             <div>
               <label className="text-[10px] text-neutral-600 block mb-1.5">Position Size (USDC)</label>
               <div className="flex gap-2">
@@ -718,7 +372,6 @@ function ConfigPanel({
               </div>
             </div>
 
-            {/* Leverage */}
             <div>
               <div className="flex justify-between mb-2">
                 <label className="text-[10px] text-neutral-600">Leverage</label>
@@ -737,46 +390,34 @@ function ConfigPanel({
                   </button>
                 ))}
               </div>
-              {so.leverage >= 10 && (
-                <div className="text-[9px] text-red-400/70 mt-1.5 text-center">
-                  {so.leverage}× leverage — high risk · tight SL mandatory
-                </div>
-              )}
             </div>
 
-            {/* Min Confidence */}
             <div>
               <div className="flex justify-between mb-1.5">
                 <label className="text-[10px] text-neutral-600">Min Confidence</label>
                 <span className="text-[10px] font-mono" style={{ color: meta.color }}>{(so.min_confidence * 100).toFixed(0)}%</span>
               </div>
               <input type="range" min={0.4} max={0.95} step={0.05} value={so.min_confidence}
-                onChange={e => setStrat(tab, "min_confidence", Number(e.target.value))}
-                className="w-full accent-blue-500" />
-              <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>40%</span><span>95%</span></div>
+                onChange={e => setStrat(tab, "min_confidence", Number(e.target.value))} className="w-full accent-blue-500" />
             </div>
 
-            {/* Min Conditions */}
             <div>
               <div className="flex justify-between mb-1.5">
                 <label className="text-[10px] text-neutral-600">Min Conditions Met</label>
                 <span className="text-[10px] font-mono" style={{ color: meta.color }}>{so.min_conditions}+</span>
               </div>
               <input type="range" min={2} max={7} step={1} value={so.min_conditions}
-                onChange={e => setStrat(tab, "min_conditions", Number(e.target.value))}
-                className="w-full accent-blue-500" />
-              <div className="flex justify-between text-[9px] text-neutral-700 mt-1"><span>Loose (2)</span><span>Strict (7)</span></div>
+                onChange={e => setStrat(tab, "min_conditions", Number(e.target.value))} className="w-full accent-blue-500" />
             </div>
 
-            {/* Effective config summary */}
             <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-3">
               <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Effective Config</div>
               <div className="grid grid-cols-2 gap-2">
                 {([
-                  ["Size",       `$${so.size_usdc}`, meta.color],
-                  ["Leverage",   `${so.leverage}×`, so.leverage >= 10 ? "#ef4444" : so.leverage >= 5 ? "#f59e0b" : "#22c55e"],
-                  ["Confidence", `${(so.min_confidence * 100).toFixed(0)}%`, meta.color],
-                  ["Conditions", `${so.min_conditions}+ req`, meta.color],
+                  ["Size",       `$${so.size_usdc}`,                               meta.color],
+                  ["Leverage",   `${so.leverage}×`,                                so.leverage >= 10 ? "#ef4444" : so.leverage >= 5 ? "#f59e0b" : "#22c55e"],
+                  ["Confidence", `${(so.min_confidence * 100).toFixed(0)}%`,       meta.color],
+                  ["Conditions", `${so.min_conditions}+ req`,                      meta.color],
                 ] as const).map(([l, v, c]) => (
                   <div key={l} className="flex justify-between py-1">
                     <span className="text-[9px] text-neutral-600">{l}</span>
@@ -794,7 +435,7 @@ function ConfigPanel({
         );
       })()}
 
-      {/* ── Make Changes button ─────────────────────────────────────────── */}
+      {/* Save / Reset */}
       <div className="flex items-center gap-2 pt-1">
         <button onClick={handleSave} disabled={saving || !dirty}
           className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-[12px] transition-all"
@@ -819,1274 +460,123 @@ function ConfigPanel({
   );
 }
 
-function AgentContent() {
-  const [livePrice, setLivePrice] = useState<number | undefined>(undefined);
+// ─── BingX Live Executor panel ────────────────────────────────────────────────
+function BingXPanel({
+  executor,
+  onResetCircuit,
+}: {
+  executor: LiveExecutorStatus | null;
+  onResetCircuit: () => void;
+}) {
+  if (!executor) {
+    return (
+      <div className="card p-5 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <Cpu size={13} className="text-neutral-500" />
+          <span className="text-[13px] font-semibold text-white">BingX Live Executor</span>
+        </div>
+        <div className="flex items-center gap-2 py-4 text-neutral-600 text-[12px]">
+          <WifiOff size={13} /> Not available in paper mode
+        </div>
+      </div>
+    );
+  }
 
-  // ── 24/7 backend agent — source of truth for positions/P&L/trades/log ──
-  const server = useServerAgent();
-
-  // ── 15m candles (Momentum) ────────────────────────────────────────────
-  const [candles15m, setCandles15m] = useState<BinanceCandle[]>([]);
-  // ── 1m candles (HFT + ORB — needs 300 bars for ORB session history) ──
-  const [candles1m,  setCandles1m]  = useState<BinanceCandle[]>([]);
-  const [orderBook,  setOrderBook]  = useState<BinanceOrderBook | null>(null);
-  const { push: pushTrade, get: getTrades } = useAggTradeBuffer();
-  const [aggSnap, setAggSnap] = useState<BinanceAggTrade[]>([]);
-  const aggSnapTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Chart candles (1m for display)
-  const [candles, setCandles] = useState<BinanceCandle[]>([]);
-
-  // Seed both timeframes on mount
-  useEffect(() => {
-    seedCandles("15m").then(c => setCandles15m(c));
-    seedCandles("1m").then(c  => { setCandles1m(c); setCandles(c); });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Snapshot aggTrades every 2s so HFT hook re-renders
-  useEffect(() => {
-    aggSnapTimer.current = setInterval(() => setAggSnap([...getTrades()]), 2000);
-    return () => { if (aggSnapTimer.current) clearInterval(aggSnapTimer.current); };
-  }, [getTrades]);
-
-  // ── 15m stream from BingX (Momentum) ──────────────────────────────────
-  useBingXStream({
-    symbols: ["BTC/USDT"],
-    timeframe: "15m",
-    onCandle: useCallback((_sym: string, c: BinanceCandle) => {
-      setLivePrice(c.close);
-      setCandles15m(prev => {
-        if (!prev.length) return [c];
-        const lMs = new Date(prev[prev.length-1].timestamp).getTime();
-        const cMs = new Date(c.timestamp).getTime();
-        if (lMs === cMs) return [...prev.slice(0,-1), c];
-        if (cMs > lMs)   return [...prev.slice(-119), c];
-        return prev;
-      });
-    }, []),
-  });
-
-  // ── 1m stream from BingX (HFT + ORB) — keep 299 bars ─────────────────
-  useBingXStream({
-    symbols: ["BTC/USDT"],
-    timeframe: "1m",
-    onCandle: useCallback((_sym: string, c: BinanceCandle) => {
-      setLivePrice(c.close);
-      setCandles1m(prev => {
-        const updated = !prev.length ? [c] : (() => {
-          const lMs = new Date(prev[prev.length-1].timestamp).getTime();
-          const cMs = new Date(c.timestamp).getTime();
-          if (lMs === cMs) return [...prev.slice(0,-1), c];
-          if (cMs > lMs)   return [...prev.slice(-299), c];
-          return prev;
-        })();
-        setCandles(updated);
-        return updated;
-      });
-    }, []),
-    onOrderBook: useCallback((ob: BinanceOrderBook) => setOrderBook(ob), []),
-    onAggTrade:  useCallback((t: BinanceAggTrade) => pushTrade(t), [pushTrade]),
-  });
-
-  // ── All 5 strategy engines run in parallel always ─────────────────────
-  const momentumResult = useStrategyEngine(candles15m);
-  const hftResult      = useHFTScalper(candles1m, orderBook, aggSnap);
-  const orbResult      = useORBStrategy(candles1m);
-  const obiResult      = useOBIScalper(candles1m, orderBook);
-  const gridResult     = useGridStrategy(
-    candles1m,
-    candles1m.length > 0 ? candles1m[candles1m.length - 1].close : 0,
-    server.gridState,
-  );
-
-  // ── Strategy slots for the multi-agent hook ──────────────────────────
-  const strategies = useMemo(() => [
-    { result: momentumResult,           name: "Momentum 15m", key: "momentum" },
-    { result: hftToStrategy(hftResult), name: "HFT Scalper",  key: "hft"      },
-    { result: orbToStrategy(orbResult), name: "ORB-30",        key: "orb"      },
-    { result: obiResult,                name: "OBI Scalper",   key: "obi"      },
-  ], [momentumResult, hftResult, orbResult, obiResult]);
-
-  // ── For UI display only: best active result ───────────────────────────
-  const { activeResult, firingStrategy } = useMemo(() => {
-    const candidates = strategies;
-    const withSignal = candidates.filter(c => c.result.signal !== null);
-    if (withSignal.length > 0) {
-      const best = withSignal.reduce((a, b) =>
-        (b.result.signal!.confidence > a.result.signal!.confidence) ? b : a
-      );
-      return { activeResult: best.result, firingStrategy: best.name };
-    }
-    const best = candidates.reduce((a, b) => b.result.met_count > a.result.met_count ? b : a);
-    return { activeResult: best.result, firingStrategy: best.name };
-  }, [strategies]);
-
-  const {
-    config, updateConfig,
-    agentState, analysis,
-    trades, clearTrades,
-    scanCount, lastScan,
-    agentLog,
-    walletConnected, walletAddress,
-    forceScan,
-    openPositions, anyPositionOpen, paperStats, closePaperPosition, resetPaperAccount,
-  } = usePhantomAgent(strategies, livePrice);
-
-  const { connected } = useWallet();
-  const meta = STATE_META[agentState];
-
-  const copyAddress = useCallback(() => {
-    if (walletAddress) navigator.clipboard.writeText(walletAddress);
-  }, [walletAddress]);
+  const connected  = executor.connected ?? executor.keys_set ?? false;
+  const halted     = executor.halted;
+  const pctUsed    = executor.daily_loss_limit > 0
+    ? Math.min(Math.abs(executor.daily_pnl) / executor.daily_loss_limit * 100, 100)
+    : 0;
+  const dailyPnlColor = executor.daily_pnl >= 0 ? "#22c55e" : "#ef4444";
 
   return (
-    <div className="p-4 space-y-5">
-
+    <div className="card p-5 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white flex items-center gap-2.5">
-            <Bot size={22} className="text-blue-400" />
-            Living Agent
-            <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-1">5 STRATEGIES LIVE</span>
-            {server.running ? (
-              <span className="flex items-center gap-1.5 text-[10px] font-normal px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                RUNS 24/7 · BROWSER INDEPENDENT
-              </span>
-            ) : server.error ? (
-              <span className="flex items-center gap-1.5 text-[10px] font-normal px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400">
-                Server offline — browser only
-              </span>
-            ) : (
-              <span className="text-[10px] font-normal text-neutral-600">connecting to server…</span>
-            )}
-          </h1>
-          <p className="text-xs text-neutral-600 mt-0.5">
-            Momentum 15m · HFT Scalper 1m · ORB-30 1m · OBI Scalper 1m — all parallel · independent positions per strategy
-          </p>
+        <div className="flex items-center gap-2">
+          <Cpu size={13} className="text-amber-400" />
+          <span className="text-[13px] font-semibold text-white">BingX Live Executor</span>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Kill Switch */}
-          {server.running && (
-            <button
-              onClick={() => server.updateConfig({ enabled: false })}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all hover:scale-105 active:scale-95"
-              style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: "#ef4444" }}
-            >
-              <Square size={10} />STOP ALL
-            </button>
-          )}
-          <WalletInfo />
-          <div className="phantom-btn-wrapper">
-            <WalletMultiButton />
-          </div>
+        <div className={`flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-lg border ${
+          halted ? "bg-red-500/10 border-red-500/30 text-red-400" :
+          connected ? "bg-green-500/10 border-green-500/30 text-green-400" :
+          "bg-neutral-800 border-neutral-700 text-neutral-500"
+        }`}>
+          {halted ? <><AlertTriangle size={10} /> HALTED</> :
+           connected ? <><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> LIVE</> :
+           <><WifiOff size={10} /> DISCONNECTED</>}
         </div>
       </div>
 
-      {/* Agent state bar */}
-      <div className="card px-5 py-4 flex items-center gap-6">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Bot size={32} style={{ color: meta.color }} />
-            {meta.pulse && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full animate-ping" style={{ background: meta.color, opacity: 0.6 }} />}
-            {meta.pulse && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full" style={{ background: meta.color }} />}
-          </div>
+      {/* Circuit breaker alert */}
+      {halted && (
+        <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/8 flex items-center justify-between gap-3">
           <div>
-            <div className="text-[10px] text-neutral-600 mb-0.5">Agent State</div>
-            <div className="text-sm font-bold" style={{ color: meta.color }}>{meta.label}</div>
+            <div className="text-[11px] font-bold text-red-400">Circuit Breaker Triggered</div>
+            {executor.message && <div className="text-[9px] text-red-400/70 mt-0.5">{executor.message}</div>}
           </div>
+          <button onClick={onResetCircuit}
+            className="px-3 py-1.5 rounded-lg text-[10px] font-bold border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors flex-shrink-0">
+            Reset
+          </button>
         </div>
+      )}
 
-        <div className="h-10 w-px bg-neutral-800" />
+      {executor.last_error && (
+        <div className="p-2.5 rounded-lg border border-orange-500/20 bg-orange-500/5 text-[10px] text-orange-400/80">
+          Last error: {executor.last_error}
+        </div>
+      )}
 
+      {/* Account */}
+      <div className="grid grid-cols-2 gap-2">
         {[
-          ["Scans Run",  (server.scanCount > 0 ? server.scanCount : scanCount).toString()],
-          ["Last Scan",  server.lastScan ?? lastScan ?? "—"],
-          ["Firing",     firingStrategy],
-          ["Open Pos",   server.loading ? "…" : `${server.openPositions.length} active`],
-          ["Server P&L", server.stats ? `${server.stats.total_pnl >= 0 ? "+" : ""}$${server.stats.total_pnl.toFixed(2)}` : "—"],
-          ["Mode",       server.config?.mode === "live" ? "🔴 LIVE+SHADOW" : "📄 PAPER TRAINING"],
-        ].map(([label, val]) => (
-          <div key={label}>
-            <div className="text-[9px] text-neutral-600 mb-0.5">{label}</div>
-            <div className="text-[12px] font-semibold text-white">{val}</div>
+          ["Account Balance",  executor.account_balance != null ? `$${executor.account_balance.toFixed(2)}` : "—", "text-white"],
+          ["Free Balance",     executor.free_balance    != null ? `$${executor.free_balance.toFixed(2)}`    : "—", "text-blue-400"],
+          ["Open Positions",   `${executor.open_count}`,                                                           "text-white"],
+          ["Max Leverage",     executor.max_leverage ? `${executor.max_leverage}×` : "—",                         "text-orange-400"],
+        ].map(([l, v, cls]) => (
+          <div key={l} className="rounded-xl p-3 bg-neutral-900 border border-neutral-800">
+            <div className="text-[8px] text-neutral-600 mb-0.5">{l}</div>
+            <div className={`text-[13px] font-bold font-mono ${cls}`}>{v}</div>
           </div>
         ))}
-
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => { server.forceScan(); forceScan(); }}
-            className="p-2 rounded-lg hover:bg-neutral-800 text-neutral-600 hover:text-white transition-colors"
-            title="Force scan now">
-            <RefreshCw size={14} className={agentState === "scanning" ? "animate-spin" : ""} />
-          </button>
-
-          {/* Server agent start/stop */}
-          <button
-            onClick={() => server.running ? server.stopAgent() : server.startAgent()}
-            className="flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-[13px] transition-all"
-            style={server.running
-              ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
-              : { background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }
-            }>
-            <Power size={14} />
-            {server.running ? "Stop Agent" : "Start Agent"}
-          </button>
-        </div>
       </div>
 
-      {/* Server data status — shows if agent has live data */}
-      {server.status && (
-        <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-neutral-800 bg-neutral-900/50 text-[10px] flex-wrap">
-          <div className={`flex items-center gap-1.5 ${server.livePrice > 0 ? "text-green-400" : "text-red-400"}`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${server.livePrice > 0 ? "bg-green-400 animate-pulse" : "bg-red-500"}`} />
-            {server.livePrice > 0 ? `BTC $${server.livePrice.toLocaleString()}` : "No price feed"}
-          </div>
-          <div className="text-neutral-600">·</div>
-          <div className="text-neutral-400">
-            Enabled: <span className={server.config?.enabled ? "text-green-400" : "text-red-400"}>{server.config?.enabled ? "YES" : "NO"}</span>
-          </div>
-          <div className="text-neutral-600">·</div>
-          <div className="text-neutral-400">
-            Auto-Execute: <span className={server.config?.auto_execute ? "text-green-400" : "text-red-400"}>{server.config?.auto_execute ? "YES" : "NO"}</span>
-          </div>
-          <div className="text-neutral-600">·</div>
-          <div className="text-neutral-400">Scans: <span className="text-white">{server.scanCount}</span></div>
-          {(!server.config?.enabled || !server.config?.auto_execute) && (
-            <button onClick={() => server.startAgent()}
-              className="ml-auto px-3 py-1 rounded-lg bg-green-500/15 border border-green-500/30 text-green-400 text-[10px] font-bold hover:bg-green-500/25 transition-colors">
-              Enable Trading
-            </button>
-          )}
+      {/* Daily P&L + circuit breaker progress */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-neutral-600">Daily P&L</span>
+          <span className="font-mono font-bold" style={{ color: dailyPnlColor }}>
+            {fmtPnl(executor.daily_pnl)}
+          </span>
         </div>
-      )}
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-neutral-600">Loss Limit</span>
+          <span className="font-mono text-neutral-400">${executor.daily_loss_limit}</span>
+        </div>
+        <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-500"
+            style={{
+              width: `${pctUsed}%`,
+              background: pctUsed > 80 ? "#ef4444" : pctUsed > 50 ? "#f59e0b" : "#22c55e",
+            }}
+          />
+        </div>
+        <div className="text-[8px] text-neutral-700 text-right">{pctUsed.toFixed(0)}% of daily limit used</div>
+      </div>
 
-      {(server.config?.mode ?? "paper") === "paper" && (
-        <div className="flex items-center gap-3 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
-          <FileText size={14} className="text-violet-400 flex-shrink-0" />
-          <div className="text-[12px] text-violet-300">
-            <strong>Paper training active</strong> — building trade history for Master Brain · strategies must prove &gt;45% win rate on 10+ trades before live BingX execution
-          </div>
-        </div>
-      )}
-      {server.config?.mode === "live" && (
-        <div className="flex items-center gap-3 p-3 rounded-xl border border-red-500/30 bg-red-500/8">
-          <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
-          <div className="text-[12px] text-red-300">
-            <strong>Dual mode active</strong> — live-qualified strategies execute on BingX · unqualified strategies shadow-train on paper · Brain learns from both
-          </div>
-        </div>
-      )}
-
-      {/* ── All-strategy live status strip ───────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {/* Risk settings */}
+      <div className="flex gap-3 pt-1 border-t border-neutral-800">
         {[
-          {
-            name: "Momentum 15m",
-            bias: momentumResult.bias,
-            met: momentumResult.met_count,
-            total: momentumResult.total ?? 7,
-            hasSignal: !!momentumResult.signal,
-            conf: momentumResult.signal?.confidence,
-            color: "#0a84ff",
-          },
-          {
-            name: "HFT Scalper",
-            bias: hftResult.bias,
-            met: hftResult.met_count,
-            total: 7,
-            hasSignal: !!hftResult.signal,
-            conf: hftResult.signal?.confidence,
-            color: "#a78bfa",
-          },
-          {
-            name: orbResult.status === "building_orb" ? `ORB-30 ★ (${orbResult.indicators.bars_in_orb}/30)`
-                : orbResult.status === "past_window"  ? `ORB-30 ★ · next ${orbResult.indicators.next_session}`
-                : "ORB-30 ★",
-            bias: orbResult.bias,
-            met: orbResult.met_count,
-            total: orbResult.total ?? 6,
-            hasSignal: !!orbResult.signal,
-            conf: orbResult.signal?.confidence,
-            color: "#f59e0b",
-          },
-          {
-            name: "OBI Scalper 1m",
-            bias: obiResult.bias,
-            met: obiResult.met_count,
-            total: 3,
-            hasSignal: !!obiResult.signal,
-            conf: obiResult.signal?.confidence,
-            color: "#10b981",
-          },
-          {
-            name: "Grid $50",
-            bias: gridResult.bias === "stopped" || gridResult.bias === "paused" ? "neutral" : gridResult.bias,
-            met: gridResult.metCount,
-            total: gridResult.total,
-            hasSignal: !!gridResult.signal,
-            conf: gridResult.signal?.confidence,
-            color: "#06b6d4",
-          },
-        ].map(s => {
-          const biasColor = s.bias === "long" ? "#22c55e" : s.bias === "short" ? "#ef4444" : "#4b5563";
-          const pct = Math.round(s.met / s.total * 100);
-          return (
-            <div key={s.name} className="card p-4 relative overflow-hidden"
-              style={s.hasSignal ? { border: `1px solid ${s.color}40`, boxShadow: `0 0 16px ${s.color}15` } : {}}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold text-white">{s.name}</span>
-                {s.hasSignal ? (
-                  <span className="text-[8px] font-bold px-2 py-0.5 rounded-full animate-pulse"
-                    style={{ background: `${s.color}20`, color: s.color, border: `1px solid ${s.color}40` }}>
-                    ⚡ SIGNAL
-                  </span>
-                ) : (
-                  <span className="text-[8px] text-neutral-700 px-2 py-0.5 rounded-full border border-neutral-800">SCANNING</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[10px] font-bold" style={{ color: biasColor }}>{s.bias.toUpperCase()}</span>
-                <span className="text-[9px] text-neutral-600">{s.met}/{s.total} conds</span>
-                {s.conf != null && <span className="text-[9px] ml-auto" style={{ color: s.color }}>{(s.conf * 100).toFixed(0)}% conf</span>}
-              </div>
-              <div className="h-1 rounded-full bg-neutral-800 overflow-hidden">
-                <div className="h-full rounded-full transition-all duration-500"
-                  style={{ width: `${pct}%`, background: s.hasSignal ? s.color : `${s.color}60` }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Config + log grid */}
-      <div className="grid grid-cols-12 gap-4">
-
-        {/* Config panel — wired to server.config with draft + Make Changes */}
-        <ConfigPanel serverConfig={server.config} onSave={server.updateConfig} />
-
-        {/* Right: conditions + HFT meters + log */}
-        <div className="col-span-12 lg:col-span-7 space-y-4">
-
-          {/* HFT microstructure meters — always visible */}
-          {(
-            <div className="card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Zap size={13} className="text-yellow-400" />
-                <span className="text-[13px] font-semibold text-white">Microstructure Meters</span>
-                <span className="text-[9px] text-yellow-400 ml-auto flex items-center gap-1">
-                  <span className="w-1 h-1 rounded-full bg-yellow-400 animate-pulse" />100 ms depth
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                <HFTBar label="Order Book Imbalance (OBI)" value={hftResult.indicators.obi} min={-1} max={1} goodHigh />
-                <HFTBar label="Trade Flow Imbalance (TFI)" value={hftResult.indicators.tfi} min={-1} max={1} goodHigh />
-              </div>
-              <div className="grid grid-cols-4 gap-3 mt-4">
-                {[
-                  ["Bid",         hftResult.indicators.bid?.toFixed(1) ?? "—"],
-                  ["Ask",         hftResult.indicators.ask?.toFixed(1) ?? "—"],
-                  ["Spread",      hftResult.indicators.spread_ticks != null ? `${hftResult.indicators.spread_ticks.toFixed(1)} tks` : "—"],
-                  ["Microprice",  hftResult.indicators.microprice?.toFixed(1) ?? "—"],
-                  ["VWAP 1m",     hftResult.indicators.vwap_1m?.toFixed(1) ?? "—"],
-                  ["ATR 1m",      hftResult.indicators.atr_1m?.toFixed(1) ?? "—"],
-                  ["EMA9 5m",     hftResult.indicators.ema9_5m?.toFixed(1) ?? "—"],
-                  ["EMA21 5m",    hftResult.indicators.ema21_5m?.toFixed(1) ?? "—"],
-                ].map(([l, v]) => (
-                  <div key={l}>
-                    <div className="text-[9px] text-neutral-700">{l}</div>
-                    <div className="text-[11px] font-mono text-white">{v}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* OBI Scalper panel — always visible */}
-          {(
-            <div className="card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Activity size={13} className="text-emerald-400" />
-                <span className="text-[13px] font-semibold text-white">OBI Scalper 1m</span>
-                <span className="text-[9px] text-neutral-600 ml-1">Order Book Imbalance</span>
-                {obiResult.signal ? (
-                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 ml-auto animate-pulse font-bold">
-                    ⚡ {obiResult.signal.direction.toUpperCase()} SIGNAL
-                  </span>
-                ) : (
-                  <span className="text-[8px] text-neutral-700 ml-auto">scanning every 1m</span>
-                )}
-              </div>
-
-              {/* OBI Gauge */}
-              {(() => {
-                const obi = (obiResult as OBIResult).obi_indicators.obi ?? 0;
-                const pct = ((obi + 1) / 2 * 100);
-                const clampedPct = Math.min(Math.max(pct, 0), 100);
-                const obiColor = obi > 0.20 ? "#10b981" : obi < -0.20 ? "#ef4444" : "#6b7280";
-                return (
-                  <div className="mb-4">
-                    <div className="flex justify-between text-[9px] mb-1">
-                      <span className="text-red-400">ASK PRESSURE</span>
-                      <span style={{ color: obiColor }} className="font-bold font-mono">
-                        OBI {obi >= 0 ? "+" : ""}{obi.toFixed(3)}
-                      </span>
-                      <span className="text-green-400">BID PRESSURE</span>
-                    </div>
-                    <div className="h-2.5 bg-neutral-800 rounded-full overflow-hidden relative">
-                      <div className="absolute inset-0 flex">
-                        <div className="h-full bg-red-900/40"   style={{ width: "38%" }} />
-                        <div className="h-full bg-neutral-900"  style={{ width: "24%" }} />
-                        <div className="h-full bg-green-900/40" style={{ width: "38%" }} />
-                      </div>
-                      {/* Center line */}
-                      <div className="absolute top-0 bottom-0 w-px bg-neutral-600" style={{ left: "50%" }} />
-                      {/* OBI indicator */}
-                      <div className="absolute top-0.5 bottom-0.5 w-1.5 rounded-full transition-all duration-300"
-                        style={{ left: `calc(${clampedPct}% - 3px)`, background: obiColor }} />
-                    </div>
-                    <div className="flex justify-between text-[8px] text-neutral-700 mt-0.5">
-                      <span>−1.0</span>
-                      <span className="text-neutral-600">threshold ±{(0.20).toFixed(2)}</span>
-                      <span>+1.0</span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Indicators grid */}
-              <div className="grid grid-cols-3 gap-3 mb-3">
-                {[
-                  ["Bid Vol",  (obiResult as OBIResult).obi_indicators.bid_vol?.toFixed(2) ?? "—",  "text-green-400"],
-                  ["Ask Vol",  (obiResult as OBIResult).obi_indicators.ask_vol?.toFixed(2) ?? "—",  "text-red-400"],
-                  ["RSI(14)",  (obiResult as OBIResult).obi_indicators.rsi?.toFixed(1)    ?? "—",  (() => { const r = (obiResult as OBIResult).obi_indicators.rsi ?? 50; return r > 55 ? "text-green-400" : r < 45 ? "text-red-400" : "text-neutral-400"; })()],
-                  ["EMA9",     (obiResult as OBIResult).obi_indicators.ema9?.toFixed(1)   ?? "—",  "text-blue-400"],
-                  ["EMA21",    (obiResult as OBIResult).obi_indicators.ema21?.toFixed(1)  ?? "—",  "text-neutral-400"],
-                  ["Bias",     obiResult.bias.toUpperCase(), obiResult.bias === "long" ? "text-green-400" : obiResult.bias === "short" ? "text-red-400" : "text-neutral-500"],
-                ].map(([l, v, cls]) => (
-                  <div key={l} className="bg-neutral-900 rounded-lg p-2">
-                    <div className="text-[8px] text-neutral-600">{l}</div>
-                    <div className={`text-[11px] font-mono font-semibold ${cls}`}>{v}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Conditions checklist */}
-              <div className="space-y-1.5">
-                {obiResult.conditions.map((c, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    {c.met
-                      ? <CheckCircle2 size={10} className="text-emerald-400 flex-shrink-0" />
-                      : <XCircle     size={10} className="text-neutral-700 flex-shrink-0" />}
-                    <span className={`text-[9px] flex-1 ${c.met ? "text-neutral-300" : "text-neutral-600"}`}>{c.name}</span>
-                    <span className={`text-[9px] font-mono ${c.met ? "text-emerald-400" : "text-neutral-700"}`}>{c.value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Strategy spec */}
-              <div className="flex gap-4 mt-3 pt-3 border-t border-neutral-800">
-                {[["SL", "0.4%", "text-red-400"], ["TP", "0.8%", "text-green-400"],
-                  ["R:R", "1:2", "text-white"], ["Timeframe", "1m", "text-blue-400"],
-                  ["Max Hold", "10 min", "text-neutral-400"], ["Signals", "3/3 req", "text-emerald-400"],
-                ].map(([l, v, cls]) => (
-                  <div key={l} className="flex-1 text-center">
-                    <div className="text-[7px] text-neutral-700">{l}</div>
-                    <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ORB-30 session panel — always visible */}
-          {(
-            <div className="card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Activity size={13} className="text-amber-400" />
-                <span className="text-[13px] font-semibold text-white">ORB-30 Session</span>
-                {/* Status badge */}
-                {orbResult.status === "building_orb" && (
-                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 ml-auto animate-pulse">
-                    BUILDING {orbResult.indicators.bars_in_orb}/30
-                  </span>
-                )}
-                {orbResult.status === "watching" && (
-                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 ml-auto">
-                    WATCHING · bar {orbResult.indicators.bars_since_orb}/210
-                  </span>
-                )}
-                {orbResult.status === "past_window" && (
-                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-500 ml-auto">
-                    NEXT SIGNAL @ {orbResult.indicators.next_session}
-                  </span>
-                )}
-                {orbResult.status === "no_data" && (
-                  <span className="text-[8px] text-neutral-600 ml-auto">Loading…</span>
-                )}
-                <span className="text-[9px] text-amber-400/60 ml-2">{orbResult.indicators.session_label}</span>
-              </div>
-
-              {/* Past window notice */}
-              {orbResult.status === "past_window" && (
-                <div className="mb-3 p-2.5 rounded-lg bg-neutral-900 border border-neutral-800 text-[10px] text-neutral-500 text-center">
-                  Trade window expired ({orbResult.indicators.bars_since_orb}/210 bars) · Next ORB closes at {orbResult.indicators.next_session}
-                </div>
-              )}
-
-              {/* OR levels */}
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                {[
-                  ["OR High",    orbResult.indicators.or_high != null   ? `$${orbResult.indicators.or_high.toFixed(0)}`   : "—", "text-green-400"],
-                  ["OR Low",     orbResult.indicators.or_low != null    ? `$${orbResult.indicators.or_low.toFixed(0)}`    : "—", "text-red-400"],
-                  ["OR Range",   orbResult.indicators.or_range_pct != null ? `${orbResult.indicators.or_range_pct.toFixed(2)}%` : "—", "text-neutral-300"],
-                  ["15m EMA20",  orbResult.indicators.ema20_15m != null ? `$${orbResult.indicators.ema20_15m.toFixed(0)}` : "—", "text-blue-400"],
-                  ["Last Price", orbResult.indicators.last_price != null? `$${orbResult.indicators.last_price.toFixed(0)}`: "—", "text-white"],
-                  ["Vol Avg",    orbResult.indicators.session_vol_avg != null ? orbResult.indicators.session_vol_avg.toFixed(1) : "—", "text-neutral-400"],
-                ].map(([l, v, cls]) => (
-                  <div key={l} className="bg-neutral-900 rounded-lg p-2.5">
-                    <div className="text-[9px] text-neutral-600 mb-0.5">{l}</div>
-                    <div className={`text-[12px] font-mono font-semibold ${cls}`}>{v}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* ORB progress */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-[9px] text-neutral-600">
-                  <span>ORB window ({orbResult.indicators.bars_in_orb}/30 bars)</span>
-                  <span>{orbResult.current_session?.or_established ? "✓ Established" : "Building…"}</span>
-                </div>
-                <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full bg-amber-400 transition-all duration-300"
-                    style={{ width: `${Math.min(orbResult.indicators.bars_in_orb / 30 * 100, 100)}%` }} />
-                </div>
-                {orbResult.indicators.bars_since_orb > 0 && (
-                  <div className="text-[9px] text-neutral-600 flex justify-between mt-1">
-                    <span>Trade window: {orbResult.indicators.bars_since_orb}/210 bars</span>
-                    <span className={orbResult.bias === "long" ? "text-green-400" : orbResult.bias === "short" ? "text-red-400" : "text-neutral-500"}>
-                      Bias: {orbResult.bias.toUpperCase()}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Backtest stats strip */}
-              <div className="flex gap-4 mt-4 pt-3 border-t border-neutral-800">
-                {[["5yr Return", "+94.3%", "text-green-400"], ["Win Rate", "55.3%", "text-blue-400"],
-                  ["R:R", "2.25:1", "text-white"], ["Profit Factor", "1.81", "text-amber-400"],
-                  ["Sharpe", "1.74", "text-violet-400"], ["Max DD", "−13.8%", "text-red-400"],
-                ].map(([l, v, cls]) => (
-                  <div key={l} className="flex-1 text-center">
-                    <div className="text-[8px] text-neutral-700">{l}</div>
-                    <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Grid $50 Strategy panel */}
-          {(
-            <div className="card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="text-cyan-400 flex-shrink-0">
-                  <rect x="0.5" y="0.5" width="12" height="12" rx="1.5" stroke="currentColor" strokeWidth="1"/>
-                  <line x1="0.5" y1="4.5"  x2="12.5" y2="4.5"  stroke="currentColor" strokeWidth="0.8"/>
-                  <line x1="0.5" y1="8.5"  x2="12.5" y2="8.5"  stroke="currentColor" strokeWidth="0.8"/>
-                  <line x1="4.5" y1="0.5"  x2="4.5"  y2="12.5" stroke="currentColor" strokeWidth="0.8"/>
-                  <line x1="8.5" y1="0.5"  x2="8.5"  y2="12.5" stroke="currentColor" strokeWidth="0.8"/>
-                </svg>
-                <span className="text-[13px] font-semibold text-white">Grid $50</span>
-                <span className="text-[9px] text-neutral-600 ml-1">Arithmetic Perp Grid</span>
-                {gridResult.signal ? (
-                  <span className="text-[8px] px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/25 text-cyan-400 ml-auto animate-pulse font-bold">
-                    ⚡ BUY LEVEL HIT
-                  </span>
-                ) : (
-                  <span className={`text-[8px] ml-auto ${gridResult.bias === "stopped" ? "text-red-500" : gridResult.bias === "paused" ? "text-yellow-500" : "text-neutral-600"}`}>
-                    {gridResult.bias === "stopped" ? "⛔ OUT OF RANGE" : gridResult.bias === "paused" ? "⏸ PAUSED" : "scanning every 20s"}
-                  </span>
-                )}
-              </div>
-
-              {/* Grid visualizer — mini ladder */}
-              <div className="mb-4 bg-neutral-900 rounded-xl p-3 border border-neutral-800">
-                <div className="flex justify-between text-[8px] text-neutral-600 mb-2">
-                  <span>Grid Centre <span className="text-cyan-400 font-mono">${gridResult.gridCenter.toLocaleString()}</span></span>
-                  <span>Range <span className="font-mono">${gridResult.gridMin.toLocaleString()}–${gridResult.gridMax.toLocaleString()}</span></span>
-                </div>
-                {/* Levels ladder (closest 7) */}
-                <div className="space-y-0.5">
-                  {gridResult.levels.slice(-7).reverse().map((lvl) => {
-                    const isCurrent = lvl.price === gridResult.currentLevel;
-                    const isAbove   = lvl.price > gridResult.currentPrice;
-                    return (
-                      <div key={lvl.price}
-                        className={`flex items-center gap-2 px-2 py-1 rounded text-[9px] font-mono transition-colors ${
-                          isCurrent ? "bg-cyan-500/20 border border-cyan-500/40 text-cyan-300" :
-                          isAbove   ? "bg-green-500/5  border border-green-500/10  text-green-500" :
-                                      "bg-neutral-800/60 border border-neutral-700/40 text-neutral-500"
-                        }`}>
-                        <span className="w-3">{isAbove ? "↑" : "↓"}</span>
-                        <span className="flex-1">${lvl.price.toLocaleString()}</span>
-                        <span className={`text-[8px] ${isAbove ? "text-green-600" : "text-neutral-600"}`}>
-                          {isAbove ? "SELL" : "BUY"}
-                        </span>
-                        {isCurrent && <span className="text-[8px] text-cyan-400 font-bold">← now</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="flex justify-between text-[8px] text-neutral-700 mt-2">
-                  <span>Next buy in <span className="text-cyan-400 font-mono">${gridResult.distToNextBuy.toFixed(0)}</span></span>
-                  <span>Next sell in <span className="text-green-400 font-mono">${gridResult.distToNextSell.toFixed(0)}</span></span>
-                </div>
-              </div>
-
-              {/* Stats row */}
-              <div className="grid grid-cols-4 gap-2 mb-3">
-                {[
-                  ["Grid Size",  "$50",                         "text-cyan-400"],
-                  ["TP / SL",    "+$50 / −$50",                "text-white"],
-                  ["Max Slots",  "5 concurrent",               "text-violet-400"],
-                  ["Daily P&L",  `${gridResult.dailyPnl >= 0 ? "+" : ""}$${gridResult.dailyPnl.toFixed(0)}`, gridResult.dailyPnl >= 0 ? "text-green-400" : "text-red-400"],
-                ].map(([l, v, cls]) => (
-                  <div key={l} className="bg-neutral-900 rounded-lg p-2">
-                    <div className="text-[8px] text-neutral-600">{l}</div>
-                    <div className={`text-[10px] font-mono font-semibold ${cls}`}>{v}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Conditions checklist */}
-              <div className="space-y-1.5">
-                {gridResult.conditions.map((c, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    {c.met
-                      ? <CheckCircle2 size={10} className="text-cyan-400 flex-shrink-0" />
-                      : <XCircle     size={10} className="text-neutral-700 flex-shrink-0" />}
-                    <span className={`text-[9px] flex-1 ${c.met ? "text-neutral-300" : "text-neutral-600"}`}>{c.label}</span>
-                    <span className={`text-[9px] font-mono ${c.met ? "text-cyan-400" : "text-neutral-700"}`}>{c.value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Strategy spec footer */}
-              <div className="flex gap-3 mt-3 pt-3 border-t border-neutral-800">
-                {[["Spacing", "$50", "text-cyan-400"], ["Leverage", "30×", "text-orange-400"],
-                  ["R:R", "1:1", "text-neutral-300"], ["Timeframe", "continuous", "text-blue-400"],
-                  ["Max Hold", "2 hr", "text-neutral-400"], ["Bias", "Long", "text-green-400"],
-                ].map(([l, v, cls]) => (
-                  <div key={l} className="flex-1 text-center">
-                    <div className="text-[7px] text-neutral-700">{l}</div>
-                    <div className={`text-[10px] font-bold ${cls}`}>{v}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Master Brain Panel ───────────────────────────────────── */}
-          {server.brain && (
-            <div className="card p-4 space-y-4">
-              <div className="flex items-center gap-2">
-                <Brain size={14} className="text-purple-400" />
-                <span className="text-[13px] font-semibold text-white">Master Brain</span>
-                <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 font-mono">
-                  {server.brain.regime.toUpperCase()} · {(server.brain.regime_confidence * 100).toFixed(0)}%
-                  {server.brain.regime_stability && ` · ${server.brain.regime_stability}`}
-                </span>
-                <span className="ml-auto text-[9px] text-neutral-600">
-                  Updated {server.brain.regime_updated || "—"}
-                </span>
-              </div>
-
-              {/* Portfolio + Risk strip */}
-              <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
-                {([
-                  ["Positions", `${server.brain.portfolio.position_count}`, "#0a84ff"],
-                  ["Bias", server.brain.portfolio.direction_bias, server.brain.portfolio.direction_bias === "LONG" ? "#22c55e" : server.brain.portfolio.direction_bias === "SHORT" ? "#ef4444" : "#6b7280"],
-                  ["Daily P&L", `${server.brain.portfolio.daily_pnl >= 0 ? "+" : ""}$${server.brain.portfolio.daily_pnl.toFixed(2)}`, server.brain.portfolio.daily_pnl >= 0 ? "#22c55e" : "#ef4444"],
-                  ["Trades", `${server.brain.portfolio.daily_wins}W / ${server.brain.portfolio.daily_losses}L`, "#f59e0b"],
-                  ["Loss Streak", `${server.brain.portfolio.consec_losses}`, server.brain.portfolio.consec_losses >= 3 ? "#ef4444" : "#22c55e"],
-                  ["Exposure", `$${server.brain.portfolio.gross_exposure.toFixed(0)}`, "#8b5cf6"],
-                ] as const).map(([label, val, color]) => (
-                  <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-center">
-                    <div className="text-[8px] text-neutral-600 mb-0.5">{label}</div>
-                    <div className="text-[11px] font-bold font-mono" style={{ color }}>{val}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Strategy trust + live readiness */}
-              <div>
-                <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Strategy Trust &amp; Live Readiness</div>
-                <div className="space-y-2">
-                  {Object.entries(server.brain.strategy_trust).map(([key, trust]) => {
-                    const pct = Math.min(100, Math.max(0, (trust / 2) * 100));
-                    const color = trust >= 1.2 ? "#22c55e" : trust <= 0.7 ? "#ef4444" : trust <= 0.9 ? "#f59e0b" : "#0a84ff";
-                    const stats = server.brain!.strategy_stats?.[key];
-                    const readiness = server.brain!.live_readiness?.[key];
-                    return (
-                      <div key={key} className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] text-neutral-500 w-16 text-right font-mono">{key}</span>
-                          <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
-                          </div>
-                          <span className="text-[9px] font-mono w-8 text-right" style={{ color }}>{trust.toFixed(2)}</span>
-                          {stats && (
-                            <span className="text-[8px] text-neutral-600 w-20 text-right">
-                              {stats.wins}W {stats.losses}L · {(stats.win_rate * 100).toFixed(0)}%
-                            </span>
-                          )}
-                          {readiness && (
-                            <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded font-mono ${readiness.ready ? "bg-green-500/15 text-green-400" : "bg-orange-500/15 text-orange-400"}`}>
-                              {readiness.ready ? "LIVE READY" : "TRAINING"}
-                            </span>
-                          )}
-                        </div>
-                        {readiness && !readiness.ready && (
-                          <div className="flex items-center gap-2 ml-[72px]">
-                            <div className="flex-1 h-1 bg-neutral-800 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full bg-orange-500/60 transition-all duration-500"
-                                   style={{ width: `${Math.min(100, (readiness.trades / (readiness.trades + readiness.trades_needed)) * 100)}%` }} />
-                            </div>
-                            <span className="text-[7px] text-neutral-600 font-mono">
-                              {readiness.trades}/{readiness.trades + readiness.trades_needed} trades · WR {(readiness.win_rate * 100).toFixed(0)}% (need {(readiness.win_rate_needed * 100).toFixed(0)}%)
-                            </span>
-                          </div>
-                        )}
-                        {stats && stats.live_trades !== undefined && stats.live_trades > 0 && (
-                          <div className="flex items-center gap-1 ml-[72px]">
-                            <span className="text-[7px] text-purple-400 font-mono">
-                              LIVE: {stats.live_wins ?? 0}W / {stats.live_trades - (stats.live_wins ?? 0)}L · ${(stats.live_pnl ?? 0) >= 0 ? "+" : ""}{(stats.live_pnl ?? 0).toFixed(2)}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Recent decisions feed */}
-              {server.brain.recent_decisions.length > 0 && (
-                <div>
-                  <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Recent Decisions</div>
-                  <div className="space-y-1 max-h-40 overflow-y-auto">
-                    {server.brain.recent_decisions.slice(0, 8).map((d, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1 border-b border-neutral-800/40">
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${d.approved ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
-                          {d.action}
-                        </span>
-                        {d.is_live !== undefined && (
-                          <span className={`text-[7px] px-1 py-0.5 rounded font-mono ${d.is_live ? "bg-red-500/20 text-red-300" : "bg-blue-500/15 text-blue-300"}`}>
-                            {d.is_live ? "LIVE" : "PAPER"}
-                          </span>
-                        )}
-                        <span className="text-[9px] text-white font-semibold">{d.strategy_name}</span>
-                        <span className={`text-[8px] font-mono ${d.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                          {d.direction.toUpperCase()}
-                        </span>
-                        <span className="text-[8px] text-neutral-600 flex-1 truncate">{d.reasoning}</span>
-                        <span className="text-[8px] text-purple-400 font-mono flex-shrink-0">{(d.conviction * 100).toFixed(0)}%</span>
-                        <span className="text-[8px] text-neutral-700 flex-shrink-0">{d.timestamp}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── BTC Price + Chart ────────────────────────────────────── */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <DollarSign size={13} className="text-orange-400" />
-              <span className="text-[13px] font-semibold text-white">BTC / USDT</span>
-              <span className="text-[9px] text-neutral-600 ml-1">1m · BingX</span>
-              <span className="ml-auto flex items-center gap-1.5 text-[9px] text-green-400">
-                <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live
-              </span>
-            </div>
-            {(() => {
-              const src = candles.length > 0 ? candles : candles1m;
-              if (src.length < 2) return (
-                <div className="flex items-center justify-center py-10 text-neutral-700 text-[11px] gap-2">
-                  <RefreshCw size={12} className="animate-spin" />Loading chart…
-                </div>
-              );
-              const last = src[src.length - 1];
-              const prev = src[src.length - 2];
-              const diff = last.close - prev.close;
-              const diffPct = (diff / prev.close) * 100;
-              const h24 = src.length >= 60 ? src[src.length - 60].close : src[0].close;
-              const change24 = last.close - h24;
-              const changePct24 = (change24 / h24) * 100;
-              const recent = src.slice(-120);
-              const closes = recent.map(c => c.close);
-              const hi = Math.max(...recent.map(c => c.high));
-              const lo = Math.min(...recent.map(c => c.low));
-              const range = hi - lo || 1;
-              const W = 720;
-              const H = 160;
-              const PAD = 2;
-              const bW = Math.max(1, (W - PAD * 2) / recent.length - 1);
-              return (
-                <>
-                  {/* Price header */}
-                  <div className="flex items-end gap-3 mb-3">
-                    <span className="text-2xl font-bold text-white font-mono tracking-tight">
-                      ${last.close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                    <span className={`text-[11px] font-bold font-mono ${diff >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {diff >= 0 ? "+" : ""}{diff.toFixed(2)} ({diffPct >= 0 ? "+" : ""}{diffPct.toFixed(2)}%)
-                    </span>
-                    <div className="ml-auto flex gap-4 text-[10px]">
-                      <div>
-                        <span className="text-neutral-600 mr-1">1h</span>
-                        <span className={`font-mono font-bold ${changePct24 >= 0 ? "text-green-400" : "text-red-400"}`}>
-                          {changePct24 >= 0 ? "+" : ""}{changePct24.toFixed(2)}%
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-neutral-600 mr-1">H</span>
-                        <span className="font-mono text-white">${hi.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                      </div>
-                      <div>
-                        <span className="text-neutral-600 mr-1">L</span>
-                        <span className="font-mono text-white">${lo.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {/* Candlestick chart */}
-                  <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-lg" style={{ background: "rgba(0,0,0,0.25)" }}>
-                    {recent.map((c, i) => {
-                      const x = PAD + i * ((W - PAD * 2) / recent.length) + bW / 2;
-                      const oY = H - PAD - ((c.open - lo) / range) * (H - PAD * 2);
-                      const cY = H - PAD - ((c.close - lo) / range) * (H - PAD * 2);
-                      const hY = H - PAD - ((c.high - lo) / range) * (H - PAD * 2);
-                      const lY = H - PAD - ((c.low - lo) / range) * (H - PAD * 2);
-                      const bull = c.close >= c.open;
-                      const col = bull ? "#22c55e" : "#ef4444";
-                      const bodyTop = Math.min(oY, cY);
-                      const bodyH = Math.max(Math.abs(cY - oY), 0.5);
-                      return (
-                        <g key={i}>
-                          <line x1={x} x2={x} y1={hY} y2={lY} stroke={col} strokeWidth={0.6} opacity={0.5} />
-                          <rect x={x - bW / 2} y={bodyTop} width={bW} height={bodyH} fill={col} rx={0.3} />
-                        </g>
-                      );
-                    })}
-                    {/* EMA line (simple 9-period) */}
-                    {(() => {
-                      if (closes.length < 9) return null;
-                      const ema: number[] = [];
-                      const k = 2 / 10;
-                      ema[0] = closes[0];
-                      for (let i = 1; i < closes.length; i++) ema[i] = closes[i] * k + ema[i - 1] * (1 - k);
-                      const pts = ema.map((v, i) => {
-                        const x = PAD + i * ((W - PAD * 2) / recent.length) + bW / 2;
-                        const y = H - PAD - ((v - lo) / range) * (H - PAD * 2);
-                        return `${x},${y}`;
-                      }).join(" ");
-                      return <polyline points={pts} fill="none" stroke="#0a84ff" strokeWidth={1.2} opacity={0.6} />;
-                    })()}
-                    {/* Current price line */}
-                    <line x1={0} x2={W} y1={H - PAD - ((last.close - lo) / range) * (H - PAD * 2)} y2={H - PAD - ((last.close - lo) / range) * (H - PAD * 2)} stroke="#fff" strokeWidth={0.5} strokeDasharray="3,3" opacity={0.25} />
-                  </svg>
-                  {/* Volume bars below */}
-                  <svg viewBox={`0 0 ${W} 30`} className="w-full mt-0.5 rounded-b-lg" style={{ background: "rgba(0,0,0,0.15)" }}>
-                    {(() => {
-                      const maxVol = Math.max(...recent.map(c => c.volume), 1);
-                      return recent.map((c, i) => {
-                        const x = PAD + i * ((W - PAD * 2) / recent.length);
-                        const h = (c.volume / maxVol) * 26;
-                        const bull = c.close >= c.open;
-                        return <rect key={i} x={x} y={30 - h} width={bW} height={h} fill={bull ? "#22c55e" : "#ef4444"} opacity={0.35} rx={0.3} />;
-                      });
-                    })()}
-                  </svg>
-                  {/* Time labels */}
-                  <div className="flex justify-between text-[8px] text-neutral-700 mt-1 px-0.5">
-                    <span>{new Date(recent[0].timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                    <span>{recent.length} candles · 1m</span>
-                    <span>{new Date(recent[recent.length - 1].timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-
-          {(server.config?.mode ?? "paper") !== "live" && (
-            server.loading ? (
-              <div className="card p-6 flex items-center justify-center gap-3 text-neutral-600">
-                <RefreshCw size={14} className="animate-spin" />
-                <span className="text-[12px]">Connecting to server agent…</span>
-              </div>
-            ) : server.error ? (
-              <div className="card p-4 flex items-center gap-3 text-red-400 text-[12px]">
-                <AlertTriangle size={14} />
-                Cannot reach server — check Railway deployment. ({server.error})
-              </div>
-            ) : (
-              <PaperPanel
-                openPositions={server.openPositions as unknown as PaperPosition[]}
-                stats={server.stats
-                  ? { ...server.stats, avg_rr: 0, best_trade: server.stats.best_trade ?? 0, worst_trade: server.stats.worst_trade ?? 0 }
-                  : { total_pnl: 0, win_rate: 0, total_trades: 0, wins: 0, losses: 0, avg_rr: 0, best_trade: 0, worst_trade: 0 }
-                }
-                trades={server.trades as unknown as ReturnType<typeof usePhantomAgent>["trades"]}
-                onClose={key => server.closePosition(key)}
-                onReset={() => server.resetAccount()}
-              />
-            )
-          )}
-
-          {/* ── Live BingX Trading Panel ─────────────────────────────────── */}
-          {server.config?.mode === "live" && (
-            <div className="card p-4 space-y-4">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                <span className="text-[13px] font-semibold text-white">Live Trading · BingX</span>
-                <span className="ml-auto text-[9px] px-2 py-0.5 rounded-full border border-red-500/30 bg-red-500/10 text-red-400 font-bold">REAL MONEY</span>
-              </div>
-
-              {/* Circuit breaker status */}
-              {server.liveExecutor && (
-                <>
-                  {server.liveExecutor.halted && (
-                    <div className="flex items-center gap-3 p-3 rounded-xl border border-red-500/40 bg-red-500/10">
-                      <AlertTriangle size={14} className="text-red-400 flex-shrink-0" />
-                      <div className="flex-1">
-                        <div className="text-[11px] font-bold text-red-400">⛔ Circuit Breaker Active</div>
-                        <div className="text-[9px] text-red-400/70 mt-0.5">Daily loss limit hit · All trading halted</div>
-                      </div>
-                      <button onClick={() => server.resetCircuitBreaker()}
-                        className="px-3 py-1.5 rounded-lg text-[10px] font-bold border border-orange-500/30 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors">
-                        Reset
-                      </button>
-                    </div>
-                  )}
-                  <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
-                    {([
-                      ["Balance", `$${(server.liveExecutor.account_balance ?? 0).toFixed(2)}`, "#8b5cf6"],
-                      ["Free", `$${(server.liveExecutor.free_balance ?? 0).toFixed(2)}`, "#0a84ff"],
-                      ["Trade Size", `$${server.liveExecutor.max_position_usdc.toFixed(2)}`, "#f59e0b"],
-                      ["Max Lev", `${server.liveExecutor.max_leverage ?? 30}×`, "#22c55e"],
-                      ["Daily P&L", `${server.liveExecutor.daily_pnl >= 0 ? "+" : ""}$${server.liveExecutor.daily_pnl.toFixed(2)}`, server.liveExecutor.daily_pnl >= 0 ? "#22c55e" : "#ef4444"],
-                      ["Open", `${server.liveExecutor.open_count}`, "#0a84ff"],
-                    ] as const).map(([label, val, color]) => (
-                      <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-center">
-                        <div className="text-[8px] text-neutral-600 mb-0.5">{label}</div>
-                        <div className="text-[11px] font-bold font-mono" style={{ color }}>{val}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="text-[9px] text-neutral-600 text-center">
-                    Each trade uses 2% of total capital as margin · max 30× leverage · daily loss limit -${server.liveExecutor.daily_loss_limit}
-                  </div>
-
-                  {/* Live positions from BingX */}
-                  {server.liveExecutor.live_positions.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="text-[10px] text-neutral-600 font-bold uppercase tracking-wide">Open BingX Positions</div>
-                      {server.liveExecutor.live_positions.map(pos => {
-                        const pnl = pos.unrealized_pnl ?? 0;
-                        const isLong = pos.direction === "long";
-                        return (
-                          <div key={pos.id} className="flex items-center gap-3 p-3 rounded-xl border border-neutral-800 bg-neutral-900">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${isLong ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
-                                  {pos.direction.toUpperCase()}
-                                </span>
-                                <span className="text-[10px] text-white font-semibold truncate">{pos.strategy_name}</span>
-                                <span className="text-[8px] text-orange-400 font-mono">{pos.leverage}×</span>
-                              </div>
-                              <div className="text-[9px] text-neutral-600 mt-0.5 font-mono">
-                                Entry ${pos.entry?.toLocaleString()} · SL ${pos.sl?.toLocaleString() ?? "—"} · TP ${pos.tp?.toLocaleString() ?? "—"}
-                              </div>
-                            </div>
-                            <div className="text-right flex-shrink-0">
-                              <div className={`text-[12px] font-bold font-mono ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
-                              </div>
-                              <button onClick={() => server.closeLivePosition(pos.strategy_key)}
-                                className="text-[9px] text-neutral-600 hover:text-red-400 transition-colors mt-0.5">
-                                Close
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* No executor (keys not configured) */}
-              {!server.liveExecutor && (
-                <div className="space-y-3 p-4 rounded-xl border border-neutral-800 bg-neutral-900/50">
-                  <div className="text-[11px] font-semibold text-white">Setup Required</div>
-                  <div className="space-y-2 text-[10px] text-neutral-500">
-                    <div className="flex items-start gap-2">
-                      <span className="text-orange-400 font-bold flex-shrink-0">1.</span>
-                      <span>Create a <strong className="text-white">BingX account</strong> → enable UTA → deposit USDT</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <span className="text-orange-400 font-bold flex-shrink-0">2.</span>
-                      <span>Generate API keys (Futures Trading only, IP-whitelist Railway&apos;s IP)</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <span className="text-orange-400 font-bold flex-shrink-0">3.</span>
-                      <span>Add <code className="bg-neutral-800 px-1 rounded text-[9px]">BINGX_API_KEY</code> and <code className="bg-neutral-800 px-1 rounded text-[9px]">BINGX_API_SECRET</code> to Railway environment variables</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <span className="text-orange-400 font-bold flex-shrink-0">4.</span>
-                      <span>Redeploy Railway — then switch mode to <strong className="text-white">Live</strong> and hit Make Changes</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Recent live trades from history */}
-              {server.trades.filter(t => t.is_paper === false).length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-[10px] text-neutral-600 font-bold uppercase tracking-wide">Live Trade History</div>
-                  {server.trades.filter(t => t.is_paper === false).slice(0, 10).map((t, i) => {
-                    const pnl = t.pnl_usd ?? 0;
-                    return (
-                      <div key={i} className="flex items-center gap-3 py-2 px-3 rounded-lg border border-neutral-800 bg-neutral-900/50">
-                        <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-400"}`}>
-                          {(t.direction ?? "?").toUpperCase()}
-                        </span>
-                        <span className="text-[10px] text-neutral-400 flex-1 truncate">{t.strategy_name}</span>
-                        <span className="text-[9px] text-neutral-600 font-mono">${t.entry?.toFixed(0)} → ${t.exit_price?.toFixed(0)}</span>
-                        <span className={`text-[10px] font-bold font-mono flex-shrink-0 ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                          {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
-                        </span>
-                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${t.exit_reason === "tp" ? "bg-green-500/10 text-green-400" : t.exit_reason === "sl" ? "bg-red-500/10 text-red-400" : "bg-neutral-800 text-neutral-500"}`}>
-                          {t.exit_reason?.toUpperCase()}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Conditions checklist */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Activity size={13} className="text-neutral-500" />
-              <span className="text-[13px] font-semibold text-white">Live Strategy Conditions</span>
-              <span className="text-[9px] text-green-400 ml-auto flex items-center gap-1">
-                <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />
-                live · best signal · multi-strategy
-              </span>
-            </div>
-            {candles.length >= 35 ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between mb-2">
-                  <span className={`text-sm font-bold ${activeResult.bias === "long" ? "text-green-400" : activeResult.bias === "short" ? "text-red-400" : "text-neutral-500"}`}>
-                    {activeResult.bias === "long" ? "▲ BULLISH" : activeResult.bias === "short" ? "▼ BEARISH" : "— NEUTRAL"}
-                  </span>
-                  <span className="text-[10px] text-neutral-500">{activeResult.met_count}/{activeResult.total ?? 7} conditions</span>
-                </div>
-                <div className="flex gap-0.5 h-1 mb-3">
-                  {Array.from({ length: activeResult.total ?? 7 }).map((_, i) => (
-                    <div key={i} className="flex-1 rounded-full"
-                      style={{ background: i < activeResult.met_count ? "#22c55e" : "#1e1e2e" }} />
-                  ))}
-                </div>
-                {activeResult.conditions.map((c, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    {c.met ? <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" /> : <XCircle size={11} className="text-neutral-700 flex-shrink-0" />}
-                    <span className={`text-[10px] flex-1 ${c.met ? "text-neutral-200" : "text-neutral-600"}`}>{c.name}</span>
-                    <span className={`text-[9px] font-mono ${c.met ? "text-green-400" : "text-neutral-700"}`}>{c.value}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-6 text-neutral-700 text-sm flex items-center justify-center gap-2">
-                <RefreshCw size={13} className="animate-spin" />
-                Loading live candles… ({candles.length}/35)
-              </div>
-            )}
-          </div>
-
-          {/* Agent log — prefer server log (survives page close) */}
-          <div className="card p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <ChevronRight size={13} className="text-neutral-500" />
-              <span className="text-[13px] font-semibold text-white">Agent Log</span>
-              {server.log.length > 0
-                ? <span className="text-[9px] text-emerald-400 ml-auto flex items-center gap-1"><span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />server log</span>
-                : <span className="text-[9px] text-neutral-700 ml-auto">browser log</span>}
-            </div>
-            <AgentLog logs={server.log} />
-          </div>
-        </div>
-      </div>
-
-      {/* Trade history — server ONLY (persistent, cross-device) */}
-      <div className="card p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Zap size={13} className="text-neutral-500" />
-            <span className="text-[13px] font-semibold text-white">Execution History</span>
-            <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center gap-1">
-              <span className="w-1 h-1 rounded-full bg-emerald-400" />
-              Persistent · survives browser close
-            </span>
-            {server.stats && server.stats.total_trades > 0 && (
-              <div className="flex items-center gap-3 ml-2">
-                <span className={`text-[11px] font-bold font-mono ${server.stats.total_pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                  {server.stats.total_pnl >= 0 ? "+" : ""}${server.stats.total_pnl.toFixed(2)} all-time
-                </span>
-                <span className="text-[9px] text-neutral-600">
-                  {server.stats.wins}W / {server.stats.losses}L · {server.stats.win_rate.toFixed(1)}% WR
-                </span>
-              </div>
-            )}
-          </div>
-          {!server.loading && !server.error && (
-            <button onClick={server.resetAccount}
-              className="flex items-center gap-1.5 text-[10px] text-neutral-700 hover:text-red-400 transition-colors ml-2"
-              title="Clears all trade history and resets P&L to zero">
-              <RotateCcw size={11} /> Reset
-            </button>
-          )}
-        </div>
-
-        {server.loading ? (
-          <div className="text-center py-8 text-neutral-700 text-sm flex items-center justify-center gap-2">
-            <RefreshCw size={13} className="animate-spin" /> Connecting to server…
-          </div>
-        ) : server.error ? (
-          <div className="flex items-center gap-2 py-6 text-red-400 text-[12px] justify-center">
-            <AlertTriangle size={13} /> Cannot reach server ({server.error})
-          </div>
-        ) : server.trades.length === 0 ? (
-          <div className="text-center py-8 text-neutral-700 text-sm">
-            No trades yet. Server agent is scanning every 20s…
-          </div>
-        ) : (
-          <div>
-            {server.trades.map(t => (
-              <div key={t.id} className="flex items-center gap-3 py-2 border-b border-neutral-800/60">
-                <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
-                  {t.direction === "long"
-                    ? <TrendingUp size={11} className="text-green-400" />
-                    : <TrendingDown size={11} className="text-red-400" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[11px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
-                      {t.direction.toUpperCase()} BTC
-                    </span>
-                    <span className="text-[9px] text-neutral-600">{t.strategy_name}</span>
-                    <span className="text-[9px] text-neutral-700">
-                      {new Date(t.closed_at ?? t.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  <div className="text-[9px] text-neutral-600 truncate font-mono">
-                    ${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "open"}
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  {t.pnl_usd != null && (
-                    <div className={`text-[10px] font-bold font-mono ${t.pnl_usd >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {t.pnl_usd >= 0 ? "+" : ""}${t.pnl_usd.toFixed(2)}
-                    </div>
-                  )}
-                  <div className={`text-[9px] font-bold ${
-                    t.exit_reason === "tp" ? "text-green-400" : t.exit_reason === "sl" ? "text-red-400" : "text-neutral-500"
-                  }`}>{(t.exit_reason ?? "—").toUpperCase()}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* ── Signal Timeline ── */}
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-          <div className="flex items-center gap-2">
-            <Activity size={12} className="text-blue-400" />
-            <span className="text-[12px] font-bold text-white">Signal Timeline</span>
-            <span className="text-[8px] text-neutral-600">Today</span>
-          </div>
-          <span className="text-[8px] text-neutral-700">{server.trades.length} trades</span>
-        </div>
-        <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
-          {server.trades.length === 0 ? (
-            <div className="text-center py-8 text-[10px] text-neutral-700">No signals yet — scanning every 20s</div>
-          ) : (
-            server.trades.slice(0, 20).map((t, i) => {
-              const pnl = t.pnl_usd ?? 0;
-              const isWin = pnl > 0;
-              const time = new Date(t.closed_at ?? t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-              return (
-                <div key={i} className="flex items-center gap-2.5 py-1.5 border-b border-neutral-800/40 last:border-0">
-                  <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
-                    {t.direction === "long"
-                      ? <ArrowUpRight size={10} className="text-green-400" />
-                      : <ArrowDownRight size={10} className="text-red-400" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>{t.direction.toUpperCase()}</span>
-                      <span className="text-[8px] text-neutral-700 truncate">{t.strategy_name}</span>
-                    </div>
-                    <div className="text-[8px] text-neutral-700 font-mono">{time} · ${t.entry.toFixed(0)}</div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <div className={`text-[9px] font-bold font-mono ${isWin ? "text-green-400" : "text-red-400"}`}>
-                      {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
-                    </div>
-                    <div className={`text-[8px] font-bold ${t.exit_reason === "tp" ? "text-green-400/70" : t.exit_reason === "sl" ? "text-red-400/70" : "text-neutral-600"}`}>
-                      {(t.exit_reason ?? "—").toUpperCase()}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Info footer */}
-      <div className="grid grid-cols-3 gap-3">
-        {[
-          {
-            icon: Bot,
-            title: "How the Agent Works",
-            body: "Runs 24/7 on the server — never stops when the browser closes. All 5 strategies scan independently every 20s. Each can hold its own position simultaneously — Grid $50 supports up to 5 concurrent positions.",
-          },
-          {
-            icon: Shield,
-            title: "Perps Mode",
-            body: "Opens Phantom Perps (trade.phantom.com) instantly. You set leverage and confirm the position in the Phantom interface — one click.",
-          },
-          {
-            icon: Zap,
-            title: "Spot Mode",
-            body: "Builds a real Solana transaction via Jupiter v6. USDC → wBTC for LONG, wBTC → USDC for SHORT. Sent to Phantom for signing.",
-          },
-        ].map(({ icon: Icon, title, body }) => (
-          <div key={title} className="card p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Icon size={13} className="text-neutral-500" />
-              <span className="text-[11px] font-semibold text-white">{title}</span>
-            </div>
-            <p className="text-[10px] text-neutral-600 leading-relaxed">{body}</p>
+          ["Risk/Trade", executor.risk_per_trade_pct != null ? `${(executor.risk_per_trade_pct * 100).toFixed(0)}%` : "—"],
+          ["Max Pos",    executor.max_position_usdc  != null ? `$${executor.max_position_usdc}` : "—"],
+          ["Mode",       executor.mode ?? "—"],
+        ].map(([l, v]) => (
+          <div key={l} className="flex-1 text-center">
+            <div className="text-[8px] text-neutral-700">{l}</div>
+            <div className="text-[10px] font-mono text-neutral-300">{v}</div>
           </div>
         ))}
       </div>
@@ -2094,11 +584,604 @@ function AgentContent() {
   );
 }
 
-// ─── Export with SolanaProvider ───────────────────────────────────────────────
-export default function AgentPageInner() {
+// ─── Master Brain panel ───────────────────────────────────────────────────────
+function BrainPanel({ brain }: { brain: MasterBrainStatus | null }) {
+  if (!brain) {
+    return (
+      <div className="card p-5 flex items-center gap-3 text-neutral-600">
+        <Brain size={14} />
+        <span className="text-[12px]">Master Brain not yet active…</span>
+      </div>
+    );
+  }
+
+  const regime    = brain.regime ?? "unknown";
+  const regimeMeta = REGIME_META[regime] ?? REGIME_META.unknown;
+  const pf        = brain.portfolio;
+
   return (
-    <SolanaProvider>
-      <AgentContent />
-    </SolanaProvider>
+    <div className="card p-5 space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Brain size={13} className="text-violet-400" />
+          <span className="text-[13px] font-semibold text-white">Master Brain</span>
+          <span className="text-[9px] text-violet-400 ml-1">always learning · always on</span>
+        </div>
+        <div className="flex items-center gap-2 text-[9px] text-neutral-600">
+          <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+          adaptive
+        </div>
+      </div>
+
+      {/* Regime + confidence */}
+      <div className="flex items-center gap-4 p-4 rounded-xl" style={{ background: regimeMeta.bg, border: `1px solid ${regimeMeta.color}30` }}>
+        <div>
+          <div className="text-[9px] text-neutral-500 mb-0.5">Market Regime</div>
+          <div className="text-[16px] font-bold" style={{ color: regimeMeta.color }}>{regimeMeta.label}</div>
+        </div>
+        <div className="flex-1">
+          <div className="flex justify-between text-[9px] mb-1">
+            <span className="text-neutral-600">Confidence</span>
+            <span style={{ color: regimeMeta.color }}>{((brain.regime_confidence ?? 0) * 100).toFixed(0)}%</span>
+          </div>
+          <div className="h-1.5 bg-black/30 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${(brain.regime_confidence ?? 0) * 100}%`, background: regimeMeta.color }} />
+          </div>
+        </div>
+        {brain.regime_stability && (
+          <div className="text-[9px] px-2 py-1 rounded-lg bg-black/20 text-neutral-400">{brain.regime_stability}</div>
+        )}
+      </div>
+
+      {/* Portfolio stats */}
+      {pf && (
+        <div>
+          <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Portfolio State</div>
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              ["Daily P&L",     fmtPnl(pf.daily_pnl),    pf.daily_pnl >= 0 ? "#22c55e" : "#ef4444"],
+              ["Daily Trades",  `${pf.daily_trades}`,     "#60aaff"],
+              ["Win/Loss",      `${pf.daily_wins}W / ${pf.daily_losses}L`, "#a78bfa"],
+              ["Consec. Losses",`${pf.consec_losses}`,   pf.consec_losses >= 3 ? "#ef4444" : pf.consec_losses >= 2 ? "#f59e0b" : "#4b5563"],
+              ["Long Exp.",     `$${pf.long_exposure.toFixed(0)}`,  "#22c55e"],
+              ["Short Exp.",    `$${pf.short_exposure.toFixed(0)}`, "#ef4444"],
+              ["Net Exp.",      `$${pf.net_exposure.toFixed(0)}`,   "#60aaff"],
+              ["Unrealized",    fmtPnl(pf.total_unrealized), pf.total_unrealized >= 0 ? "#22c55e" : "#ef4444"],
+            ].map(([l, v, c]) => (
+              <div key={l} className="rounded-lg p-2.5 bg-neutral-900 border border-neutral-800">
+                <div className="text-[8px] text-neutral-600 mb-0.5">{l}</div>
+                <div className="text-[11px] font-bold font-mono" style={{ color: c as string }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Strategy trust scores */}
+      {brain.strategy_trust && (
+        <div>
+          <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Strategy Trust Scores</div>
+          <div className="space-y-2">
+            {STRATEGIES.map(s => {
+              const trust   = brain.strategy_trust[s.key] ?? 1.0;
+              const stats   = brain.strategy_stats?.[s.key];
+              const ready   = brain.live_readiness?.[s.key];
+              const pct     = Math.min(Math.max((trust / 2) * 100, 0), 100);
+              const tColor  = trust >= 1.3 ? "#22c55e" : trust >= 0.9 ? "#60aaff" : trust >= 0.6 ? "#f59e0b" : "#ef4444";
+              return (
+                <div key={s.key} className="flex items-center gap-3">
+                  <div className="w-20 flex-shrink-0">
+                    <span className="text-[9px] font-semibold text-neutral-400">{s.label}</span>
+                  </div>
+                  <div className="flex-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%`, background: tColor }} />
+                  </div>
+                  <span className="text-[9px] font-mono w-8 text-right" style={{ color: tColor }}>
+                    {trust.toFixed(2)}
+                  </span>
+                  {stats && (
+                    <span className="text-[8px] text-neutral-700 w-20 text-right">
+                      {stats.trades}t · {stats.win_rate != null ? (stats.win_rate * 100).toFixed(0) : "—"}%WR
+                    </span>
+                  )}
+                  {ready && (
+                    <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold flex-shrink-0 ${ready.ready ? "bg-green-500/10 text-green-400" : "bg-neutral-800 text-neutral-600"}`}>
+                      {ready.ready ? "LIVE ✓" : `${ready.trades}/${ready.trades_needed}t`}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-4 mt-2 text-[8px] text-neutral-700">
+            <span>0.0 = destroyed</span>
+            <span>1.0 = neutral</span>
+            <span>2.0 = excellent</span>
+          </div>
+        </div>
+      )}
+
+      {/* Recent decisions */}
+      {brain.recent_decisions && brain.recent_decisions.length > 0 && (
+        <div>
+          <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Recent Decisions</div>
+          <div className="space-y-1.5 max-h-52 overflow-y-auto">
+            {brain.recent_decisions.slice(0, 10).map((dec, i) => {
+              const isApproved = dec.approved;
+              const stratMeta  = STRATEGIES.find(s => s.label === dec.strategy_name || dec.strategy_name?.toLowerCase().includes(s.key));
+              const color      = stratMeta?.color ?? "#6b7280";
+              return (
+                <div key={i} className="flex items-start gap-2 py-1.5 px-2 rounded-lg border"
+                  style={{
+                    background: isApproved ? "rgba(34,197,94,0.04)" : "rgba(255,255,255,0.02)",
+                    borderColor: isApproved ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.05)",
+                  }}>
+                  <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 mt-0.5 ${isApproved ? "bg-green-500/20" : "bg-neutral-800"}`}>
+                    {isApproved
+                      ? <CheckCircle2 size={9} className="text-green-400" />
+                      : <XCircle size={9} className="text-neutral-600" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[9px] font-bold" style={{ color }}>
+                        {dec.strategy_name}
+                      </span>
+                      <span className={`text-[8px] font-bold ${dec.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                        {dec.direction?.toUpperCase()}
+                      </span>
+                      <span className="text-[8px] text-neutral-600">{dec.regime}</span>
+                      {dec.is_live && <span className="text-[7px] bg-amber-500/15 text-amber-400 px-1 rounded">LIVE</span>}
+                      <span className="text-[8px] text-neutral-700 ml-auto">
+                        {new Date(dec.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                    <div className="text-[8px] text-neutral-600 mt-0.5 truncate">{dec.reasoning}</div>
+                  </div>
+                  <div className="text-[9px] font-mono text-neutral-500 flex-shrink-0">
+                    {(dec.conviction * 100).toFixed(0)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
+}
+
+// ─── Open positions panel ─────────────────────────────────────────────────────
+function PositionsPanel({
+  positions,
+  livePositions,
+  onClose,
+  onCloseLive,
+}: {
+  positions:     ServerPosition[];
+  livePositions: ServerPosition[];
+  onClose:       (key: string) => void;
+  onCloseLive:   (key: string) => void;
+}) {
+  const allPositions = [
+    ...livePositions.map(p => ({ ...p, _isLive: true })),
+    ...positions.map(p => ({ ...p, _isLive: false })),
+  ];
+
+  const fusion  = allPositions.filter(p => p.strategy_key === "fusion");
+  const shadows = allPositions.filter(p => p.strategy_key?.startsWith("shadow_") || p.is_shadow);
+  const regular = allPositions.filter(p => !p.strategy_key?.startsWith("shadow_") && !p.is_shadow && p.strategy_key !== "fusion");
+
+  const renderPosition = (p: ServerPosition & { _isLive?: boolean }, key: string) => {
+    const isLong   = p.direction === "long";
+    const isFusion = p.strategy_key === "fusion";
+    const isShadow = p.strategy_key?.startsWith("shadow_") || p.is_shadow;
+    const colorStr = isFusion ? "#f472b6" : isLong ? "#22c55e" : "#ef4444";
+    const unreal   = p.unrealized_pnl ?? 0;
+    return (
+      <div key={key}
+        className="rounded-xl p-3.5 space-y-2.5"
+        style={{
+          background: isFusion ? "rgba(244,114,182,0.06)" : isShadow ? "rgba(14,165,233,0.05)" : isLong ? "rgba(34,197,94,0.05)" : "rgba(239,68,68,0.05)",
+          border: `1px solid ${isFusion ? "rgba(244,114,182,0.25)" : isShadow ? "rgba(14,165,233,0.15)" : isLong ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+        }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: colorStr }} />
+            <span className="text-[11px] font-bold" style={{ color: colorStr }}>
+              {p.direction.toUpperCase()} {isFusion ? "🧠 FUSION" : p.strategy_name}
+            </span>
+            {isShadow && <span className="text-[7px] bg-sky-500/10 border border-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded">SHADOW</span>}
+            {p._isLive && <span className="text-[7px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">LIVE</span>}
+            {p.is_paper && !isShadow && <span className="text-[7px] bg-violet-500/10 border border-violet-500/20 text-violet-400 px-1.5 py-0.5 rounded">PAPER</span>}
+          </div>
+          <button
+            onClick={() => p._isLive ? onCloseLive(p.strategy_key) : onClose(p.strategy_key)}
+            className="flex items-center gap-1 text-[9px] text-neutral-600 hover:text-red-400 transition-colors border border-neutral-800 hover:border-red-500/30 rounded-lg px-2 py-1">
+            <X size={9} /> Close
+          </button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
+          <div><span className="text-neutral-600 block text-[8px]">Entry</span><span className="text-white">${p.entry.toFixed(0)}</span></div>
+          <div><span className="text-neutral-600 block text-[8px]">Current</span><span className="text-white">${(p.current_price ?? p.entry).toFixed(0)}</span></div>
+          <div>
+            <span className="text-neutral-600 block text-[8px]">Unrealized P&L</span>
+            <span className={pnlCls(unreal)}>{fmtPnl(unreal)}</span>
+          </div>
+        </div>
+
+        {p.sl && p.tp && (() => {
+          const range   = p.tp - p.sl;
+          const pct     = range > 0 ? ((p.current_price - p.sl) / range * 100) : 50;
+          const clamped = Math.min(Math.max(pct, 0), 100);
+          return (
+            <div className="space-y-1">
+              <div className="flex justify-between text-[8px]">
+                <span className="text-red-400">SL ${p.sl.toFixed(0)}</span>
+                <span className="text-neutral-600 font-sans">${p.size_usdc} · {p.confidence ? `${(p.confidence * 100).toFixed(0)}% conf` : ""}</span>
+                <span className="text-green-400">TP ${p.tp.toFixed(0)}</span>
+              </div>
+              <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden relative">
+                <div className="absolute inset-0 flex">
+                  <div className="h-full bg-red-900/40"   style={{ width: "33%" }} />
+                  <div className="h-full bg-neutral-900"  style={{ width: "34%" }} />
+                  <div className="h-full bg-green-900/40" style={{ width: "33%" }} />
+                </div>
+                <div className="absolute top-0 h-full w-0.5 bg-white rounded-full transition-all duration-200" style={{ left: `${clamped}%` }} />
+              </div>
+            </div>
+          );
+        })()}
+
+        {p.reasoning && (
+          <div className="text-[8px] text-neutral-600 truncate">{p.reasoning}</div>
+        )}
+      </div>
+    );
+  };
+
+  if (allPositions.length === 0) {
+    return (
+      <div className="card p-4 flex items-center gap-3">
+        <DollarSign size={14} className="text-neutral-700" />
+        <span className="text-[12px] text-neutral-600">No open positions — agent scanning for signals…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <Activity size={13} className="text-neutral-500" />
+        <span className="text-[13px] font-semibold text-white">Open Positions</span>
+        <span className="text-[9px] text-neutral-600 ml-auto">{allPositions.length} total</span>
+      </div>
+
+      {fusion.length > 0 && (
+        <div>
+          <div className="text-[9px] text-pink-400/70 font-bold uppercase tracking-wide mb-2">🧠 Fusion (Master Brain)</div>
+          <div className="space-y-2">
+            {fusion.map((p, i) => renderPosition(p, `fusion-${i}`))}
+          </div>
+        </div>
+      )}
+
+      {regular.length > 0 && (
+        <div>
+          {fusion.length > 0 && <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Individual Strategies</div>}
+          <div className="space-y-2">
+            {regular.map((p, i) => renderPosition(p, `reg-${i}`))}
+          </div>
+        </div>
+      )}
+
+      {shadows.length > 0 && (
+        <div>
+          <div className="text-[9px] text-sky-400/60 font-bold uppercase tracking-wide mb-2">Shadow Training ({shadows.length} active)</div>
+          <div className="grid grid-cols-2 gap-2">
+            {shadows.map((p, i) => (
+              <div key={`sh-${i}`} className="rounded-lg p-2.5 border border-sky-500/10 bg-sky-500/5">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <div className={`w-1.5 h-1.5 rounded-full ${p.direction === "long" ? "bg-green-400" : "bg-red-400"}`} />
+                  <span className="text-[9px] font-bold text-sky-400">{p.strategy_name}</span>
+                  <span className={`text-[8px] ml-auto ${pnlCls(p.unrealized_pnl ?? 0)}`}>{fmtPnl(p.unrealized_pnl ?? 0)}</span>
+                </div>
+                <div className="text-[8px] text-neutral-700 font-mono">
+                  ${p.entry.toFixed(0)} · {p.direction}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+function AgentContent() {
+  const server = useServerAgent();
+  const brain  = server.brain;
+  const exec   = server.liveExecutor;
+
+  const stats       = server.stats;
+  const positions   = server.openPositions;
+  const livePos     = exec?.live_positions ?? [];
+  const mode        = server.config?.mode ?? "paper";
+  const isLive      = mode === "live";
+
+  return (
+    <div className="p-4 space-y-4">
+
+      {/* ─── 1. Header ───────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Bot size={26} className={server.running ? "text-blue-400" : "text-neutral-600"} />
+            {server.running && (
+              <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-400 animate-ping" />
+            )}
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-white flex items-center gap-2">
+              Trading Agent
+              {server.running ? (
+                <span className="flex items-center gap-1.5 text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  24/7 LIVE
+                </span>
+              ) : server.error ? (
+                <span className="flex items-center gap-1.5 text-[9px] px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400">
+                  <AlertTriangle size={9} /> Server offline
+                </span>
+              ) : (
+                <span className="text-[9px] text-neutral-600">connecting…</span>
+              )}
+              {isLive && (
+                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  🔴 LIVE BingX
+                </span>
+              )}
+            </h1>
+            <p className="text-[10px] text-neutral-600 mt-0.5">
+              Fusion strategy · 5 sub-strategies · Master Brain adaptive learning · shadow training always on
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {server.livePrice > 0 && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-800 bg-neutral-900">
+              <span className="text-[9px] text-neutral-600">BTC</span>
+              <span className="text-[13px] font-bold font-mono text-white">${server.livePrice.toLocaleString()}</span>
+            </div>
+          )}
+          <button onClick={() => server.running ? server.stopAgent() : server.startAgent()}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-[12px] transition-all"
+            style={server.running
+              ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }
+              : { background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e" }}>
+            <Power size={13} />
+            {server.running ? "Stop Agent" : "Start Agent"}
+          </button>
+          <button onClick={server.forceScan}
+            className="p-2 rounded-xl border border-neutral-800 text-neutral-600 hover:text-white hover:border-neutral-600 transition-colors"
+            title="Force scan">
+            <RefreshCw size={13} className={server.loading ? "animate-spin" : ""} />
+          </button>
+        </div>
+      </div>
+
+      {/* ─── 2. Status strip ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {[
+          { label: "Scans Run",    value: server.scanCount.toString(),                                                                        color: "#60aaff" },
+          { label: "Last Scan",    value: server.lastScan ?? "—",                                                                             color: "#a78bfa" },
+          { label: "Mode",         value: mode === "live" ? "🔴 LIVE" : "📄 PAPER",                                                           color: mode === "live" ? "#ef4444" : "#a78bfa" },
+          { label: "Open Pos",     value: `${positions.length + livePos.length}`,                                                             color: "#22c55e" },
+          { label: "Win Rate",     value: stats && stats.total_trades > 0 ? `${stats.win_rate.toFixed(1)}%` : "—",                           color: "#f59e0b" },
+          { label: "All-Time P&L", value: stats ? fmtPnl(stats.total_pnl) : "—",                                                            color: stats && stats.total_pnl >= 0 ? "#22c55e" : "#ef4444" },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="card px-3 py-2.5 flex flex-col gap-0.5">
+            <div className="text-[8px] text-neutral-600 uppercase tracking-wide">{label}</div>
+            <div className="text-[13px] font-bold font-mono" style={{ color }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ─── 3. Mode banner ──────────────────────────────────────────────── */}
+      {!isLive ? (
+        <div className="flex items-center gap-3 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
+          <FileText size={13} className="text-violet-400 flex-shrink-0" />
+          <div className="text-[11px] text-violet-300">
+            <strong>Paper training active</strong> — all strategies are shadow-training · Master Brain learning from every trade ·
+            strategies must prove &gt;45% win rate on 10+ trades before live BingX execution
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 p-3 rounded-xl border border-amber-500/20 bg-amber-500/5">
+          <AlertTriangle size={13} className="text-amber-400 flex-shrink-0" />
+          <div className="text-[11px] text-amber-300">
+            <strong>Dual mode active</strong> — live-qualified strategies execute on BingX · unqualified strategies shadow-train ·
+            Fusion signal from Master Brain controls primary execution
+          </div>
+        </div>
+      )}
+
+      {/* ─── 4. Config + BingX 2-col ─────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ConfigPanel serverConfig={server.config} onSave={server.updateConfig} />
+        <BingXPanel executor={exec} onResetCircuit={server.resetCircuitBreaker} />
+      </div>
+
+      {/* ─── 5. Master Brain ─────────────────────────────────────────────── */}
+      <BrainPanel brain={brain} />
+
+      {/* ─── 6. Open Positions ───────────────────────────────────────────── */}
+      <PositionsPanel
+        positions={positions}
+        livePositions={livePos}
+        onClose={server.closePosition}
+        onCloseLive={server.closeLivePosition}
+      />
+
+      {/* ─── 7. Agent Log ────────────────────────────────────────────────── */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <ChevronRight size={13} className="text-neutral-500" />
+            <span className="text-[13px] font-semibold text-white">Master Brain Agent Log</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {server.log.length > 0
+              ? <><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /><span className="text-[9px] text-emerald-400">live server log</span></>
+              : <span className="text-[9px] text-neutral-700">waiting for logs…</span>}
+          </div>
+        </div>
+        <AgentLog logs={server.log} />
+      </div>
+
+      {/* ─── 8. Execution History + Signal Timeline ───────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Execution History */}
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Zap size={13} className="text-neutral-500" />
+              <span className="text-[13px] font-semibold text-white">Execution History</span>
+              {stats && stats.total_trades > 0 && (
+                <span className={`text-[10px] font-bold font-mono ml-1 ${pnlCls(stats.total_pnl)}`}>
+                  {fmtPnl(stats.total_pnl)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {stats && stats.total_trades > 0 && (
+                <span className="text-[9px] text-neutral-600">
+                  {stats.wins}W / {stats.losses}L · {stats.win_rate.toFixed(1)}% WR
+                </span>
+              )}
+              {!server.loading && !server.error && (
+                <button onClick={server.resetAccount}
+                  className="flex items-center gap-1 text-[9px] text-neutral-700 hover:text-red-400 transition-colors"
+                  title="Reset all trade history">
+                  <RotateCcw size={10} /> Reset
+                </button>
+              )}
+            </div>
+          </div>
+
+          {server.loading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-neutral-700 text-[12px]">
+              <RefreshCw size={12} className="animate-spin" /> Connecting…
+            </div>
+          ) : server.error ? (
+            <div className="flex items-center gap-2 py-6 text-red-400 text-[12px] justify-center">
+              <AlertTriangle size={12} /> Cannot reach server
+            </div>
+          ) : server.trades.length === 0 ? (
+            <div className="text-center py-8 text-neutral-700 text-[12px]">
+              No closed trades yet — agent scanning every 20s
+            </div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto space-y-0">
+              {server.trades.slice(0, 30).map(t => {
+                const isLong = t.direction === "long";
+                const pnl    = t.pnl_usd ?? 0;
+                const isFusion = t.strategy_key === "fusion" || t.strategy_name?.includes("Fusion");
+                return (
+                  <div key={t.id} className="flex items-center gap-3 py-2 border-b border-neutral-800/50 last:border-0">
+                    <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${isLong ? "bg-green-500/15" : "bg-red-500/15"}`}>
+                      {isLong
+                        ? <TrendingUp size={10} className="text-green-400" />
+                        : <TrendingDown size={10} className="text-red-400" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[10px] font-bold ${isLong ? "text-green-400" : "text-red-400"}`}>
+                          {t.direction.toUpperCase()} BTC
+                        </span>
+                        {isFusion && <span className="text-[7px] bg-pink-500/10 text-pink-400 px-1 rounded">🧠FUSION</span>}
+                        <span className="text-[8px] text-neutral-600 truncate">{t.strategy_name}</span>
+                      </div>
+                      <div className="text-[8px] text-neutral-700 font-mono">
+                        ${t.entry.toFixed(0)} → ${t.exit_price?.toFixed(0) ?? "—"} ·{" "}
+                        {new Date(t.closed_at ?? t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className={`text-[10px] font-bold font-mono ${pnlCls(pnl)}`}>{fmtPnl(pnl)}</div>
+                      <div className={`text-[8px] font-bold ${
+                        t.exit_reason === "tp" ? "text-green-400" : t.exit_reason === "sl" ? "text-red-400" : "text-neutral-600"
+                      }`}>{(t.exit_reason ?? "—").toUpperCase()}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Signal Timeline */}
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Activity size={13} className="text-blue-400" />
+              <span className="text-[13px] font-semibold text-white">Signal Timeline</span>
+            </div>
+            <span className="text-[9px] text-neutral-700">{server.trades.length} signals total</span>
+          </div>
+
+          <div className="max-h-72 overflow-y-auto space-y-1.5">
+            {server.trades.length === 0 ? (
+              <div className="text-center py-8 text-[11px] text-neutral-700">No signals yet</div>
+            ) : (
+              server.trades.slice(0, 25).map((t, i) => {
+                const pnl    = t.pnl_usd ?? 0;
+                const isWin  = pnl > 0;
+                const time   = new Date(t.closed_at ?? t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                const stratMeta = STRATEGIES.find(s =>
+                  t.strategy_key === s.key || t.strategy_name?.toLowerCase().includes(s.key)
+                );
+                const dotColor = stratMeta?.color ?? "#6b7280";
+                return (
+                  <div key={i} className="flex items-center gap-2.5 py-1.5 border-b border-neutral-800/30 last:border-0">
+                    <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: dotColor }} />
+                    <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${t.direction === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
+                      {t.direction === "long"
+                        ? <ArrowUpRight size={10} className="text-green-400" />
+                        : <ArrowDownRight size={10} className="text-red-400" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1">
+                        <span className={`text-[9px] font-bold ${t.direction === "long" ? "text-green-400" : "text-red-400"}`}>
+                          {t.direction.toUpperCase()}
+                        </span>
+                        <span className="text-[8px] text-neutral-600 truncate">{t.strategy_name}</span>
+                      </div>
+                      <div className="text-[7px] text-neutral-700 font-mono">{time} · ${t.entry.toFixed(0)}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className={`text-[9px] font-bold font-mono ${pnlCls(pnl)}`}>{fmtPnl(pnl)}</div>
+                      <div className={`text-[7px] font-bold ${isWin ? "text-green-400/70" : "text-red-400/70"}`}>
+                        {(t.exit_reason ?? "—").toUpperCase()}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function AgentPageInner() {
+  return <AgentContent />;
 }
