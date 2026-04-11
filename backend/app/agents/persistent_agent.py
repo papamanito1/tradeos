@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import math
 import os
 import time
@@ -872,77 +873,81 @@ class PersistentAgent:
 
     async def _x_scheduler(self) -> None:
         """
-        Background task driving all X posts — trading updates + viral content.
-        Fires immediately on startup, then runs on smart cooldown intervals.
+        Single-post-at-a-time X scheduler.
+
+        Rules:
+          • Trade signals / results → fired instantly by the trading engine (not here).
+          • News              → checked every 5 min; posted immediately when fresh story found.
+          • BTC price move    → fired immediately when BTC moves ≥1.5%.
+          • All other content → one post chosen at random from cooldown-ready types,
+                                with a random 5–30 min wait between posts.
+          • Max gap guarantee → if 30 min have passed since any post, force the best
+                                available content type so the account never goes silent.
+          • Daily / Weekly    → fired once at the right UTC hour.
         """
         if not self.x_publisher.enabled:
             return
 
-        # Give the agent 30s to initialise market data before first post
+        # Wait for market data to initialise before first post
         await asyncio.sleep(30)
 
-        # Fire startup burst — intro + first hourly + philosophy + engagement
-        try:
-            from app.agents.live_market_stream import LIVE_PRICES
-            btc_price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-        except Exception:
-            btc_price = 0.0
+        # Single intro post on startup — then wait a random 2–5 min before anything else
+        self.x_publisher.post_intro()
+        await asyncio.sleep(random.uniform(120, 300))
 
-        self.x_publisher.post_hourly(
-            btc_price=btc_price, open_positions=[],
-            daily_pnl=0.0, regime="unknown", regime_stability="starting up",
-        )
-        await asyncio.sleep(5)
-        self.x_publisher.post_philosophy()
-        await asyncio.sleep(5)
-        self.x_publisher.post_engagement()
-        await asyncio.sleep(5)
-        await self.x_publisher.post_fear_greed()
-        await asyncio.sleep(5)
-        await self.x_publisher.post_news()
-
-        last_hour_posted = -1
         last_day_posted  = -1
-        last_week_posted = -1   # ISO week number
+        last_week_posted = -1
+        last_news_check  = 0.0   # tracks when we last polled RSS
+
+        # Content candidates (key, async_fn or sync_fn) — excluding news (handled separately)
+        def _get_btc_price() -> float:
+            try:
+                from app.agents.live_market_stream import LIVE_PRICES
+                return LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+            except Exception:
+                return 0.0
+
+        def _get_regime() -> tuple[str, str]:
+            r  = self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown"
+            rh = getattr(self.brain, "_regime_history", [])
+            if len(rh) >= 3 and len(set(rh[-3:])) == 1:
+                rs = "stable"
+            elif len(rh) >= 3:
+                rs = "shifting"
+            else:
+                rs = "unknown"
+            return r, rs
+
+        MAX_SILENCE_SEC   = 1800   # 30 min — force a post if nothing has gone out
+        NEWS_CHECK_SEC    = 300    # 5 min — how often to poll RSS for fresh stories
 
         while self._running:
             try:
-                now = datetime.now(timezone.utc)
-                regime = self.brain.current_regime if hasattr(self.brain, "current_regime") else "unknown"
-                _rh = getattr(self.brain, "_regime_history", [])
-                if len(_rh) >= 3 and len(set(_rh[-3:])) == 1:
-                    regime_stability = "stable"
-                elif len(_rh) >= 3:
-                    regime_stability = "shifting"
-                else:
-                    regime_stability = "unknown"
+                now     = datetime.now(timezone.utc)
+                regime, regime_stability = _get_regime()
+                btc_price = _get_btc_price()
+                open_pos  = [p for p in self.positions.values() if p]
 
-                # ── Hourly BTC analysis — always posts ───────────────────────
-                if now.hour != last_hour_posted:
-                    open_pos = [p for p in self.positions.values() if p]
-                    # Use brain.daily_pnl — live trades only, resets at midnight UTC
-                    daily_pnl_live = self.brain.daily_pnl
-                    # Fetch current BTC price from market stream cache
-                    btc_price = 0.0
-                    try:
-                        from app.agents.live_market_stream import LIVE_PRICES
-                        btc_price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-                    except Exception:
-                        pass
-                    self.x_publisher.post_hourly(
-                        btc_price=btc_price,
-                        open_positions=open_pos,
-                        daily_pnl=daily_pnl_live,
-                        regime=regime,
-                        regime_stability=str(regime_stability),
-                    )
-                    last_hour_posted = now.hour
+                # ── News: checked every 5 min, fires immediately when fresh ─────
+                if time.time() - last_news_check >= NEWS_CHECK_SEC:
+                    last_news_check = time.time()
+                    posted_news = await self.x_publisher.post_news()
+                    if posted_news:
+                        # News just went out — sleep random 5–20 min before next post
+                        await asyncio.sleep(random.uniform(300, 1200))
+                        continue
 
-                # ── Daily at midnight UTC ─────────────────────────────────────
+                # ── BTC price move alert — fires immediately if ≥1.5% move ─────
+                prev_price = self.x_publisher.memory.get_btc_price()
+                if btc_price > 0 and prev_price > 0:
+                    if abs(btc_price - prev_price) / prev_price * 100 >= 1.5:
+                        self.x_publisher.post_btc_move(btc_price, prev_price)
+                        await asyncio.sleep(random.uniform(300, 900))
+                        continue
+
+                # ── Daily summary at midnight UTC ─────────────────────────────
                 if now.hour == 0 and now.day != last_day_posted:
-                    live_pnl = sum(
-                        t.get("pnl_usd", 0) for t in self.trades if t.get("is_live")
-                    )
+                    live_pnl = sum(t.get("pnl_usd", 0) for t in self.trades if t.get("is_live"))
                     self.x_publisher.post_daily(
                         stats=self.stats,
                         strategy_stats=self.brain.strategy_stats,
@@ -950,8 +955,10 @@ class PersistentAgent:
                         live_pnl=live_pnl,
                     )
                     last_day_posted = now.day
+                    await asyncio.sleep(random.uniform(60, 300))
+                    continue
 
-                # ── Weekly on Sunday at 20:00 UTC ─────────────────────────────
+                # ── Weekly recap on Sunday 20:00 UTC ─────────────────────────
                 iso_week = now.isocalendar()[1]
                 if now.weekday() == 6 and now.hour == 20 and iso_week != last_week_posted:
                     acc_balance = 0.0
@@ -968,30 +975,58 @@ class PersistentAgent:
                         account_balance=acc_balance,
                     )
                     last_week_posted = iso_week
+                    await asyncio.sleep(random.uniform(60, 300))
+                    continue
 
-                # ── Viral content rotation (cooldown-gated, memory-aware) ───
-                await self.x_publisher.post_news()
-                await self.x_publisher.post_fear_greed()
-                self.x_publisher.post_hot_take()
-                self.x_publisher.post_philosophy()
-                self.x_publisher.post_engagement()
+                # ── Regular content: one post at a time, randomly chosen ───────
+                # Build map: key → async/sync post function for cooldown-ready types
+                content_map: dict[str, any] = {
+                    "hourly": lambda: self.x_publisher.post_hourly(
+                        btc_price=btc_price,
+                        open_positions=open_pos,
+                        daily_pnl=self.brain.daily_pnl,
+                        regime=regime,
+                        regime_stability=regime_stability,
+                    ),
+                    "fear_greed":  self.x_publisher.post_fear_greed,
+                    "hot_take":    self.x_publisher.post_hot_take,
+                    "philosophy":  self.x_publisher.post_philosophy,
+                    "engagement":  self.x_publisher.post_engagement,
+                    "algo_insight": self.x_publisher.post_algo_insight,
+                }
+                available = self.x_publisher.available_post_types()
+                # Remove news/btc_move (handled separately above)
+                candidates = [k for k in available if k in content_map]
 
-                # BTC price move alert — fires only if price moved ≥1.5%
-                try:
-                    from app.agents.live_market_stream import LIVE_PRICES
-                    cur_price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-                    prev_price = self.x_publisher.memory.get_btc_price()
-                    self.x_publisher.post_btc_move(cur_price, prev_price)
-                except Exception:
-                    pass
+                # Enforce max-silence guarantee: if no post in 30 min, force one
+                time_since_any = time.time() - self.x_publisher.last_any_post_ts()
+                force_post = time_since_any >= MAX_SILENCE_SEC
+
+                if candidates or force_post:
+                    if not candidates:
+                        # All cooldowns still active but silence too long — pick least-recent
+                        candidates = sorted(
+                            content_map.keys(),
+                            key=lambda k: self.x_publisher._last.get(k, 0),
+                        )
+                    # Pick ONE at random
+                    random.shuffle(candidates)
+                    chosen_key = candidates[0]
+                    fn = content_map[chosen_key]
+                    result = fn()
+                    if asyncio.iscoroutine(result):
+                        await result
+                    logger.debug(f"[XScheduler] Posted: {chosen_key}")
+
+                # Sleep a random 5–30 min before the next check cycle
+                sleep_sec = random.uniform(300, MAX_SILENCE_SEC)
+                await asyncio.sleep(sleep_sec)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"[XScheduler] Error: {e}")
-
-            # Sleep exactly 25 minutes — cadence matches HOURLY_COOLDOWN
-            await asyncio.sleep(1500)
+                await asyncio.sleep(60)
 
     async def _loop(self) -> None:
         while self._running:

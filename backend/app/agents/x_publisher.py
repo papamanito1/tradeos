@@ -1004,8 +1004,29 @@ class XPublisher:
             self._last_error = f"Reply error: {e}"
             return False
 
+    # Per-key cooldown durations (seconds) — used by the external scheduler
+    _COOLDOWNS: dict[str, float] = {
+        "hourly":      HOURLY_COOLDOWN,
+        "fear_greed":  FEAR_GREED_COOLDOWN,
+        "hot_take":    HOT_TAKE_COOLDOWN,
+        "philosophy":  PHILOSOPHY_COOLDOWN,
+        "engagement":  ENGAGEMENT_COOLDOWN,
+        "btc_move":    BTC_MOVE_COOLDOWN,
+        "algo_insight": ALGO_INSIGHT_COOLDOWN,
+        "news":        NEWS_COOLDOWN,
+    }
+
     def _cooldown_ok(self, key: str, seconds: float) -> bool:
         return (time.time() - self._last.get(key, 0)) >= seconds
+
+    def available_post_types(self) -> list[str]:
+        """Return list of content post types whose cooldown has expired."""
+        return [k for k, cd in self._COOLDOWNS.items()
+                if self._cooldown_ok(k, cd)]
+
+    def last_any_post_ts(self) -> float:
+        """Timestamp of the most recently sent post of any type."""
+        return max(self._last.values()) if self._last else 0.0
 
     def _touch(self, key: str) -> None:
         self._last[key] = time.time()
