@@ -368,7 +368,7 @@ def _run_hft(candles1m: list[dict], orderbook: Optional[dict]) -> dict:
 
     signal = None
     if long_met >= 3 or short_met >= 3:
-        d    = "long" if long_met >= 4 else "short"
+        d    = "long" if long_met >= short_met else "short"
         e    = cur1m["close"]
         sl_d = max(1.5 * atr1m, abs(e - vwap1m))
         sl   = e - sl_d if d == "long" else e + sl_d
@@ -497,6 +497,8 @@ class PersistentAgent:
         # Master Brain — central intelligence for trade decisions
         from app.agents.master_brain import MasterBrain
         self.brain = MasterBrain()
+        # Sync daily loss limit from config into brain (single source of truth)
+        self.brain.MAX_DAILY_LOSS = -abs(float(self.config.get("daily_loss_limit", 50.0)))
         # Ensure fusion strategy slot exists in brain trust scores
         self.brain.strategy_trust.setdefault("fusion", 1.0)
         # X/Twitter publisher — gracefully disabled when env vars are absent
@@ -511,7 +513,7 @@ class PersistentAgent:
             return None
         if self._live is None:
             from app.agents.live_executor import LiveExecutor
-            ddl = float(self.config.get("daily_loss_limit", 200.0))
+            ddl = float(self.config.get("daily_loss_limit", 50.0))
             max_pos = float(self.config.get("max_position_usdc", 500.0))
             self._live = LiveExecutor(
                 api_key=settings.bingx_api_key,
@@ -541,6 +543,9 @@ class PersistentAgent:
             # Shadow positions survive restarts so training data is continuous
             "shadow_positions": {k: v for k, v in self.positions.items()
                                  if k.startswith("shadow_") and v},
+            # X posts survive restarts — last 50 posts persisted
+            "x_recent_posts":  self.x_publisher._recent_posts[-50:],
+            "x_last_times":    self.x_publisher._last,
         }
 
     def _apply_state(self, data: dict) -> None:
@@ -563,6 +568,11 @@ class PersistentAgent:
             self.stats["worst_trade"] = min(self.stats.get("worst_trade", stored.get("worst_trade", 0)), stored.get("worst_trade", 0))
         # Restore MasterBrain state
         self.brain.from_dict(data.get("brain", {}))
+        # Restore X publisher recent posts and cooldown times
+        if data.get("x_recent_posts"):
+            self.x_publisher._recent_posts = data["x_recent_posts"]
+        if data.get("x_last_times"):
+            self.x_publisher._last.update(data["x_last_times"])
         # If Brain's stats were wiped (restart/deploy), reconstruct from trade history
         self._reconstruct_brain_stats()
 
@@ -1739,6 +1749,9 @@ class PersistentAgent:
             self.config["strategy_overrides"] = existing
             patch = {k: v for k, v in patch.items() if k != "strategy_overrides"}
         self.config.update(patch)
+        # Keep brain daily loss limit in sync when config changes
+        if "daily_loss_limit" in patch:
+            self.brain.MAX_DAILY_LOSS = -abs(float(patch["daily_loss_limit"]))
         if patch.get("enabled") is True and not self._running:
             asyncio.create_task(self.start())
         elif patch.get("enabled") is False and self._running:

@@ -19,9 +19,10 @@ import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-RAILWAY_URL = "https://tradeos-production-8f21.up.railway.app"
-POLL_INTERVAL = 25  # seconds between queue polls
-LOCAL_PORT = 4242
+RAILWAY_URL    = "https://tradeos-production-8f21.up.railway.app"
+POSTER_SECRET  = os.environ.get("POSTER_SECRET", "tradeos-local-2024")  # set same in Railway env
+POLL_INTERVAL  = 25  # seconds between queue polls
+LOCAL_PORT     = 4242
 
 logging.basicConfig(
     format="%(asctime)s  %(message)s",
@@ -53,7 +54,7 @@ async def fetch_creds():
     try:
         from curl_cffi.requests import AsyncSession
         async with AsyncSession() as s:
-            r = await s.get(f"{RAILWAY_URL}/api/x-agent/creds", timeout=15)
+            r = await s.get(f"{RAILWAY_URL}/api/x-agent/creds?secret={POSTER_SECRET}", timeout=15)
             data = r.json()
             if data.get("ok"):
                 _auth_token = data["a"].strip()

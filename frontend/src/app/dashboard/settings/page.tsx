@@ -194,7 +194,7 @@ export default function SettingsPage() {
         <div className="flex items-center gap-2 mb-4">
           <Shield size={14} className="text-blue-400" />
           <h3 className="text-sm font-semibold text-white">Risk Configuration</h3>
-          <Link href="/dashboard/risk" className="ml-auto text-[9px] text-neutral-600 hover:text-blue-400 transition-colors">Edit →</Link>
+          <Link href="/dashboard/agent" className="ml-auto text-[9px] text-neutral-600 hover:text-blue-400 transition-colors">Configure →</Link>
         </div>
         <div className="grid grid-cols-2 gap-3">
           {[

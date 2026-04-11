@@ -37,8 +37,14 @@ async def get_status():
 
 
 @router.get("/creds")
-async def get_creds():
-    """Return auth cookies so local_poster.py can post from the residential IP."""
+async def get_creds(secret: str = ""):
+    """Return auth cookies so local_poster.py can post from the residential IP.
+    Requires POSTER_SECRET env var to match the `secret` query param."""
+    import os
+    expected = os.environ.get("POSTER_SECRET", "")
+    if not expected or secret != expected:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Forbidden")
     pub = _publisher()
     if not pub or not pub.enabled:
         return {"ok": False}

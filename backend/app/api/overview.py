@@ -53,6 +53,14 @@ async def get_overview(
 
     kill_switch = await redis_get("risk:kill_switch_active")
 
+    # Get real trading mode from the persistent agent
+    try:
+        from app.agents.persistent_agent import get_agent
+        agent = get_agent()
+        trading_mode = agent.config.get("mode", "paper") if agent else "paper"
+    except Exception:
+        trading_mode = "paper"
+
     return {
         "equity": balance.get("equity", balance.get("balance_usd", 10000)),
         "available_balance": balance.get("balance_usd", 10000),
@@ -64,7 +72,7 @@ async def get_overview(
         "active_strategies": len(active_strategies),
         "open_positions": len(open_positions),
         "kill_switch_active": bool(kill_switch),
-        "trading_mode": "paper",
+        "trading_mode": trading_mode,
         "exchange_connected": True,
         "positions": [
             {

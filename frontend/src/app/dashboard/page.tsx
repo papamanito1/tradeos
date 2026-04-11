@@ -1380,6 +1380,46 @@ function CommandBar({
   );
 }
 
+// ─── P&L Equity Sparkline ──────────────────────────────────────────────────────
+function PnLSparkline({ trades }: { trades: { pnl_usd?: number; pnl?: number }[] }) {
+  const points = trades.slice(-20);
+  let cumulative = 0;
+  const equity = points.map(t => { cumulative += (t.pnl_usd ?? t.pnl ?? 0); return cumulative; });
+  const min = Math.min(...equity, 0);
+  const max = Math.max(...equity, 0.01);
+  const range = max - min || 1;
+  const w = 100 / (equity.length - 1);
+  const toY = (v: number) => 100 - ((v - min) / range) * 100;
+  const isUp = equity[equity.length - 1] >= 0;
+  const color = isUp ? "#22c55e" : "#ef4444";
+
+  const pathD = equity.map((v, i) => `${i === 0 ? "M" : "L"}${i * w},${toY(v)}`).join(" ");
+  const fillD = `${pathD} L${(equity.length - 1) * w},100 L0,100 Z`;
+
+  return (
+    <div className="mb-2 rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+      <div className="flex items-center justify-between px-2.5 pt-2 pb-1">
+        <span className="text-[7px] text-neutral-600 font-bold tracking-widest uppercase">Equity Curve</span>
+        <span className={`text-[9px] font-mono font-bold ${isUp ? "text-green-400" : "text-red-400"}`}>
+          {isUp ? "+" : ""}${equity[equity.length - 1].toFixed(2)}
+        </span>
+      </div>
+      <svg viewBox={`0 0 100 40`} preserveAspectRatio="none" className="w-full" style={{ height: 36 }}>
+        <defs>
+          <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={fillD} fill="url(#sparkGrad)" />
+        <path d={pathD} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        {/* Zero line */}
+        <line x1="0" y1={toY(0)} x2="100" y2={toY(0)} stroke="rgba(255,255,255,0.08)" strokeWidth="0.5" />
+      </svg>
+    </div>
+  );
+}
+
 // ─── Signal Command Center ─────────────────────────────────────────────────────
 function SignalCommandCenter({
   agent, strategyResult, orbResult, serverAgent,
@@ -1581,6 +1621,10 @@ function SignalCommandCenter({
                 </div>
               ))}
             </div>
+            {/* P&L equity sparkline */}
+            {serverAgent.trades.length >= 2 && (
+              <PnLSparkline trades={serverAgent.trades} />
+            )}
 
             {/* Open server positions */}
             {serverAgent.openPositions.length > 0 ? (
@@ -2005,6 +2049,24 @@ export default function OverviewPage() {
             <div>
               <div className="text-[13px] font-bold" style={{ color: "#ff453a" }}>Emergency Stop Active</div>
               <div className="text-[9px] text-red-400/60">All trading halted · Check risk settings</div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Circuit breaker banner (daily loss limit hit) ── */}
+        {serverAgent.status?.live_executor?.halted && !d?.kill_switch_active && (
+          <div className="flex items-center gap-3 px-5 py-3.5 rounded-2xl"
+            style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.2)" }}>
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "rgba(251,191,36,0.12)" }}>
+              <span className="text-sm">⛔</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-bold text-yellow-300">Circuit Breaker Triggered</div>
+              <div className="text-[9px] text-yellow-400/60">
+                Daily loss limit hit · No new live trades today ·{" "}
+                Daily P&L: <span className="font-mono text-yellow-300">${serverAgent.status.live_executor.daily_pnl?.toFixed(2)}</span>{" "}
+                / limit: <span className="font-mono">-${serverAgent.status.live_executor.daily_loss_limit?.toFixed(0)}</span>
+              </div>
             </div>
           </div>
         )}

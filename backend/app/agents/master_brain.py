@@ -228,7 +228,11 @@ class MasterBrain:
             reasons.append(f"{opposite_dir_count} positions oppose — conflict")
 
         # ── Factor 5: Risk gates ─────────────────────────────────────────
-        total_open = sum(1 for v in open_positions.values() if v)
+        # Only count real (non-shadow) positions toward the cap
+        total_open = sum(
+            1 for k, v in open_positions.items()
+            if v and not k.startswith("shadow_") and not (isinstance(v, dict) and v.get("is_shadow"))
+        )
 
         if total_open >= self.MAX_OPEN_POSITIONS:
             return self._reject(strategy_key, strategy_name, signal,
