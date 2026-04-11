@@ -155,6 +155,16 @@ async def trigger_hourly():
     return _queue_tweet("hourly", _gen_hourly_text(pub))
 
 
+@router.post("/trigger/algo-insight")
+async def trigger_algo_insight():
+    from app.agents.x_publisher import ALGO_INSIGHTS
+    pub = _publisher()
+    if err := _check(pub): return err
+    pub._last["algo_insight"] = 0
+    text = pub.memory.pick("algo_insight", ALGO_INSIGHTS)
+    return _queue_tweet("algo_insight", text)
+
+
 # ── Manual compose ────────────────────────────────────────────────────────────
 
 class ManualPostRequest(BaseModel):
@@ -236,7 +246,9 @@ async def next_post():
     """Return the next tweet for the local poster to send.
     Checks manual queue first, then auto-schedule by cooldown."""
     from app.agents import x_publisher as xp
-    from app.agents.x_publisher import HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS
+    from app.agents.x_publisher import (
+        HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS, ALGO_INSIGHTS,
+    )
 
     pub = _publisher()
     now = time.time()
@@ -258,16 +270,21 @@ async def next_post():
         post_type = "hourly"
 
     elif _ok("hot_take", xp.HOT_TAKE_COOLDOWN):
-        text = random.choice(HOT_TAKES)
+        text = pub.memory.pick("hot_take", HOT_TAKES) if pub else random.choice(HOT_TAKES)
         post_type = "hot_take"
 
     elif _ok("philosophy", xp.PHILOSOPHY_COOLDOWN):
-        text = random.choice(PHILOSOPHY_POSTS)
+        text = pub.memory.pick("philosophy", PHILOSOPHY_POSTS) if pub else random.choice(PHILOSOPHY_POSTS)
         post_type = "philosophy"
 
     elif _ok("engagement", xp.ENGAGEMENT_COOLDOWN):
-        text = random.choice(ENGAGEMENT_QUESTIONS)
+        text = pub.memory.pick("engagement", ENGAGEMENT_QUESTIONS) if pub else random.choice(ENGAGEMENT_QUESTIONS)
         post_type = "engagement"
+
+    elif _ok("algo_insight", xp.ALGO_INSIGHT_COOLDOWN):
+        from app.agents.x_publisher import ALGO_INSIGHTS
+        text = pub.memory.pick("algo_insight", ALGO_INSIGHTS) if pub else random.choice(ALGO_INSIGHTS)
+        post_type = "algo_insight"
 
     if not post_type or not text:
         return {"has_post": False}

@@ -941,19 +941,30 @@ class PersistentAgent:
                     )
                     last_week_posted = iso_week
 
-                # ── Viral content — news, philosophy, hot takes, engagement ───
+                # ── Viral content rotation (cooldown-gated, memory-aware) ───
                 await self.x_publisher.post_news()
                 await self.x_publisher.post_fear_greed()
                 self.x_publisher.post_hot_take()
                 self.x_publisher.post_philosophy()
                 self.x_publisher.post_engagement()
+                self.x_publisher.post_algo_insight()
+
+                # BTC price move alert — fires only if price moved ≥1.5%
+                try:
+                    from app.agents.live_market_stream import LIVE_PRICES
+                    cur_price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+                    prev_price = self.x_publisher.memory.get_btc_price()
+                    self.x_publisher.post_btc_move(cur_price, prev_price)
+                except Exception:
+                    pass
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"[XScheduler] Error: {e}")
 
-            await asyncio.sleep(60)   # check every minute
+            # Sleep exactly 25 minutes — cadence matches HOURLY_COOLDOWN
+            await asyncio.sleep(1500)
 
     async def _loop(self) -> None:
         while self._running:

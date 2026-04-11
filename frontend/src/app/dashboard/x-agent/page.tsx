@@ -48,21 +48,26 @@ interface Status {
   last_philosophy: number;
   last_engagement: number;
   last_hourly: number;
+  posts_per_hour?: number;
+  total_posts?: number;
+  next_post_in_sec?: number;
 }
 
 const TYPE_META: Record<string, { label: string; icon: string; accent: string; glow: string }> = {
-  signal:     { label: "Trade Signal",   icon: "⚡", accent: "text-red-400",    glow: "shadow-red-500/20" },
-  result:     { label: "Trade Result",   icon: "📊", accent: "text-violet-400", glow: "shadow-violet-500/20" },
-  hourly:     { label: "Hourly Update",  icon: "◉",  accent: "text-blue-400",   glow: "shadow-blue-500/20" },
-  news:       { label: "Crypto News",    icon: "◈",  accent: "text-amber-400",  glow: "shadow-amber-500/20" },
-  fear_greed: { label: "Fear & Greed",   icon: "◐",  accent: "text-orange-400", glow: "shadow-orange-500/20" },
-  hot_take:   { label: "Hot Take",       icon: "◆",  accent: "text-rose-400",   glow: "shadow-rose-500/20" },
-  philosophy: { label: "Philosophy",     icon: "◇",  accent: "text-cyan-400",   glow: "shadow-cyan-500/20" },
-  engagement: { label: "Engagement",     icon: "○",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
-  daily:      { label: "Daily Summary",  icon: "◉",  accent: "text-indigo-400", glow: "shadow-indigo-500/20" },
-  weekly:     { label: "Weekly Recap",   icon: "◈",  accent: "text-pink-400",   glow: "shadow-pink-500/20" },
-  manual:     { label: "Manual",         icon: "◌",  accent: "text-white/50",   glow: "" },
-  intro:      { label: "Intro",          icon: "◎",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
+  signal:       { label: "Trade Signal",   icon: "⚡", accent: "text-red-400",    glow: "shadow-red-500/20" },
+  result:       { label: "Trade Result",   icon: "📊", accent: "text-violet-400", glow: "shadow-violet-500/20" },
+  hourly:       { label: "25min Update",   icon: "◉",  accent: "text-blue-400",   glow: "shadow-blue-500/20" },
+  news:         { label: "Crypto News",    icon: "◈",  accent: "text-amber-400",  glow: "shadow-amber-500/20" },
+  fear_greed:   { label: "Fear & Greed",   icon: "◐",  accent: "text-orange-400", glow: "shadow-orange-500/20" },
+  hot_take:     { label: "Hot Take",       icon: "◆",  accent: "text-rose-400",   glow: "shadow-rose-500/20" },
+  philosophy:   { label: "Philosophy",     icon: "◇",  accent: "text-cyan-400",   glow: "shadow-cyan-500/20" },
+  engagement:   { label: "Engagement",     icon: "○",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
+  algo_insight: { label: "Algo Insight",   icon: "🧠", accent: "text-purple-400", glow: "shadow-purple-500/20" },
+  btc_move:     { label: "BTC Move",       icon: "📈", accent: "text-yellow-400", glow: "shadow-yellow-500/20" },
+  daily:        { label: "Daily Summary",  icon: "◉",  accent: "text-indigo-400", glow: "shadow-indigo-500/20" },
+  weekly:       { label: "Weekly Recap",   icon: "◈",  accent: "text-pink-400",   glow: "shadow-pink-500/20" },
+  manual:       { label: "Manual",         icon: "◌",  accent: "text-white/50",   glow: "" },
+  intro:        { label: "Intro",          icon: "◎",  accent: "text-emerald-400",glow: "shadow-emerald-500/20" },
 };
 
 function timeAgo(ts: number): string {
@@ -273,8 +278,11 @@ export default function XAgentPage() {
   };
 
   const todayPosts = status?.recent_posts.filter(p => Date.now() / 1000 - p.ts < 86400).length ?? 0;
-  const totalPosts = status?.recent_posts.length ?? 0;
-  const nextHourly = nextIn(status?.last_hourly || 0, 3300);
+  const totalPosts = status?.total_posts ?? status?.recent_posts.length ?? 0;
+  const nextHourly = nextIn(status?.last_hourly || 0, 1500);
+  const nextPostSec = status?.next_post_in_sec ?? 0;
+  const nextPostLabel = nextPostSec <= 0 ? "Now" : nextPostSec < 60 ? `${Math.round(nextPostSec)}s` : `${Math.round(nextPostSec / 60)}m`;
+  const postsPerHour = status?.posts_per_hour ?? 0;
 
   const triggers = [
     {
@@ -308,10 +316,16 @@ export default function XAgentPage() {
       endpoint: "/api/x-agent/trigger/engagement",
     },
     {
-      icon: "◉", label: "Hourly Update",
-      description: "Live BTC price, regime, and witty commentary",
-      nextPost: nextIn(status?.last_hourly || 0, 3300),
+      icon: "◉", label: "25-min Update",
+      description: "Live BTC price, regime, move %, and witty commentary",
+      nextPost: nextIn(status?.last_hourly || 0, 1500),
       endpoint: "/api/x-agent/trigger/hourly",
+    },
+    {
+      icon: "🧠", label: "Algo Insight",
+      description: "Transparency post: how the system works, risk params, strategy logic",
+      nextPost: nextIn(status?.last_hourly || 0, 10800),
+      endpoint: "/api/x-agent/trigger/algo-insight",
     },
   ];
 
@@ -357,7 +371,7 @@ export default function XAgentPage() {
                   <span className="text-[13px] text-white/40 font-medium">@tradeous</span>
                 </div>
                 <p className="text-[13px] text-white/40 mt-1 font-light">
-                  AI content engine · News · Hot takes · Philosophy · Engagement
+                  AI content engine · Posts every 25 min · Memory-aware · Never repeats
                 </p>
               </div>
             </div>
@@ -386,11 +400,12 @@ export default function XAgentPage() {
         </div>
 
         {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           {[
             { value: todayPosts, label: "Posts today", sub: "last 24 hours" },
             { value: totalPosts, label: "Total posts", sub: "this session" },
-            { value: nextHourly === "Ready" ? "Now" : nextHourly, label: "Next hourly", sub: "BTC update" },
+            { value: nextHourly === "Ready" ? "Now" : nextHourly, label: "Next post", sub: "25-min cadence" },
+            { value: postsPerHour > 0 ? `${postsPerHour}/h` : "—", label: "Post rate", sub: "live average" },
           ].map((s) => (
             <div key={s.label} className="rounded-2xl bg-white/[0.04] border border-white/[0.07] p-5 relative overflow-hidden group hover:bg-white/[0.06] transition-all duration-300">
               <div className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none rounded-2xl" />
