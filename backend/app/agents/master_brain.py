@@ -268,30 +268,28 @@ class MasterBrain:
             elif win_rate < 0.4:
                 reasons.append(f"low win rate ({win_rate:.0%}) → size cut")
 
-        # ── Factor 9: LIVE-ONLY gates ────────────────────────────────────
+        # ── Factor 9: LIVE-ONLY adjustments ───────────────────────────────
         if is_live:
-            # Must have enough paper history
-            if total_trades < self.MIN_PAPER_TRADES_FOR_LIVE:
-                return self._reject(strategy_key, strategy_name, signal,
-                                    f"Not enough data — {total_trades}/{self.MIN_PAPER_TRADES_FOR_LIVE} "
-                                    f"paper trades needed before live")
-
-            # Must have acceptable win rate
-            if total_trades >= self.MIN_PAPER_TRADES_FOR_LIVE and win_rate < self.MIN_WIN_RATE_FOR_LIVE:
-                return self._reject(strategy_key, strategy_name, signal,
-                                    f"Win rate too low for live ({win_rate:.0%} < {self.MIN_WIN_RATE_FOR_LIVE:.0%})")
-
-            # Trust must be reasonable
-            if trust < 0.7:
-                return self._reject(strategy_key, strategy_name, signal,
-                                    f"Trust too low for live ({trust:.2f} < 0.70)")
-
-            # No live trades after 3 consecutive losses
+            # Hard gate: 3+ consecutive losses pauses live
             if self.consecutive_losses >= 3:
                 return self._reject(strategy_key, strategy_name, signal,
                                     f"Live paused — {self.consecutive_losses} consecutive losses")
 
-            reasons.append("✓ live-qualified")
+            # Hard gate: trust collapsed (strategy consistently losing)
+            if trust < 0.5:
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Trust too low for live ({trust:.2f} < 0.50)")
+
+            # Soft scaling: less history → smaller position size (not blocked)
+            if total_trades < self.MIN_PAPER_TRADES_FOR_LIVE:
+                history_scale = max(0.3, total_trades / self.MIN_PAPER_TRADES_FOR_LIVE)
+                size_mult *= history_scale
+                reasons.append(f"new strategy ({total_trades} trades) → size {history_scale:.0%}")
+            elif win_rate < self.MIN_WIN_RATE_FOR_LIVE and total_trades >= self.MIN_PAPER_TRADES_FOR_LIVE:
+                size_mult *= 0.5
+                reasons.append(f"low win rate ({win_rate:.0%}) → size halved for live")
+            else:
+                reasons.append("✓ live-qualified")
 
         # ── Final decision ───────────────────────────────────────────────
         conviction = min(1.0, max(0.0, score))
@@ -456,16 +454,20 @@ class MasterBrain:
     # ══════════════════════════════════════════════════════════════════════
 
     def is_strategy_live_ready(self, strategy_key: str) -> dict:
-        """Check if a strategy has enough paper history and win rate for live."""
+        """Check strategy's live qualification level."""
         stats = self.strategy_stats.get(strategy_key, {})
         total = stats.get("trades", 0)
         wr = stats.get("win_rate", 0.0)
         trust = self.strategy_trust.get(strategy_key, 1.0)
-        ready = (total >= self.MIN_PAPER_TRADES_FOR_LIVE
-                 and wr >= self.MIN_WIN_RATE_FOR_LIVE
-                 and trust >= 0.7)
+        fully_ready = (total >= self.MIN_PAPER_TRADES_FOR_LIVE
+                       and wr >= self.MIN_WIN_RATE_FOR_LIVE
+                       and trust >= 0.5)
+        can_trade = trust >= 0.5 and self.consecutive_losses < 3
+        scale = max(0.3, total / self.MIN_PAPER_TRADES_FOR_LIVE) if total < self.MIN_PAPER_TRADES_FOR_LIVE else 1.0
         return {
-            "ready": ready,
+            "ready": fully_ready,
+            "can_trade": can_trade,
+            "scale": round(scale, 2),
             "trades": total,
             "trades_needed": max(0, self.MIN_PAPER_TRADES_FOR_LIVE - total),
             "win_rate": round(wr, 3),

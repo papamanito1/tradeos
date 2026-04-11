@@ -665,6 +665,29 @@ class PersistentAgent:
             self.stats["worst_trade"] = min(self.stats.get("worst_trade", stored.get("worst_trade", 0)), stored.get("worst_trade", 0))
         # Restore MasterBrain state
         self.brain.from_dict(data.get("brain", {}))
+        # If Brain's stats were wiped (restart/deploy), reconstruct from trade history
+        self._reconstruct_brain_stats()
+
+    def _reconstruct_brain_stats(self) -> None:
+        """Rebuild Brain strategy_stats from trade history if they were wiped."""
+        brain_total = sum(s.get("trades", 0) for s in self.brain.strategy_stats.values())
+        agent_total = len(self.trades)
+        if brain_total >= agent_total or agent_total == 0:
+            return  # Brain already has data or no trades to learn from
+        logger.info(f"[Agent] Reconstructing Brain stats from {agent_total} trades "
+                    f"(Brain had {brain_total})")
+        for t in reversed(self.trades):  # oldest first so stats accumulate correctly
+            sk = t.get("strategy_key", "")
+            if sk.startswith("grid_"):
+                sk = "grid"
+            if not sk:
+                continue
+            pnl = t.get("pnl_usd", 0) or 0
+            won = pnl > 0 or t.get("exit_reason") == "tp"
+            was_live = t.get("is_live", False) or t.get("mode") == "live"
+            self.brain.record_trade_result(sk, pnl, won, was_live=was_live)
+        logger.info(f"[Agent] Brain reconstruction complete — "
+                    f"{', '.join(f'{k}:{v.get(\"trades\",0)}t' for k,v in self.brain.strategy_stats.items())}")
 
     # ── File fallback (local dev / fast cache) ────────────────────────────────
 
