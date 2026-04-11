@@ -747,12 +747,24 @@ class XPublisher:
 
         text = text[:280]
 
-        # GraphQL CreateTweet — v1.1 consistently returns 404 so skip it
         ok = await self._post_graphql(text, post_type)
         if ok:
             return True
 
+        # Railway can't post — queue for local poster
+        self._queue_for_local_poster(text, post_type)
         return False
+
+    def _queue_for_local_poster(self, text: str, post_type: str) -> None:
+        """Add to the x_agent API tweet queue so local_poster.py picks it up."""
+        try:
+            from app.api.x_agent import _tweet_queue
+            import uuid
+            qid = str(uuid.uuid4())[:8] + f"_{post_type}"
+            _tweet_queue.append({"id": qid, "type": post_type, "text": text[:280], "ts": time.time()})
+            logger.info(f"[XPublisher] Queued for local poster: [{post_type}] {text[:50]}…")
+        except Exception as e:
+            logger.debug(f"[XPublisher] queue error: {e}")
 
     async def _post_v1(self, text: str, post_type: str) -> bool:
         """Post via Twitter v1.1 client API — works better from server IPs."""
@@ -851,15 +863,23 @@ class XPublisher:
 
             if status_code == 200:
                 import json as _json
+                parsed = _json.loads(resp_text)
                 tweet_id = (
-                    _json.loads(resp_text).get("data", {})
+                    parsed.get("data", {})
                         .get("create_tweet", {})
                         .get("tweet_results", {})
                         .get("result", {})
                         .get("rest_id", "")
                 )
+                if not tweet_id:
+                    # X returned 200 but no tweet was created (datacenter IP silently blocked)
+                    errors = parsed.get("errors", [])
+                    err_msg = errors[0].get("message", "no tweet_id") if errors else "empty tweet_id (IP blocked?)"
+                    self._last_error = f"GraphQL ghost 200: {err_msg}"
+                    logger.warning(f"[XPublisher] GraphQL fake success: {self._last_error}")
+                    return False
                 self._record_success(tweet_id, text, post_type)
-                logger.info(f"[XPublisher] [{post_type}] ✓ GraphQL Posted: {text[:60]}…")
+                logger.info(f"[XPublisher] [{post_type}] ✓ GraphQL Posted (id={tweet_id}): {text[:60]}…")
                 return True
             self._last_error = f"GraphQL HTTP {status_code}: {resp_text[:150]}"
             logger.warning(f"[XPublisher] GraphQL failed: {self._last_error}")
