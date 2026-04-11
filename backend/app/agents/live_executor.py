@@ -30,8 +30,8 @@ class LiveExecutor:
     One instance shared by PersistentAgent.
     """
 
-    RISK_PER_TRADE_PCT = 0.02   # 2% of total capital per trade
-    MAX_LEVERAGE = 30            # hard cap on leverage
+    FIXED_MARGIN_USD = 5.0       # fixed $5 margin per trade
+    MAX_LEVERAGE = 60            # hard cap on leverage
 
     def __init__(
         self,
@@ -132,15 +132,11 @@ class LiveExecutor:
             logger.error(f"[LiveExecutor] fetch_balance failed: {e}")
             return self._cached_balance if self._cached_balance["total"] > 0 else {"total": 0, "free": 0, "used": 0}
 
-    # BingX min order: 0.0001 BTC ≈ ~$7-10 at current prices.
-    # With 30x leverage, minimum margin is ~$0.25. But to be safe, floor at $5.
-    MIN_MARGIN_USD = 5.0
+    MIN_MARGIN_USD = 5.0   # BingX minimum order floor
 
     def compute_trade_size(self, total_capital: float) -> float:
-        """2% of total capital — this is the margin (collateral) per trade.
-        Floor at MIN_MARGIN_USD to ensure trades meet exchange minimums."""
-        size = round(total_capital * self.RISK_PER_TRADE_PCT, 2)
-        return max(self.MIN_MARGIN_USD, size)
+        """Fixed $5 margin per trade regardless of account size."""
+        return self.FIXED_MARGIN_USD
 
     async def fetch_exchange_positions(self) -> list[dict]:
         """Return all open BTC perp positions from BingX."""
@@ -184,10 +180,8 @@ class LiveExecutor:
             logger.warning(f"[LiveExecutor] {self.last_error}")
             return None
 
-        # 2% of total capital = margin for this trade (floored at $5 min)
+        # Fixed $5 margin per trade — capped by available free margin
         risk_size = self.compute_trade_size(total_capital)
-
-        # Don't exceed free margin (keep 5% buffer, minimum $1)
         max_available = max(1.0, free_capital * 0.95)
         capped_usdc = min(risk_size, max_available)
 
@@ -197,11 +191,10 @@ class LiveExecutor:
             logger.warning(f"[LiveExecutor] {self.last_error}")
             return None
 
-        # Cap leverage at 30x
         leverage = min(leverage, self.MAX_LEVERAGE)
 
-        logger.info(f"[LiveExecutor] Sizing: capital=${total_capital:.2f} · 2%=${risk_size:.2f} "
-                    f"· using=${capped_usdc:.2f} · leverage={leverage}× · "
+        logger.info(f"[LiveExecutor] Sizing: capital=${total_capital:.2f} · "
+                    f"margin=${capped_usdc:.2f} · leverage={leverage}× · "
                     f"notional=${capped_usdc * leverage:.2f}")
 
         try:

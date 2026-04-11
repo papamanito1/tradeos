@@ -22,11 +22,11 @@ class RiskCheckResult:
 
 @dataclass
 class RiskConfig:
-    max_daily_loss_usd: float = 500.0
-    max_daily_loss_pct: float = 5.0
-    max_position_size_usd: float = 1000.0
-    max_position_size_pct: float = 10.0
-    max_leverage: float = 3.0
+    max_daily_loss_usd: float = 50.0
+    max_daily_loss_pct: float = 20.0
+    max_position_size_usd: float = 50.0
+    max_position_size_pct: float = 100.0
+    max_leverage: float = 60.0
     max_open_trades: int = 5
     max_symbol_exposure_pct: float = 20.0
     cooldown_after_losses: int = 3

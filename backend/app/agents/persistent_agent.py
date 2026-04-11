@@ -32,26 +32,28 @@ STATE_FILE = Path(os.environ.get("AGENT_STATE_FILE", "/tmp/tradeos_agent_state.j
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_STRATEGY_CFG = {
     "enabled":        True,
-    "size_usdc":      100,
-    "leverage":       1,
+    "size_usdc":      5,
+    "leverage":       60,
     "min_confidence": 0.50,
     "min_conditions": 2,
 }
 
 DEFAULT_CONFIG = {
     "enabled":        True,   # auto-start on server boot
-    "size_usdc":      100,
+    "size_usdc":      5,
     "min_confidence": 0.50,
     "min_conditions": 2,
-    "mode":           "paper",
+    "mode":           "live",
     "auto_execute":   True,
-    "leverage":       1,
+    "leverage":       60,
+    "daily_loss_limit": 50.0,   # halt trading if daily loss exceeds $50
+    "max_position_usdc": 50.0,  # max total exposure
     "strategy_overrides": {
         "momentum": {**DEFAULT_STRATEGY_CFG},
         "hft":      {**DEFAULT_STRATEGY_CFG},
         "orb":      {**DEFAULT_STRATEGY_CFG},
         "obi":      {**DEFAULT_STRATEGY_CFG},
-        "grid":     {**DEFAULT_STRATEGY_CFG, "leverage": 30, "min_conditions": 3},
+        "grid":     {**DEFAULT_STRATEGY_CFG, "leverage": 60, "min_conditions": 3},
     },
 }
 
@@ -1429,7 +1431,7 @@ class PersistentAgent:
                 self._log(f"⛔ [{name}] CIRCUIT BREAKER active — skipping trade (daily loss limit hit)")
                 return
             else:
-                live_leverage = min(leverage, 30)  # hard cap 30x
+                live_leverage = min(leverage, 60)  # hard cap 60x
 
                 async def _do_live_open():
                     pos = await executor.open_position(
