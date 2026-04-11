@@ -2,6 +2,33 @@
 import { useState, useEffect, useCallback } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const LOCAL = "http://localhost:4242";  // local_poster.py — posts via Edge browser instantly
+
+async function postViaLocal(text: string, type: string): Promise<{ ok: boolean; msg: string }> {
+  try {
+    const r = await fetch(`${LOCAL}/post`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, type }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      return { ok: true, msg: "Posting now…" };
+    }
+  } catch {}
+  return { ok: false, msg: "local_poster.py not running" };
+}
+
+async function queueViaRailway(endpoint: string): Promise<{ ok: boolean; msg: string; queued?: boolean }> {
+  try {
+    const r = await fetch(`${API}${endpoint}`, { method: "POST" });
+    const d = await r.json();
+    if (d.ok) return { ok: true, msg: d.queued ? "Queued — posts within 60s" : "Posted!", queued: true };
+    return { ok: false, msg: d.error || "Failed" };
+  } catch {
+    return { ok: false, msg: "Cannot reach backend" };
+  }
+}
 
 interface Post {
   id: string;
@@ -73,20 +100,15 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
   const trigger = async () => {
     setLoading(true);
     setResult(null);
-    try {
-      const r = await fetch(`${API}${endpoint}`, { method: "POST" });
-      const d = await r.json();
-      if (d.ok) {
-        setResult({ ok: true, msg: d.queued ? "Queued" : "Posted" });
-        onTriggered();
-      } else {
-        setResult({ ok: false, msg: d.error || "Failed" });
-      }
-    } catch {
-      setResult({ ok: false, msg: "Offline" });
+    const res = await queueViaRailway(endpoint);
+    if (res.ok) {
+      setResult({ ok: true, msg: res.queued ? "Queued ✓" : "Posted ✓" });
+      onTriggered();
+    } else {
+      setResult({ ok: false, msg: res.msg });
     }
     setLoading(false);
-    setTimeout(() => setResult(null), 5000);
+    setTimeout(() => setResult(null), 6000);
   };
 
   return (
@@ -216,25 +238,38 @@ export default function XAgentPage() {
     if (!manualText.trim() || charCount > 280) return;
     setPosting(true);
     setPostResult(null);
-    try {
-      const r = await fetch(`${API}/api/x-agent/post`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: manualText }),
-      });
-      const d = await r.json();
-      if (d.ok) {
-        setPostResult({ ok: true, msg: d.queued ? "Queued — posts within 60 seconds" : "Tweet posted!" });
-        setManualText("");
-        fetchStatus();
-      } else {
-        setPostResult({ ok: false, msg: d.error || "Failed" });
+
+    // Try local poster first (instant), then Railway queue as fallback
+    const localRes = await postViaLocal(manualText.trim(), "manual");
+    if (localRes.ok) {
+      setPostResult({ ok: true, msg: "Posting now via local browser…" });
+      setManualText("");
+      fetchStatus();
+    } else {
+      // Fallback: Railway queue
+      const railRes = await queueViaRailway(`/api/x-agent/post`);
+      // Railway /post needs body — call directly
+      try {
+        const r = await fetch(`${API}/api/x-agent/post`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: manualText.trim() }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          setPostResult({ ok: true, msg: "Queued — local_poster.py will send it" });
+          setManualText("");
+          fetchStatus();
+        } else {
+          setPostResult({ ok: false, msg: d.error || "Failed — start local_poster.py" });
+        }
+      } catch {
+        setPostResult({ ok: false, msg: "Start local_poster.py to enable posting" });
       }
-    } catch {
-      setPostResult({ ok: false, msg: "Network error" });
     }
+
     setPosting(false);
-    setTimeout(() => setPostResult(null), 6000);
+    setTimeout(() => setPostResult(null), 7000);
   };
 
   const todayPosts = status?.recent_posts.filter(p => Date.now() / 1000 - p.ts < 86400).length ?? 0;
