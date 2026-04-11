@@ -6,6 +6,7 @@ import {
   TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   ChevronRight, RotateCcw, Zap, Shield, X, CheckCircle2, XCircle,
   Save, Loader2, DollarSign, FileText, Cpu, Wifi, WifiOff,
+  LineChart, Target, Wallet, BarChart2, Clock,
 } from "lucide-react";
 import {
   useServerAgent,
@@ -752,6 +753,172 @@ function BrainPanel({ brain }: { brain: MasterBrainStatus | null }) {
   );
 }
 
+// ─── Paper Trader panel ──────────────────────────────────────────────────────
+function PaperTraderPanel({ data }: { data: Record<string, unknown> | null }) {
+  if (!data) return null;
+
+  const balance        = (data.balance as number)          ?? 10000;
+  const startBal       = (data.starting_balance as number) ?? 10000;
+  const returnPct      = (data.return_pct as number)       ?? 0;
+  const dailyPnl       = (data.daily_pnl as number)        ?? 0;
+  const openCount      = (data.open_count as number)       ?? 0;
+  const stats          = (data.stats as Record<string, number>) ?? {};
+  const totalTrades    = stats.total_trades   ?? 0;
+  const wins           = stats.wins           ?? 0;
+  const losses         = stats.losses         ?? 0;
+  const winRate        = stats.win_rate       ?? 0;
+  const totalPnl       = stats.total_pnl      ?? 0;
+  const bestTrade      = stats.best_trade     ?? 0;
+  const worstTrade     = stats.worst_trade    ?? 0;
+  const peakBal        = stats.peak_balance   ?? startBal;
+  const maxDD          = stats.max_drawdown_pct ?? 0;
+  const openPositions  = (data.open_positions as Array<Record<string, unknown>>) ?? [];
+  const recentTrades   = (data.recent_trades  as Array<Record<string, unknown>>) ?? [];
+  const equityCurve    = (data.equity_curve   as Array<Record<string, unknown>>) ?? [];
+
+  const pnlCol = (n: number) => n > 0 ? "#22c55e" : n < 0 ? "#ef4444" : "#888";
+  const sign   = (n: number) => n > 0 ? "+" : "";
+  const fmt2   = (n: number) => Math.abs(n).toFixed(2);
+
+  // Mini equity sparkline
+  const sparkW = 200, sparkH = 32;
+  let sparkPath = "";
+  if (equityCurve.length >= 2) {
+    const bals = equityCurve.map(e => (e.balance as number) ?? startBal);
+    const mn = Math.min(...bals) * 0.999, mx = Math.max(...bals) * 1.001, rng = mx - mn || 1;
+    const xStep = sparkW / (bals.length - 1);
+    sparkPath = bals.map((b, i) => `${i === 0 ? "M" : "L"}${i * xStep},${2 + (1 - (b - mn) / rng) * (sparkH - 4)}`).join(" ");
+  }
+
+  return (
+    <div className="card p-5 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <LineChart size={13} className="text-cyan-400" />
+          <span className="text-[13px] font-semibold text-white">Paper Trader</span>
+          <span className="text-[9px] text-cyan-400/60 ml-1">$10K virtual · training brain</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {equityCurve.length >= 2 && (
+            <svg width={sparkW} height={sparkH} className="opacity-60">
+              <polyline points={sparkPath} fill="none" stroke={returnPct >= 0 ? "#22c55e" : "#ef4444"} strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+          )}
+          <span className="text-[10px] font-bold font-mono px-2 py-1 rounded-lg border"
+            style={{
+              color: pnlCol(returnPct),
+              background: returnPct >= 0 ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+              borderColor: returnPct >= 0 ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)",
+            }}>
+            {sign(returnPct)}{returnPct.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+
+      {/* KPI grid */}
+      <div className="grid grid-cols-4 gap-2">
+        {([
+          ["Balance",     `$${balance.toFixed(2)}`,                        pnlCol(balance - startBal)],
+          ["Daily P&L",   `${sign(dailyPnl)}$${fmt2(dailyPnl)}`,         pnlCol(dailyPnl)],
+          ["Win Rate",    totalTrades > 0 ? `${winRate.toFixed(1)}%` : "—", "#f59e0b"],
+          ["Trades",      `${totalTrades} (${wins}W/${losses}L)`,         "#60aaff"],
+        ] as const).map(([l, v, c]) => (
+          <div key={l} className="rounded-xl p-2.5 bg-neutral-900 border border-neutral-800">
+            <div className="text-[8px] text-neutral-600 mb-0.5">{l}</div>
+            <div className="text-[11px] font-bold font-mono" style={{ color: c }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Extra stats row */}
+      <div className="flex gap-3 pt-1 border-t border-neutral-800">
+        {([
+          ["Peak",     `$${peakBal.toFixed(0)}`],
+          ["Max DD",   `${maxDD.toFixed(1)}%`],
+          ["Best",     `+$${bestTrade.toFixed(2)}`],
+          ["Worst",    `$${worstTrade.toFixed(2)}`],
+          ["Open",     `${openCount}`],
+        ] as const).map(([l, v]) => (
+          <div key={l} className="flex-1 text-center">
+            <div className="text-[8px] text-neutral-700">{l}</div>
+            <div className="text-[10px] font-mono text-neutral-300">{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Open paper positions — compact list */}
+      {openPositions.length > 0 && (
+        <div>
+          <div className="text-[9px] text-cyan-400/60 font-bold uppercase tracking-wide mb-2">
+            Open Paper Positions ({openPositions.length})
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {openPositions.slice(0, 10).map((p, i) => {
+              const dir = (p.direction as string) ?? "";
+              const upnl = (p.unrealized_pnl as number) ?? 0;
+              const name = ((p.strategy_name as string) ?? "").replace("[PAPER] ", "");
+              return (
+                <div key={i} className="rounded-lg p-2.5 border border-cyan-500/10 bg-cyan-500/5">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <div className={`w-1.5 h-1.5 rounded-full ${dir === "long" ? "bg-green-400" : "bg-red-400"}`} />
+                    <span className="text-[9px] font-bold text-cyan-400">{name}</span>
+                    <span className={`text-[8px] ml-auto font-mono font-bold ${upnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {sign(upnl)}${fmt2(upnl)}
+                    </span>
+                  </div>
+                  <div className="text-[8px] text-neutral-700 font-mono">
+                    ${((p.entry as number) ?? 0).toFixed(0)} · {dir} · {(p.leverage as number) ?? 1}x
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Recent trades — compact */}
+      {recentTrades.length > 0 && (
+        <div>
+          <div className="text-[9px] text-neutral-600 font-bold uppercase tracking-wide mb-2">Recent Paper Trades</div>
+          <div className="max-h-40 overflow-y-auto space-y-0">
+            {recentTrades.slice(0, 10).map((t, i) => {
+              const pnl = (t.pnl_usd as number) ?? 0;
+              const dir = (t.direction as string) ?? "";
+              const name = ((t.strategy_name as string) ?? "").replace("[PAPER] ", "");
+              const reason = (t.exit_reason as string) ?? "";
+              const bal = (t.balance_after as number) ?? balance;
+              return (
+                <div key={i} className="flex items-center gap-2 py-1.5 border-b border-neutral-800/30 last:border-0">
+                  <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${dir === "long" ? "bg-green-500/15" : "bg-red-500/15"}`}>
+                    {dir === "long"
+                      ? <ArrowUpRight size={10} className="text-green-400" />
+                      : <ArrowDownRight size={10} className="text-red-400" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[9px] font-bold text-neutral-300">{name}</span>
+                    <div className="text-[7px] text-neutral-700 font-mono">
+                      ${((t.entry as number) ?? 0).toFixed(0)} → ${((t.exit_price as number) ?? 0).toFixed(0)} · bal ${bal.toFixed(0)}
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className={`text-[9px] font-bold font-mono ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {sign(pnl)}${fmt2(pnl)}
+                    </div>
+                    <div className={`text-[7px] font-bold ${reason === "tp" ? "text-green-400/70" : reason === "sl" ? "text-red-400/70" : "text-neutral-600"}`}>
+                      {reason.toUpperCase()}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Open positions panel ─────────────────────────────────────────────────────
 function PositionsPanel({
   positions,
@@ -1013,7 +1180,10 @@ function AgentContent() {
       {/* ─── 4. Config + BingX 2-col ─────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ConfigPanel serverConfig={server.config} onSave={server.updateConfig} />
-        <BingXPanel executor={exec} onResetCircuit={server.resetCircuitBreaker} />
+        <div className="space-y-4">
+          <BingXPanel executor={exec} onResetCircuit={server.resetCircuitBreaker} />
+          <PaperTraderPanel data={server.paperTrader} />
+        </div>
       </div>
 
       {/* ─── 5. Master Brain ─────────────────────────────────────────────── */}

@@ -14,9 +14,8 @@ import { ServerAgentProvider } from "@/context/ServerAgentContext";
 const PAGE_TITLES: Record<string, string> = {
   "/dashboard":          "Overview",
   "/dashboard/settings": "Settings",
-  "/dashboard/agent":         "Live Agent",
-  "/dashboard/paper-trader":  "Paper Trader",
-  "/dashboard/x-agent":       "X Agent",
+  "/dashboard/agent":    "Live Agent",
+  "/dashboard/x-agent":  "X Agent",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
