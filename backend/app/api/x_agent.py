@@ -30,6 +30,86 @@ async def get_status():
     return pub.status()
 
 
+@router.get("/diagnose")
+async def diagnose():
+    """Check curl_cffi, credentials, and X API reachability."""
+    import os, httpx as _httpx
+    token = os.environ.get("X_AUTH_TOKEN", "")
+    ct0   = os.environ.get("X_CT0", "")
+
+    result = {
+        "X_AUTH_TOKEN_len": len(token),
+        "X_CT0_len": len(ct0),
+        "curl_cffi_available": False,
+        "x_api_status": None,
+        "x_api_error": None,
+    }
+
+    try:
+        from curl_cffi.requests import AsyncSession
+        result["curl_cffi_available"] = True
+    except Exception as e:
+        result["curl_cffi_import_error"] = str(e)
+
+    # Try actual X API call
+    BEARER = (
+        "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
+        "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+    )
+    QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
+    url = f"https://x.com/i/api/graphql/{QUERY_ID}/CreateTweet"
+    headers = {
+        "authorization": f"Bearer {BEARER}",
+        "x-csrf-token": ct0,
+        "cookie": f"auth_token={token}; ct0={ct0}",
+        "content-type": "application/json",
+        "x-twitter-active-user": "yes",
+        "x-twitter-auth-type": "OAuth2Session",
+        "x-twitter-client-language": "en",
+        "referer": "https://x.com/compose/post",
+        "origin": "https://x.com",
+    }
+    payload = {
+        "variables": {"tweet_text": "__diagnose__", "dark_request": False,
+                      "media": {"media_entities": [], "possibly_sensitive": False},
+                      "semantic_annotation_ids": []},
+        "features": {"tweetypie_unmention_optimization_enabled": True,
+                     "responsive_web_edit_tweet_api_enabled": True,
+                     "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+                     "view_counts_everywhere_api_enabled": True,
+                     "longform_notetweets_consumption_enabled": True,
+                     "responsive_web_twitter_article_tweet_consumption_enabled": False,
+                     "tweet_awards_web_tipping_enabled": False,
+                     "freedom_of_speech_not_reach_fetch_enabled": True,
+                     "standardized_nudges_misinfo": True,
+                     "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+                     "rweb_video_timestamps_enabled": True,
+                     "longform_notetweets_rich_text_read_enabled": True,
+                     "longform_notetweets_inline_media_enabled": True,
+                     "responsive_web_graphql_exclude_directive_enabled": True,
+                     "verified_phone_label_enabled": False,
+                     "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+                     "responsive_web_graphql_timeline_navigation_enabled": True,
+                     "responsive_web_enhance_cards_enabled": False},
+        "queryId": QUERY_ID,
+    }
+
+    try:
+        if result["curl_cffi_available"]:
+            from curl_cffi.requests import AsyncSession
+            async with AsyncSession(impersonate="edge101") as s:
+                r = await s.post(url, json=payload, headers=headers, timeout=15)
+        else:
+            async with _httpx.AsyncClient(timeout=15) as s:
+                r = await s.post(url, json=payload, headers=headers)
+        result["x_api_status"] = r.status_code
+        result["x_api_body_preview"] = r.text[:150]
+    except Exception as e:
+        result["x_api_error"] = str(e)
+
+    return result
+
+
 
 # ── Manual triggers ───────────────────────────────────────────────────────────
 
