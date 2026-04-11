@@ -1791,12 +1791,6 @@ export default function OverviewPage() {
   const [candles1m, setCandles1m]       = useState<BingXCandle[]>([]);
   const toastId = useRef(0);
 
-  // ── Frontend strategy engines ─────────────────────────────────────────────
-  const strategyResult  = useStrategyEngine(chartCandles);
-  const orbResult       = useORBStrategy(candles1m);
-  const hftResult       = useHFTScalper(candles1m, btcOrderBook, []); // aggTrades not subscribed on overview
-  const obiResult       = useOBIScalper(candles1m, btcOrderBook);
-
   // Server agent — shared 24/7 backend positions, trades, stats (single poll for all routes)
   const serverAgent = useSharedServerAgent();
 
@@ -1825,7 +1819,7 @@ export default function OverviewPage() {
             }
           }
         } catch { /* retry next cycle */ }
-        await new Promise(r => setTimeout(r, 5000)); // poll every 5s
+        await new Promise(r => setTimeout(r, 5000));
       }
     }
     poll();
@@ -1836,10 +1830,16 @@ export default function OverviewPage() {
   const effectiveTicker: BingXTicker | null = btcTicker ?? serverTicker;
   const effectiveOrderBook: BingXOrderBook | null = btcOrderBook ?? serverOrderBook;
 
+  // ── Frontend strategy engines ─────────────────────────────────────────────
+  const strategyResult  = useStrategyEngine(chartCandles);
+  const orbResult       = useORBStrategy(candles1m);
+  const hftResult       = useHFTScalper(candles1m, effectiveOrderBook, []);
+  const obiResult       = useOBIScalper(candles1m, effectiveOrderBook);
+
   const masterAgent = useMasterAgent(
     strategyResult, orbResult, hftResult, obiResult,
     chartCandles, candles1m,
-    btcTicker, btcOrderBook,
+    effectiveTicker, effectiveOrderBook,
     serverAgent.status,
   );
 
