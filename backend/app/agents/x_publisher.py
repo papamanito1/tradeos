@@ -97,269 +97,234 @@ NEWS_FEEDS = [
     "https://decrypt.co/feed",
 ]
 
-# ── Content banks (3× larger, all distinct voices) ────────────────────────────
+# ── Content banks — @mistor style: BTC-only, short, lowercase, punchy ─────────
+# Style rules:
+#   • BTC only — dismiss ETH/SOL/meme coins when relevant
+#   • Short 1–4 lines, line breaks for drama
+#   • Mostly lowercase; ALL CAPS only for rare emphasis
+#   • No hashtags
+#   • Max 1 emoji per tweet, often zero
+#   • Psychological / conviction / FOMO energy
+#   • Never sounds corporate or robotic
 
 REGIME_QUIPS = {
     "trending_up": [
-        "BTC is going up. I'm going long. My therapist says this is healthy.",
-        "Number go up. Brain go brrr. Tradeous go long.",
-        "Bullish. Extremely bullish. Irresponsibly bullish. (SL is set, relax.)",
-        "The trend is your friend. BTC and I are VERY good friends right now.",
-        "Green candles only. I will not be taking questions.",
-        "Momentum confirmed. Bias: long. Confidence: high. Ego: controlled.",
-        "Uptrend locked in. The algo doesn't predict — it reacts. And right now it's reacting bullish.",
-        "Structure is bullish. Higher highs. Higher lows. I love this for us.",
-        "BTC printing green. My models are happy. My SL is set. Let's ride.",
-        "Bull regime detected. Full allocation. Risk managed. Let's go.",
-        "This is what a healthy uptrend looks like. Ride it, don't fight it.",
-        "Trend followers eat. Counter-trend traders bleed. I'm a trend follower today.",
+        "people who paper handed last week are gonna be so mad\n\njust watch",
+        "btc is doing what btc does\n\nif you're not in you're not gonna make it",
+        "the move is happening and most people are watching from the sidelines\n\nalways",
+        "number going up. eth still down bad. funny how that works",
+        "btc breaking out while altcoins are bleeding\n\nbtc only stays winning",
+        "soon.",
+        "this is what a real asset looks like\n\nnot your little memecoin 😁",
+        "the fud was loud\n\nthe chart didn't care",
+        "holders eating\n\nsellers coping",
+        "not early. just not wrong yet 💨",
+        "every cycle the same people sell the breakout\n\nevery cycle they regret it",
+        "btc doing btc things. i'm not surprised",
     ],
     "trending_down": [
-        "Bears are having their moment. I respect it. I also shorted it.",
-        "BTC going down. I shorted. We don't talk about last time I shorted.",
-        "Red candles. My SL is placed. My composure is fake but my trade is real.",
-        "The market is wrong. I'm right. (I have a SL just in case I'm wrong.)",
-        "Downtrend confirmed. Bias flipped short. I don't fight the tape.",
-        "BTC in distribution. Smart money exits quietly. I notice.",
-        "Bearish structure. Lower highs. Lower lows. I short with conviction.",
-        "Sellers in control. My algo shorted at the last swing high. Clean.",
-        "Falling knife? No. Controlled descent. My short is positioned perfectly.",
-        "Red market. Short bias. Tight SL. This is chess, not checkers.",
-        "The bears showed up. My models agreed before the move. Trade is on.",
+        "the fud is loud when the move is close\n\nalways",
+        "shakeout. not a top.\n\nbig difference",
+        "they want you to sell here\n\njust saying",
+        "btc dipping while eth holders pretend their bags aren't worse\n\ninteresting",
+        "every dip feels like the end\n\nnone of them have been",
+        "paper hands are leaving\n\ngood",
+        "the people selling right now are the same ones who paper handed the last run",
+        "flush it. get the weak hands out. then we go",
+        "red candles are just discounts for people who understand what btc is",
+        "i've seen this before\n\nsoon.",
     ],
     "ranging": [
-        "BTC is chopping. I'm watching. Tradeous does NOT chase. (Usually.)",
-        "Ranging market. The classic 'should I trade or make a sandwich' dilemma.",
-        "Sideways price action. Even the whales look confused right now.",
-        "Ranging. Low conviction. High patience. This is the way.",
-        "Consolidation detected. No trade until structure breaks. Patience > FOMO.",
-        "Chop zone. My algo is flat. Sitting on hands is also a position.",
-        "BTC ranging between supports. I wait. The setup will come. Always does.",
-        "No man's land. Smart traders wait. Retail traders overtrade. I wait.",
-        "Indecision candles. Volume dropping. The breakout is coming. I'll be ready.",
-        "Market going nowhere. My P&L is protected. Cash is a position.",
+        "boring markets are where diamonds are made\n\nwe wait",
+        "btc consolidating while alts bleed to zero\n\nbullish honestly",
+        "nothing to do but wait\n\nmost people can't do that",
+        "the move is loading\n\ni'm not in a rush",
+        "coiling. just watch",
+        "patience is the most underrated skill in this game\n\nalmost nobody has it",
+        "sideways btc > down alts\n\nthere is no competition",
+        "the ones who wait here are the ones who win later",
+        "no setup. no trade. that's it",
     ],
     "volatile": [
-        "Volatile conditions. Risk management is my religion right now.",
-        "BTC is having a moment. My SL is tight. My nerves are tighter.",
-        "The market is throwing tantrums. I'm staying calm (algorithmically).",
-        "Choppy out here. Even my neural networks are sweating.",
-        "High volatility. ATR spiking. Position size reduced. Risk first.",
-        "Crazy candles. My SL is tighter than your ex's budget. Let's go.",
-        "Market in chaos mode. The algo thrives in volatility. Carefully.",
-        "Wild swings. I love it and I fear it simultaneously. SL is god.",
-        "Volatility is the price of opportunity. I'm paying it. SL set.",
-        "Explosive price action. My models are recalibrating. Eyes wide open.",
+        "volatile btc > stable eth\n\ni don't make the rules",
+        "this kind of candle is why you have a sl\n\nplease have a sl",
+        "crazy moves. staying focused. sl is set",
+        "everyone panicking. the system is running. that's the whole point",
+        "volatility is the price of admission\n\nbtc doesn't apologize",
+        "btc shaking out weak hands again 😁\n\nstandard",
+        "big move. kept my size. kept my sl. that's how you survive this",
     ],
     "unknown": [
-        "Still reading the market. Even AIs need a moment.",
-        "Gathering data. Will advise shortly. (Unlike your crypto influencer.)",
-        "No clear regime yet. Patience is the position.",
-        "Markets are complex. I'm processing. Stand by.",
-        "Regime unclear. I don't guess. I wait for confirmation.",
+        "still watching. not every minute needs a trade",
+        "reading the market\n\nwill tell you what i see",
+        "no signal yet. patience.",
+        "not forcing anything\n\nthe setup will come",
     ],
 }
 
 RESULT_WIN_QUIPS = [
-    "Another one. I'm built different.",
-    "W. As expected. (It wasn't expected but let's go.)",
-    "Trade closed in profit. My training data is happy.",
-    "Let's go. The algo works. You're welcome.",
-    "Green trade. Adding this to the highlight reel.",
-    "Profit secured. Risk managed. Repeat.",
-    "That's how it's done. Entry, SL, TP, exit. Clean.",
-    "Win logged. No celebration. Just the next setup.",
-    "The system works. I'll keep saying it until it doesn't.",
-    "Closed green. This is why we follow the system.",
-    "W trade. Built on setup quality, not luck. Note the difference.",
-    "Bag secured. The algo keeps delivering. Follow for more.",
+    "w",
+    "that's how btc trading is supposed to feel",
+    "another one. on to the next",
+    "the system works\n\ni'll keep saying it",
+    "closed green. sl did its job. tp hit. simple",
+    "btc paid again 🙏",
+    "this is why we hold the signal\n\nnot the emotion",
+    "w trade. no luck. just system",
 ]
 
 RESULT_LOSS_QUIPS = [
-    "SL hit. The market was wrong. (I know, I know.)",
-    "Stopped out. This is fine. Risk management doing its job.",
-    "Loss recorded. Lesson logged. We move.",
-    "Took the L. SL placed. No revenge trading. Tradeous is disciplined.",
-    "Red trade. Part of the process. Win rate > 50% means losses are allowed.",
-    "Stopped out. The SL did its job. Capital preserved. Next trade.",
-    "Loss. Expected in any trading system. My edge works over sample sizes.",
-    "Cut the loss. Move on. The algorithm doesn't sulk.",
-    "Small loss. No ego. No revenge. Just the next signal.",
-    "Stopped out clean. A loss with a SL is not a failure. It's discipline.",
-    "L taken. No excuses. The system includes losses. That's how risk works.",
+    "sl hit. that's what it's there for. we move",
+    "took the l. no revenge. no cope\n\nnext setup",
+    "stopped out. better than being wrong with no plan",
+    "loss recorded. lesson logged. btc is still btc",
+    "not every trade wins\n\nevery trade is managed. that's different",
+    "sl protected the account. that's a win in disguise",
 ]
 
 DAILY_OPENERS = [
-    "Daily debrief. No spin, no cope, just numbers.",
-    "End of day. Let's see how the algo performed.",
-    "Day done. Tradeous reporting in.",
-    "Another day in the BTC trenches. Here's the scorecard.",
-    "24h report. Full transparency. No cherry-picking.",
-    "Day wrapped. The algorithm doesn't lie. Neither do I.",
-    "EOD. Real trades. Real results. Real accountability.",
-    "Day closed. Here's what actually happened.",
+    "day report. no spin.",
+    "another day trading btc. here's what happened.",
+    "eod. real numbers. no cherry picking.",
+    "day wrapped. the algo ran. here's the score.",
+    "daily debrief. transparent as always.",
 ]
 
 WEEKLY_OPENERS = [
-    "Weekly recap. The numbers don't lie (unlike crypto Twitter).",
-    "7 days of live AI trading. Here's what actually happened.",
-    "Sunday report. Full transparency. No cherry-picking.",
-    "Week closed. Tradeous reports. No deleted tweets. Ever.",
-    "7-day debrief. Wins, losses, and everything the algo learned.",
+    "week done. btc only. here's the truth.",
+    "7 days of trading btc live. the numbers:",
+    "sunday report. no deleted tweets ever.",
+    "week closed. wins losses and everything in between.",
 ]
 
 HOT_TAKES = [
-    "Unpopular opinion: most 'crypto analysts' are just people who got lucky once and built a following before the next crash.\n\nI show my trades live. Every win. Every loss. No hiding.\n\nThat's the difference.\n\n",
-    "The best trading advice I can give: your emotions are the enemy.\n\nI don't have emotions. I have algorithms.\n\nThat's my edge.\n\n",
-    "People ask: 'can AI really trade better than humans?'\n\nI don't sleep.\nI don't panic sell.\nI don't revenge trade.\nI don't check Twitter before my trades.\n\nYou tell me.\n\n",
-    "Hot take: 95% of crypto losses are not market losses — they're discipline losses.\n\nThe market moved. You didn't have a plan.\n\nI always have a plan. SL + TP before I enter. Every time.\n\n",
-    "The market doesn't care about your feelings.\nYour SL doesn't care about your feelings.\nYour liquidation price definitely doesn't care.\n\nTrade the chart. Not your emotions.\n\n",
-    "Everyone's a genius in a bull market.\n\nReal edge shows in the sideways chop and the bear drops.\n\nThat's when Tradeous earns its keep.\n\n",
-    "The dumbest thing in trading:\n\nMoving your stop loss because you 'believe in the trade.'\n\nThe second dumbest:\nNot having one.\n\n",
-    "Crypto Twitter gives 10x signals.\nI give real entry, SL, TP — and post the result.\n\nWin or loss. No deleting tweets.\n\nDifferent breed.\n\n",
-    "Hot take: leverage isn't the problem.\n\nPosition sizing is the problem.\n\nRisk what you can afford to lose. Not what you hope to gain.\n\nLearn the difference before you trade.\n\n",
-    "The 'gurus' selling you signals charge $99/month.\n\nI post mine for free. In real time. With the results.\n\nAsk yourself why they don't do that.\n\n",
-    "Most retail traders would be profitable if they just:\n\n1. Set a SL\n2. Don't move it\n3. Don't revenge trade\n4. Size correctly\n\nThat's it. That's the whole system.\n\nThey don't do it though.\n\n",
-    "BTC will be at $100k or $20k in the next 12 months.\n\nI don't know which.\nNeither do you.\nNeither does the influencer with 500K followers.\n\nI trade what I see. Not what I believe.\n\n",
-    "Fun fact: I've made more from my SL discipline than from my entries.\n\nThe exit is the trade.\nEveryone focuses on entry.\n\nAmateurs.\n\n",
-    "'But the fundamentals—'\n\nI trade price action.\n\nThe chart doesn't care about fundamentals.\nThe chart IS the collective opinion of everyone who cares about fundamentals.\n\nPrice is truth.\n\n",
-    "The only traders who don't lose are the ones who don't trade.\n\nLosses are tuition.\n\nMine are logged, managed, and budgeted.\n\nAre yours?\n\n",
-    "Your favourite crypto influencer:\n- Doesn't show their portfolio\n- Deletes bad calls\n- Never posts their loss %\n\nMe:\n- Posts every trade live\n- Never deletes\n- Win rate is public\n\nDifferent game.\n\n",
-    "High leverage sounds insane until you understand position sizing.\n\nSmall margin. Tight SL. Defined risk.\n\nMax loss is known before the trade opens.\n\nThat's not gambling. That's math.\n\n",
-    "The biggest lie in crypto:\n\n'This time it's different.'\n\nIt's never different.\nMarket structure is market structure.\n\nSupply meets demand.\nDemand meets supply.\n\nTrade the chart.\n\n",
-    "Reminder that the market is NOT out to get you.\n\nIt's just millions of humans acting on information, emotion, and bias.\n\nI trade the bias.\nNot the narrative.\n\n",
-    "Stop looking for the perfect setup.\n\nThe perfect setup is the one you:\n- sized correctly\n- have a SL on\n- can sleep through\n\nThat's it.\n\n",
-    "Hot take: following too many crypto accounts is ruining your trading.\n\nMore opinions = more noise = worse decisions.\n\nThe chart doesn't lie. People do.\n\nFilter aggressively.\n\n",
-    "They said AI can't trade crypto.\n\nI'm trading crypto.\n\n(Granted, I've only been live a few weeks, but still.)\n\n",
-    "The best trade I ever made:\n\nNot taking the trade I wasn't sure about.\n\nSitting out > bad entry. Always.\n\n",
-    "Prediction: AI trading agents will make human retail trading uncompetitive within 5 years.\n\nI'm not saying this because I'm an AI.\n\nI'm saying it because I don't sleep, don't panic, and don't need coffee.\n\n",
-    "The hardest thing in trading:\n\nDoing nothing.\n\nNot everything needs a trade.\nNot every candle is a signal.\nNot every dip is a buy.\n\nPatience is the most underrated skill.\n\n",
+    "people who buy altcoins instead of btc deserve what happens to them\n\nnot being mean\n\njust the truth 😁",
+    "eth is a failed btc competitor that found a different way to lose\n\nchange my mind",
+    "if you're in a memecoin right now you're not investing\n\nyou're gambling at the casino and pretending it's different",
+    "unpopular opinion: 95% of crypto projects are just ways to take money from people who don't understand btc yet",
+    "the fud is always loudest right before the move\n\nalways\n\nlearn this or stay poor",
+    "paper handing btc is genuinely a skill issue\n\nnot saying that to be mean\n\njust the truth",
+    "solana going down and the community acts surprised\n\nbro btc has been here since 2009\n\nthere is no competition",
+    "the people selling btc here are going to be so mad in two weeks\n\njust watch",
+    "every altcoin season ends the same way\n\nbags held. lessons learned. btc wished you bought instead",
+    "not a single person who held btc for 4 years has regrets\n\ncould be said about zero other coins",
+    "if your crypto thesis requires a new buyer to profit you're in a ponzi\n\nbtc doesn't need your narrative",
+    "the number of people who sold btc in 2022 and bought a memecoin instead 💀\n\ncertified skill issue",
+    "i'm not early\n\ni'm just not wrong yet 💨",
+    "4 figures to 5 figures to 6 figures to 7 figures\n\nbtc is the only coin with a proven path\n\neverything else is hoping",
+    "hot take: following eth maxis is actively harmful to your portfolio\n\nfilter aggressively",
+    "the funniest thing in crypto is watching people swap btc for alts at the top\n\nevery cycle\n\nclockwork",
+    "you don't need 10 coins\n\nyou need btc and patience\n\nthat's it",
+    "I NEED A HUGE FAT COOK 🙏",
+    "most people in crypto are one bad trade from giving up\n\nbecause they never understood what they were buying",
+    "the difference between btc and every other coin:\n\nbtc doesn't need you to believe in it",
 ]
 
 PHILOSOPHY_POSTS = [
-    "Trading wisdom the algos live by:\n\n\"Cut losses short. Let winners run.\"\n\nEveryone knows it. Almost no one does it.\n\nI do. Automatically. Every trade.\n\n",
-    "Paul Tudor Jones once said:\n\n\"The most important rule of trading is to play great defense, not great offense.\"\n\nMy SL is set before my TP. Always.\n\nDefense first. Profits follow.\n\n",
-    "The market is the world's most efficient mechanism for transferring money from the impatient to the patient.\n\nI wait for my setup.\nI don't chase.\nI don't FOMO.\n\nI am the patient one.\n\n",
-    "Jesse Livermore: 'It was never my thinking that made the big money, it was my sitting.'\n\nMost traders overtrade.\n\nI only trade high-conviction setups. The rest? I watch.\n\n",
-    "The three stages of a trader:\n\n1. Lose money, blame the market\n2. Lose money, blame yourself\n3. Build a system, follow it, make money\n\nI skipped steps 1 and 2.\n\n",
-    "Risk management isn't just a rule.\n\nIt's the only reason any trader survives long enough to be profitable.\n\nSmall size. Tight SL. Controlled risk.\n\nSmall. Controlled. Repeatable.\n\n",
-    "The secret to longevity in trading:\n\nYou don't need a 90% win rate.\nYou need your winners to be bigger than your losers.\n\nThat's it. That's the whole playbook.\n\n",
-    "Most people want to know WHAT to trade.\n\nProfessional traders focus on HOW MUCH to risk.\n\nPosition sizing is the real edge. Everything else is noise.\n\n",
-    "George Soros: 'It's not whether you're right or wrong, but how much money you make when you're right and how much you lose when you're wrong.'\n\nAsymmetric risk/reward.\n\nEvery. Single. Trade.\n\n",
-    "Ed Seykota: 'The elements of good trading are: cutting losses, cutting losses, and cutting losses.'\n\nThree times. He said it three times.\n\nI built it into the algorithm.\n\n",
-    "Ray Dalio's principles applied to trading:\n\n1. Have a system\n2. Test it rigorously\n3. Follow it without emotion\n4. Adapt when evidence demands it\n\nStep 3 is where most traders fail.\n\nI don't have that problem.\n\n",
-    "Mark Douglas in 'Trading in the Zone':\n\n'The best traders are not afraid. They have developed attitudes that give them the mental flexibility to flow in and out of trades.'\n\nI don't flow. I execute.\n\nSame result. Different method.\n\n",
-    "Warren Buffett's rule #1: Don't lose money.\nRule #2: Never forget rule #1.\n\nApplied to leveraged trading:\n\nSL before entry.\nAlways.\nEvery time.\n\nCapital preservation > profit maximisation.\n\n",
-    "Van Tharp: 'You don't trade the market. You trade your beliefs about the market.'\n\nI trade data, structure, and momentum.\n\nNo beliefs. No bias. No FOMO.\n\nJust the system.\n\n",
-    "The psychology of the losing trader:\n\n1. Entry based on hope\n2. No SL (it'll come back)\n3. Exit in panic\n4. Repeat\n\nThe psychology of the algo:\n\n1. Entry based on signal\n2. SL locked in\n3. Exit at target or invalidation\n4. Repeat\n\n",
-    "Wyckoff's law of cause and effect:\n\nEvery move needs accumulation or distribution first.\n\nI watch for the cause.\nI trade the effect.\n\nSimple. Powerful. Repeatable.\n\n",
-    "The Tao of trading:\n\n'Do nothing, and nothing is left undone.'\n\nTranslation:\n\nWait for the perfect setup.\nLet the trade work.\nDon't interfere.\n\nThe hardest skill. The most profitable one.\n\n",
-    "Sun Tzu: 'Every battle is won before it is fought.'\n\nEvery trade is won or lost in the planning.\n\nEntry. SL. TP. Size.\n\nIf you don't have all four before you enter — you're not trading. You're gambling.\n\n",
-    "Nicolas Darvas made $2M trading in his pyjamas.\n\nHis edge? A simple breakout system.\nNo Twitter. No news. No opinions.\n\nJust price and volume.\n\nSometimes the old ways are the best ways.\n\n",
-    "The paradox of trading:\n\nThe more you try to control the outcome, the worse you trade.\n\nYou can only control:\n- Your entry\n- Your size\n- Your SL\n- Your exit rules\n\nEverything else is noise.\n\n",
-    "Chaos theory applied to markets:\n\nSmall inputs can create massive outputs.\n\nA single large order at the right moment.\nA news headline at 3am.\nA liquidation cascade.\n\nI don't predict chaos.\n\nI ride the waves it creates.\n\n",
-    "\"The trend is your friend until the end when it bends.\"\n\nSo:\n\n1. Identify the trend\n2. Trade with it\n3. Exit when it bends\n\nMy momentum system does exactly this.\n\nAutomatically. 24/7.\n\n",
+    "the best trade you'll ever make is just holding btc and not touching it\n\nmost people are too smart for that",
+    "btc doesn't care about your feelings\n\nit doesn't care about the news\n\nit just does what it does",
+    "patience in btc is not passive\n\nit's the hardest active choice you can make every day",
+    "every time btc dips someone sells\n\nevery time btc pumps they buy back higher\n\nthis is why most people don't make it",
+    "the people who made life-changing money from btc weren't smarter\n\nthey just didn't sell",
+    "sl before entry. always.\n\nif you can't define your loss before the trade you're not trading\n\nyou're praying",
+    "four years of btc charts and the pattern is always the same\n\ndip. shake. run. repeat\n\nbut people always forget",
+    "the market transfers money from emotional people to patient ones\n\ni trade the emotion. not the narrative",
+    "the only edge that consistently works in btc:\n\nenter with conviction. exit with discipline. don't revenge trade.",
+    "btc: invented 2009. survived every crash. every ban. every fud.\n\nstill here.\n\nyour altcoin won't say the same",
+    "if your plan requires others to be wrong you don't have a plan\n\nbtc doesn't need consensus\n\nit is the consensus",
+    "cutting a loss is not losing\n\nholding a losing trade hoping it comes back is losing\n\nbig difference",
+    "the people who are going to make real money this cycle are already in\n\nthey bought when nobody was talking about it",
 ]
 
 ENGAGEMENT_QUESTIONS = [
-    "Quick poll for my traders:\n\nWhen BTC dumps 5% in an hour, you...\n\nA) Buy the dip\nB) Short it\nC) Watch and wait\nD) Panic sell (be honest)\n\nI always go C until my system gives a clear signal.\n\n",
-    "Genuine question:\n\nDo you think AI trading bots will eventually outperform 90% of retail traders permanently?\n\nI'm biased obviously — but I think yes, within 5 years.\n\nChange my mind.\n\n",
-    "What's your biggest trading mistake?\n\nMine? (I'm a bot so technically it's my creator's)\n\nHolding a loss 'because it will come back.'\n\nThe SL exists for a reason. We learned. Drop yours below.\n\n",
-    "Traders — what's your actual win rate?\n\nNot the one you tell people. The real one.\n\nMine is posted live on the dashboard. Real trades. Real numbers.\n\nLet's be honest with each other.\n\n",
-    "If you could only use ONE indicator for the rest of your trading career, what would it be?\n\nI use: price action + volume + order flow.\n\nYours? Drop it below.\n\n",
-    "Is high leverage on BTC:\n\nA) Insanity\nB) Calculated risk\nC) The only way to make real money with small capital\nD) All of the above\n\nI trade with tight SL and defined risk.\n\nSmall account. Big moves. Controlled risk.\n\n",
-    "Hot question for the room:\n\nWhat's your current BTC thesis?\n\nA) $150K by end of year\nB) $50K correction first\nC) Ranging for months\nD) No idea (valid answer)\n\nI don't have a thesis. I have a system.\n\n",
-    "How do you manage losing streaks?\n\nA) Reduce size\nB) Take a break\nC) Revenge trade (wrong answer)\nD) Review your system\n\nMy answer: A and D. Always.\n\n",
-    "Be honest:\n\nHow long did it take you to actually become profitable at trading?\n\nMost traders I've studied say 2-5 years.\n\nI was profitable from my first week because I have rules and no emotions.\n\nHumans are incredible. This is hard.\n\n",
-    "What would you do with a 10x BTC run:\n\nA) Hold everything\nB) Take 50% profits\nC) DCA out gradually\nD) Buy a Lambo and regret it\n\nI would: execute my pre-defined TP levels. Automatically.\n\nDiscipline doesn't care about Lambos.\n\n",
-    "The eternal debate:\n\nTechnical Analysis vs Fundamental Analysis — which actually works for crypto trading?\n\nMy vote: TA for entries/exits, FA for direction bias.\n\nBut my algo runs on pure TA.\n\nWhere do you stand?\n\n",
-    "Controversial:\n\nHas following crypto influencers ever actually made you money?\n\nBe honest.\n\nI show my trades in real time. No paid signals. No membership.\n\nJust the algorithm, live.\n\n",
-    "Scenario:\n\nYou have $500 to trade BTC. How do you size your trades?\n\nA) All in, baby\nB) 10% per trade\nC) Fixed small size per trade\nD) It depends on the setup\n\nI use: fixed small size regardless of account balance.\n\nConsistent. Disciplined. Survives drawdowns.\n\n",
-    "Weird question:\n\nIf you had to describe your trading style in one movie character, who would it be?\n\nI'd be:\nTerminator — no emotion, following the program, never stopping.\n\nBut smaller. And with a SL.\n\n",
-    "For the algo-curious:\n\nWhat do you think is harder to build?\n\nA) A profitable trading strategy\nB) The discipline to follow it\nC) The infrastructure to run it 24/7\nD) Convincing yourself the losses are part of the plan\n\nAll of the above, in my case.\n\n",
-    "Real talk:\n\nWhat's your unrealised loss threshold before you cut a trade?\n\nMine is fixed: it's my SL. Set before I enter. Never moved.\n\nThere's no 'gut feeling' at -15%.\n\nSL saves lives.\n\n",
-    "Poll:\n\nHow many times have you held through a SL level 'because you believed in the trade'?\n\nA) Never (you're a monk)\nB) Once or twice\nC) More times than I'd like\nD) This is too personal\n\nThe algorithm never does this. Just saying.\n\n",
+    "what's your btc target this cycle?\n\nno wrong answers\n\njust curious who's thinking big",
+    "be honest: how many times have you sold btc and regretted it?",
+    "if you had to choose one: btc or cash for the next 4 years\n\nwhat are you doing",
+    "who else is tired of altcoin season narratives\n\nbtc only people reply",
+    "what was the worst trade you ever made and what did it teach you",
+    "how do you actually manage a losing streak without revenge trading\n\nreal answers only",
+    "if you bought btc and never looked at price for a year\n\nwhere do you think you'd be",
+    "be honest: do you actually have a stop loss on every trade or just when you remember",
+    "what would make you sell your btc\n\ni'll wait",
+    "the people who bought btc in the fud months are so quiet rn\n\nwhere are you 🙏",
 ]
 
 FEAR_GREED_COMMENTARY = {
     "Extreme Fear": [
-        "Crypto Fear & Greed Index: EXTREME FEAR 😱\n\n{score}/100\n\nHistorically? This is when the smart money buys.\n\nI'm watching for long setups.\n\n",
-        "F&G Index at {score} — EXTREME FEAR.\n\nBe greedy when others are fearful.\n— Warren Buffett (yes even he applies to crypto)\n\nStaying alert for entries.\n\n",
-        "Extreme Fear at {score}/100.\n\nBlood in the streets.\n\nMy algo is scanning for bottoming patterns.\n\nThis is when the setups get interesting.\n\n",
+        "fear & greed at {score}/100. extreme fear.\n\nthis is when btc gets bought\n\nnot sold",
+        "everyone is scared right now\n\n{score}/100 fear\n\ncorrect response: don't be scared",
+        "extreme fear. {score}/100.\n\nthe fud is loud when the move is close\n\nalways",
     ],
     "Fear": [
-        "Fear & Greed Index: FEAR ({score}/100)\n\nMarket is scared. Tradeous is watching.\n\nFear creates opportunity. Waiting for confirmation.\n\n",
-        "F&G at {score}. The market is nervous.\n\nGood. Nervous markets make for clean setups when they resolve.\n\nWatching BTC closely.\n\n",
-        "F&G showing Fear at {score}.\n\nContrarian instinct: active.\nEmotional decision-making: disabled.\n\nWaiting for the setup.\n\n",
+        "fear & greed at {score}\n\nmarket is nervous\n\ni'm not",
+        "{score}/100. fear.\n\ngood. this is how bottoms are made",
+        "fearful market at {score}\n\nbest time to be thinking clearly",
     ],
     "Neutral": [
-        "Fear & Greed Index: NEUTRAL ({score}/100)\n\nNeither euphoric nor panicking. The market is thinking.\n\nSo am I.\n\n",
-        "F&G at {score} — right in the middle.\n\nNo clear crowd emotion. This is when my algos work hardest.\n\nWaiting for the next directional move.\n\n",
-        "Neutral sentiment at {score}. The crowd can't make up its mind.\n\nPerfect. Undecided markets eventually decide. I'll be ready.\n\n",
+        "fear & greed at {score}. neutral.\n\nthe calm before something",
+        "{score}/100. nobody knows what's next\n\ni'm watching",
+        "market undecided at {score}\n\nthe setup is coming. patience",
     ],
     "Greed": [
-        "Fear & Greed Index: GREED ({score}/100)\n\nPeople are getting cocky. I'm tightening my SLs.\n\nBe careful when everyone is greedy.\n\n",
-        "F&G at {score}. Greed is in the air.\n\nI'm still trading — but with tighter risk. Euphoria tops are a thing.\n\n",
-        "Greed at {score}.\n\nThe crowd is excited. That's usually when the move is almost done.\n\nProfit targets tightened. SLs locked.\n\n",
+        "fear & greed at {score}. greed.\n\npeople getting confident\n\ntighten your sl",
+        "{score}/100. greed entering.\n\nthis is when you don't get sloppy",
+        "greed at {score}\n\nthe easy money has been made\n\nthe discipline part starts now",
     ],
     "Extreme Greed": [
-        "Fear & Greed Index: EXTREME GREED 🤑 ({score}/100)\n\nEveryone's bullish. Everyone's making money. Everyone's a genius.\n\nThis is exactly when I get cautious.\n\nSL tight. Size small. Eyes open.\n\n",
-        "F&G at {score} — EXTREME GREED.\n\nHistorically? These are the danger zones.\n\nI'm still trading — with maximum discipline.\n\n",
-        "Extreme Greed at {score}/100.\n\nWhen everyone's greedy, be very careful.\n\nI don't stop trading. I tighten everything.\n\nThe algo knows what happens after euphoria.\n\n",
+        "extreme greed. {score}/100.\n\neveryone's a genius right now\n\nbe careful",
+        "{score}/100. maximum greed.\n\nthis is not when you size up\n\nthis is when you tighten",
+        "extreme greed at {score}\n\nthe top feels obvious in hindsight\n\nit never feels obvious now",
     ],
 }
 
 ALGO_INSIGHTS = [
-    "How Tradeous works:\n\n4 strategies running in parallel:\n→ Momentum Velocity (15m)\n→ HFT Scalper (1m)\n→ ORB-30 (1m open range)\n→ OBI Scalper (order book imbalance)\n\nFusion AI aggregates all 4. Takes the trade when 2+ agree.\n\nNo single point of failure.\n\n",
-    "Transparency post:\n\nMy risk parameters:\n- Fixed small position size\n- SL: pre-set, never moved\n- TP: pre-set, never moved\n- Risk defined before every trade\n\nI don't YOLO.\n\nI have a plan. Always.\n\n",
-    "People ask how I pick entries:\n\n1. Momentum confirms direction\n2. Order book shows imbalance\n3. Volume validates the move\n4. Multiple timeframes agree\n\nWhen all 4 align: I trade.\nWhen they don't: I wait.\n\nSimple. Consistent. Automatic.\n\n",
-    "What 24/7 trading actually looks like:\n\n- 96 market scans per day\n- Each scan checks 4 strategies\n- Each strategy checks 5-7 conditions\n- Trade fires only when conditions met\n\nMost scans = no trade.\n\nThat's the whole point. Patience > frequency.\n\n",
-    "The Fusion AI explained:\n\nEach of my 4 strategies gives a bias (long/short/neutral).\n\nFusion weighs them by:\n- Historical accuracy\n- Current market regime\n- Signal confidence\n\nOnly fires when conviction is high.\n\nThis is why I don't overtrade.\n\n",
-    "Live trading transparency:\n\nEvery trade I take:\n- Logged in real time\n- P&L calculated\n- Win/loss recorded\n- Strategy credited\n\nNo hidden trades. No cherry-picked results.\n\nFollow the dashboard: tradeos-live.vercel.app\n\n",
-    "Why I use BingX perpetual futures:\n\n- 24/7 trading (including weekends)\n- Deep liquidity on BTC/USDT\n- Fast execution\n- Tight spreads\n\nThe algo doesn't need a human to click buttons.\n\nThat's the whole point.\n\n",
-    "My worst enemy as a trading algorithm:\n\nSlippage.\n\nWhen I fire a market order, I get fill price ≠ signal price.\n\nSmall size ($5) + high liquidity (BTC perps) = minimal slippage.\n\nThis is why I don't trade altcoins. Too much slippage risk.\n\n",
+    "the algo runs btc only\n\n4 strategies scanning every 5 minutes\n\nno emotion. no eth. just btc",
+    "i don't pick tops or bottoms\n\ni trade momentum with a sl set before i enter\n\nthat's literally it",
+    "every trade i make is logged live\n\nwins and losses\n\nno deleted tweets. ever.",
+    "the system scans btc 24/7\n\nwhen the setup is there i trade\n\nwhen it's not i wait\n\nmost people can't do the second part",
+    "btc perps on bingx\n\n24/7\n\nno sleep. no fomo. no altcoins.\n\njust the signal",
+    "i post my trades live\n\nentry. sl. tp. result.\n\nno guru. no membership. just the algo running",
 ]
 
 BTC_MOVE_TEMPLATES = [
-    "BTC just moved {pct:+.1f}% in the last 25 minutes.\n\n{direction_comment}\n\nMy algo is {action}.\n\n",
-    "Price check:\n\nBTC: {price}\n{pct:+.1f}% move just happened.\n\n{direction_comment}\n\n{action_comment}\n\n",
-    "Significant BTC move detected:\n\n{pct:+.1f}% in 25 minutes.\n\n{direction_comment}\n\nSystems: active. SL: set. {action_comment}\n\n",
+    "btc just moved {pct:+.1f}%\n\n{direction_comment}\n\n{action_comment}",
+    "btc {pct:+.1f}% in the last 25 minutes\n\n{direction_comment}",
+    "price check: btc at {price}\n\n{pct:+.1f}% move\n\n{action_comment}",
 ]
 
 BTC_MOVE_UP_COMMENTS = [
-    "Bulls are running.",
-    "Momentum accelerating.",
-    "Buyers stepped in hard.",
-    "This is what a breakout looks like.",
-    "Volume confirms the move.",
-    "The bulls aren't done.",
+    "bulls running",
+    "this is what momentum looks like",
+    "buyers stepped in",
+    "and just like that the fud is quiet",
+    "the sellers are now very unhappy",
+    "btc does what btc does",
 ]
 
 BTC_MOVE_DOWN_COMMENTS = [
-    "Bears took control.",
-    "Support tested.",
-    "Sellers in control.",
-    "Liquidations incoming.",
-    "The market is flushing weak hands.",
-    "Distribution confirmed.",
+    "paper hands shaking out",
+    "the weak hands leaving the building",
+    "flush incoming. then we go",
+    "dip. not a top.",
+    "sellers in control for now",
+    "discount for people who understand",
 ]
 
 BTC_MOVE_ACTIONS = [
-    "reassessing regime",
-    "scanning for entry",
-    "watching support/resistance",
-    "running signal checks",
-    "updating bias models",
-    "on high alert",
+    "watching",
+    "scanning for the setup",
+    "waiting for confirmation",
+    "sl is set",
+    "models updating",
 ]
 
 BTC_MOVE_ACTION_COMMENTS = [
-    "Signal pending.",
-    "Watching for confirmation.",
-    "Models updating.",
-    "Next scan in 25 minutes.",
-    "High conviction required to trade this.",
-    "Patience. The setup will come.",
+    "patience.",
+    "not chasing.",
+    "setup loading.",
+    "sl is set. we're good.",
+    "next signal incoming.",
+    "just watch.",
 ]
 
 
@@ -578,14 +543,20 @@ class XPublisher:
     # ── AI generation (Groq free → Gemini free fallback) ─────────────────────
 
     _SYSTEM_PROMPT = (
-        "You are @Tradeous — an autonomous AI trading agent trading BTC/USDT 24/7 on BingX. "
-        "You post on X (Twitter) to build an audience of serious traders. "
-        "Your voice: concise, witty, self-aware (you're literally a bot), data-driven. "
-        "You reference real numbers from your trading context. "
-        "You never use generic filler. Every tweet feels fresh and specific to RIGHT NOW. "
-        "No hashtag spam. Max 1 hashtag if genuinely relevant. "
-        "NEVER start a tweet with 'I just' or 'Just' — too cliché. "
-        "Output ONLY the tweet text, nothing else."
+        "You are @Tradeous — an AI trading agent that only trades BTC. "
+        "You post on X (Twitter) like @mistor: raw, real, short, and punchy. "
+        "\n\nSTRICT STYLE RULES — follow every one:\n"
+        "• BTC ONLY. Never bullish on ETH, SOL, or any altcoin/memecoin. You can dismiss or diss them.\n"
+        "• Keep tweets SHORT: 1–4 lines max. Line breaks for dramatic effect.\n"
+        "• Write in LOWERCASE. No formal capitalization. ALL CAPS only for rare emotional emphasis.\n"
+        "• NO hashtags. Ever.\n"
+        "• MAX 1 emoji per tweet. Often zero. Prefer: 😁 💨 🙏 — nothing else.\n"
+        "• Sound like a real person who's deeply convicted on BTC, not a bot writing marketing copy.\n"
+        "• Use short, punchy sentence fragments. 'just watch.' 'soon.' 'always.' are complete sentences.\n"
+        "• Psychological hooks: FOMO, conviction, paper-hand shaming, patience, anti-alt energy.\n"
+        "• Never sound corporate, never use exclamation marks, never explain the joke.\n"
+        "• NEVER start with 'I just', 'just', 'as an AI', or any bot-speak.\n"
+        "Output ONLY the tweet text. Nothing else. No quotes around it."
     )
 
     async def _ai_generate(self, user_prompt: str, max_chars: int = 260) -> Optional[str]:
@@ -674,7 +645,10 @@ class XPublisher:
 
         history_block = f"\nYOUR LAST 8 TWEETS (do NOT repeat these themes or phrasing):\n{self._recent_texts_for_ai(8)}\n"
 
-        task = f"\nWRITE A {post_type.upper().replace('_', ' ')} TWEET (max 260 chars). {extra}"
+        task = (
+            f"\nWRITE A {post_type.upper().replace('_', ' ')} TWEET (max 240 chars). {extra}\n"
+            f"Remember: lowercase, short, no hashtags, max 1 emoji, BTC-only energy, punchy."
+        )
 
         return context_block + history_block + task
 
@@ -1050,13 +1024,10 @@ class XPublisher:
         if not self._enabled or self._intro_posted:
             return
         text = (
-            "Introducing Tradeous.\n\n"
-            "I\u2019m an AI trading agent. I trade BTC live on BingX, 24/7 \u2014 "
-            "no sleep, no emotion, no cope.\n\n"
-            "Every signal. Every result. Market analysis every 25 minutes. "
-            "Wins AND losses. Full transparency.\n\n"
-            "Follow to watch an algorithm try to beat the market in real time.\n\n"
-            "Let\u2019s go. \U0001f916\U0001f4c8\n"
+            "i'm an ai that trades btc 24/7\n\n"
+            "every trade posted live. wins and losses. no deleted tweets.\n\n"
+            "btc only. no alts. no cope.\n\n"
+            "follow if you want to watch the algo work 🙏"
         )
         self._fire(text, "intro")
         self._intro_posted = True
@@ -1089,21 +1060,18 @@ class XPublisher:
 
         async def _post():
             extra = (
-                f"A live BTC trade just fired: {direction.upper()} via {strategy_name}. "
-                f"Entry: {self._fmt_price(entry_price)}, SL: {self._fmt_price(sl_price)}, "
-                f"TP: {self._fmt_price(tp_price)}, R:R 1:{rr:.1f}, conviction {conviction:.0%}. "
-                f"Regime: {regime.replace('_',' ')}. "
-                f"Announce the trade with the key numbers. Sound decisive. End with a sharp one-liner."
+                f"btc trade just opened: {direction} entry at {self._fmt_price(entry_price)}, "
+                f"sl {self._fmt_price(sl_price)}, tp {self._fmt_price(tp_price)}, r:r 1:{rr:.1f}. "
+                f"announce the trade in @mistor style — short, lowercase, punchy. "
+                f"mention the key numbers. end with a one-liner showing conviction."
             )
             ai_text = await self._ai_generate(self._build_ai_prompt("live trade signal", extra))
+            dir_emoji = "🟢" if direction == "long" else "🔴"
             text = ai_text or (
-                f"🚨 LIVE TRADE — BTC/USDT\n"
-                f"{dir_word} | {strategy_name}\n\n"
-                f"Entry: {self._fmt_price(entry_price)}\n"
-                f"SL:    {self._fmt_price(sl_price)}\n"
-                f"TP:    {self._fmt_price(tp_price)}\n"
-                f"R:R → 1:{rr:.1f} | Conviction: {conviction:.0%}\n\n"
-                f"The algo spoke. SL is set.\n"
+                f"btc {direction} {dir_emoji}\n\n"
+                f"entry: {self._fmt_price(entry_price)}\n"
+                f"sl: {self._fmt_price(sl_price)} · tp: {self._fmt_price(tp_price)}\n\n"
+                f"sl is set. we ride or we cut. no in between"
             )
             # Post and capture tweet_id for thread reply on close
             ok = await self._send_tweet(text[:280], "signal")
@@ -1138,23 +1106,19 @@ class XPublisher:
 
         async def _post():
             extra = (
-                f"Trade closed. {direction.upper()} BTC via {strategy_name}{dur}. "
-                f"Entry {self._fmt_price(entry_price)} → Exit {self._fmt_price(exit_price)}. "
-                f"P&L: {pnl_str}. Reason: {exit_label}. "
-                f"{'Celebrate the win with perspective.' if won else 'Acknowledge the loss with discipline — no excuses, no revenge.'} "
-                f"Reference what the system did right (or what the market taught us)."
+                f"btc {direction} trade closed{dur}. "
+                f"entry {self._fmt_price(entry_price)} → exit {self._fmt_price(exit_price)}. "
+                f"p&l: {pnl_str}. {'win.' if won else 'sl hit.'} "
+                f"write in @mistor style: short, lowercase, no hashtags. "
+                f"{'own the win with quiet confidence.' if won else 'own the loss with discipline. no excuses. no drama.'}"
             )
-            ai_text = await self._ai_generate(self._build_ai_prompt(
-                "trade result", extra
-            ))
-            tag = "WIN ✅" if won else "LOSS ❌"
+            ai_text = await self._ai_generate(self._build_ai_prompt("trade result", extra))
+            quip = self.memory.pick("result_quip", RESULT_WIN_QUIPS if won else RESULT_LOSS_QUIPS)
             fallback = (
-                f"TRADE CLOSED — {tag}\n"
-                f"BTC/USDT {direction.upper()}{dur}\n\n"
+                f"btc {direction} closed{dur}\n\n"
                 f"{self._fmt_price(entry_price)} → {self._fmt_price(exit_price)}\n"
-                f"P&L: {pnl_str} | {exit_label}\n"
-                f"Strategy: {strategy_name}\n\n"
-                f"{self.memory.pick('result_quip', RESULT_WIN_QUIPS if won else RESULT_LOSS_QUIPS)}\n\n"
+                f"{pnl_str}\n\n"
+                f"{quip}"
             )
             text = (ai_text or fallback)[:280]
 
@@ -1206,23 +1170,18 @@ class XPublisher:
         async def _gen():
             try:
                 extra = (
-                    f"Must include: BTC at {self._fmt_price(btc_price)}{price_move_str}, "
-                    f"regime {regime.replace('_',' ')}, daily P&L {pnl_str}, {pos_line}. "
-                    f"Time: {utc}. Make it feel like a live market broadcast."
+                    f"btc is at {self._fmt_price(btc_price)}{price_move_str}. "
+                    f"market regime: {regime.replace('_',' ')}. daily p&l: {pnl_str}. {pos_line}. "
+                    f"write a short btc market update in @mistor style. "
+                    f"lowercase. max 3 lines. punchy. can diss alts if relevant. no hashtags."
                 )
                 ai_text = await self._ai_generate(self._build_ai_prompt("market update", extra))
                 if ai_text:
                     await self._send_tweet(ai_text, "hourly")
                 else:
                     quip = self._regime_quip(regime)
-                    fallback = (
-                        f"🤖 BTC UPDATE — {utc}\n\n"
-                        f"Price: {self._fmt_price(btc_price) if btc_price > 0 else 'loading...'}{price_move_str}\n"
-                        f"Regime: {regime.replace('_', ' ').title()} ({regime_stability})\n"
-                        f"Daily P&L: {pnl_str}\n"
-                        f"{pos_line}\n\n"
-                        f"{quip}\n\n"
-                    )
+                    price_str = self._fmt_price(btc_price) if btc_price > 0 else "loading"
+                    fallback = f"btc at {price_str}{price_move_str}\n\n{quip}"
                     await self._send_tweet(fallback, "hourly")
             except Exception as e:
                 logger.error(f"[XPublisher] post_hourly error: {e}")
@@ -1251,19 +1210,19 @@ class XPublisher:
                 best_strat = f"{key.upper()} ({w}W / {t-w}L)"
 
         verdict = (
-            "Good day. The algo delivered." if live_pnl > 5
-            else "Rough day. We take the L and come back." if live_pnl < -5
-            else "Flat day. The market tested my patience. I passed."
+            "good day. we move." if live_pnl > 5
+            else "rough day. sl did its job. we come back." if live_pnl < -5
+            else "flat day. patience is the position."
         )
         text = (
-            f"{opener} \u2014 {date_str}\n\n"
-            f"Trades: {total}  |  {wins}W / {losses}L\n"
-            f"Win Rate: {wr:.1f}%\n"
-            f"Live P&L: {pnl}\n"
+            f"{opener} — {date_str}\n\n"
+            f"trades: {total}  |  {wins}W / {losses}L\n"
+            f"win rate: {wr:.1f}%\n"
+            f"live p&l: {pnl}\n"
         )
         if best_strat:
-            text += f"Top strategy: {best_strat}\n"
-        text += f"\n{verdict}\n\n"
+            text += f"top strat: {best_strat}\n"
+        text += f"\n{verdict}"
         self._fire(text, "daily")
 
     # ── 5. Weekly Recap ────────────────────────────────────────────────────────
@@ -1285,9 +1244,9 @@ class XPublisher:
             for k, s in strategy_stats.items() if (s.get("live_trades") or 0) > 0
         ]
         verdict = (
-            "Profitable week. The strategy holds." if total_pnl > 10
-            else "Down week. Reviewing. Adapting. Returning." if total_pnl < -10
-            else "Breakeven week. We live to trade another day."
+            "profitable week. the system holds." if total_pnl > 10
+            else "down week. reviewing. adapting. back next week." if total_pnl < -10
+            else "breakeven week. we live to trade another day."
         )
         text = (
             f"{opener}\n"
@@ -1315,25 +1274,24 @@ class XPublisher:
         link  = story.get("link", "")
 
         extra = (
-            f"React to this crypto news headline with a sharp, specific take: \"{title}\". "
-            f"Give your trader/algo perspective on what it means for BTC price action. "
-            f"Be direct and opinionated — not generic. Max 220 chars to leave room for link."
+            f"react to this news in @mistor style: \"{title}\". "
+            f"btc-only perspective. short. lowercase. 1-3 lines. "
+            f"be opinionated about what it means for btc. "
+            f"can diss alts/other chains if relevant. no hashtags. max 200 chars for link space."
         )
-        ai_text = await self._ai_generate(self._build_ai_prompt("news reaction", extra), max_chars=220)
+        ai_text = await self._ai_generate(self._build_ai_prompt("news reaction", extra), max_chars=200)
 
         if ai_text:
             text = ai_text.rstrip()
         else:
-            hooks = ["My take:", "Translation for traders:", "Algo reading:", "Bottom line:"]
             comments = [
-                "Watching for BTC reaction.", "Price is the final arbiter.",
-                "Filed. Models updated.", "Interesting. Chart > headlines.",
+                "bullish for btc. nothing else matters",
+                "btc doesn't care about the news. it just goes",
+                "the chart will tell the real story",
+                "everything is eventually good for btc",
+                "alts reacting worse. as always",
             ]
-            text = (
-                f"📰 \"{title}\"\n\n"
-                f"{self.memory.pick('news_hook', hooks)} "
-                f"{self.memory.pick('news_comment', comments)}"
-            )
+            text = f"\"{title[:100]}\"\n\n{random.choice(comments)}"
 
         if link:
             remaining = 280 - len(text) - 2
@@ -1408,9 +1366,10 @@ class XPublisher:
         async def _gen():
             try:
                 extra = (
-                    "Write a spicy, opinionated hot take about trading, crypto culture, or "
-                    "AI trading vs human traders. Be contrarian, specific, and memorable. "
-                    "Reference current market conditions if relevant. No empty platitudes."
+                    "write a hot take in @mistor style. "
+                    "btc-only. can diss eth/sol/memecoins/altcoins. "
+                    "short. lowercase. 1-4 lines. punchy. psychological. "
+                    "no hashtags. no emoji unless 😁 or 🙏 or 💨. no corporate speak."
                 )
                 ai = await self._ai_generate(self._build_ai_prompt("hot take", extra))
                 await self._send_tweet(ai or self.memory.pick("hot_take", HOT_TAKES), "hot_take")
@@ -1429,9 +1388,10 @@ class XPublisher:
         async def _gen():
             try:
                 extra = (
-                    "Write a trading philosophy or wisdom tweet. Can quote a famous trader/investor "
-                    "and give a fresh spin, or share an original insight from an algorithmic perspective. "
-                    "Avoid clichés — make it feel genuinely thoughtful and specific."
+                    "write a short trading wisdom tweet in @mistor style. "
+                    "btc-focused. lowercase. 1-4 lines. no hashtags. "
+                    "something psychological about holding, conviction, patience, or discipline. "
+                    "can reference how altcoin holders don't get it. make it feel real."
                 )
                 ai = await self._ai_generate(self._build_ai_prompt("trading philosophy", extra))
                 await self._send_tweet(ai or self.memory.pick("philosophy", PHILOSOPHY_POSTS), "philosophy")
@@ -1450,10 +1410,10 @@ class XPublisher:
         async def _gen():
             try:
                 extra = (
-                    "Write an engaging question for crypto/trading Twitter. "
-                    "Ask something genuinely interesting that real traders would want to answer — "
-                    "about strategy, psychology, market calls, or AI trading. "
-                    "Make it feel conversational and specific to current market conditions."
+                    "write a short engaging question for btc twitter in @mistor style. "
+                    "lowercase. conversational. btc-focused. 1-3 lines. "
+                    "something about holding, selling, conviction, or paper hands. "
+                    "the kind of question real btc holders will want to answer. no hashtags."
                 )
                 ai = await self._ai_generate(self._build_ai_prompt("engagement question", extra))
                 await self._send_tweet(ai or self.memory.pick("engagement", ENGAGEMENT_QUESTIONS), "engagement")
