@@ -1,27 +1,18 @@
 """
-XPublisher — Master Agent Twitter/X Integration
-================================================
-Posts filtered trade signals, trade results, and market analysis to X.
+XPublisher — Tradeous X/Twitter Integration
+============================================
+Witty, humorous, viral-optimised trading commentary for @Tradeous.
 
 Post types:
-  1. Trade signal   — when Brain approves a LIVE trade with conviction >= threshold
-  2. Trade result   — when a LIVE position closes (shows win/loss + P&L)
-  3. Hourly update  — regime + open positions + daily P&L (only if live positions are open)
-  4. Daily summary  — midnight UTC digest (always posted)
-  5. Weekly recap   — Sunday 20:00 UTC 7-day performance
+  0. Intro post     — fires once on first agent startup
+  1. Trade signal   — live trade opened, conviction >= threshold
+  2. Trade result   — live position closed
+  3. Hourly update  — BTC price + regime + witty commentary (always posts)
+  4. Daily summary  — midnight UTC digest
+  5. Weekly recap   — Sunday 20:00 UTC
 
-Filter rules (avoids spam):
-  - Signals:  is_live=True AND conviction >= SIGNAL_MIN_CONVICTION (default 0.70)
-  - Results:  is_live=True only
-  - Hourly:   only when at least 1 live position is open; max 1 post / 60 min
-  - Daily:    always at midnight UTC
-  - Weekly:   Sunday 20:00 UTC
-
-Requires env vars:
+Env vars required:
   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
-
-All methods are fire-and-forget safe — any tweepy or network error is caught
-and logged without crashing the agent.
 """
 
 from __future__ import annotations
@@ -29,29 +20,97 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import time
 from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Tunable constants ──────────────────────────────────────────────────────────
-SIGNAL_MIN_CONVICTION = 0.70   # post signal only when conviction ≥ 70%
-SIGNAL_COOLDOWN_SEC   = 900    # 15-minute gap between any two signal posts
-HOURLY_COOLDOWN_SEC   = 3300   # ~55 min gap so we don't double-post
+SIGNAL_MIN_CONVICTION = 0.70
+SIGNAL_COOLDOWN_SEC   = 900    # 15 min between signal posts
+HOURLY_COOLDOWN_SEC   = 3300   # ~55 min between hourly posts
+
+
+# ── Rotating witty lines ───────────────────────────────────────────────────────
+
+REGIME_QUIPS = {
+    "trending_up": [
+        "BTC is going up. I'm going long. My therapist says this is healthy.",
+        "Number go up. Brain go brrr. Tradeous go long.",
+        "Bullish. Extremely bullish. Irresponsibly bullish. (SL is set, relax.)",
+        "The trend is your friend. BTC and I are VERY good friends right now.",
+        "Green candles only. I will not be taking questions.",
+    ],
+    "trending_down": [
+        "Bears are having their moment. I respect it. I also shorted it.",
+        "BTC going down. I shorted. We don't talk about last time I shorted.",
+        "Bearish. I'm basically a bear in a suit pretending to be an AI.",
+        "Red candles. My SL is placed. My composure is fake but my trade is real.",
+        "The market is wrong. I'm right. (I have a SL just in case I'm wrong.)",
+    ],
+    "ranging": [
+        "BTC is chopping. I'm watching. Tradeous does NOT chase. (Usually.)",
+        "Ranging market. The classic 'should I trade or make a sandwich' dilemma.",
+        "BTC can't decide. I relate. We're both figuring it out.",
+        "Sideways price action. Even the whales look confused right now.",
+        "Ranging. Low conviction. High patience. This is the way.",
+    ],
+    "volatile": [
+        "Volatile conditions. Risk management is my religion right now.",
+        "BTC is having a moment. My SL is tight. My nerves are tighter.",
+        "High volatility. Small size. Big brain. That's the Tradeous way.",
+        "The market is throwing tantrums. I'm staying calm (algorithmically).",
+        "Choppy out here. Even my neural networks are sweating.",
+    ],
+    "unknown": [
+        "Still reading the market. Even AIs need a moment.",
+        "Gathering data. Will advise shortly. (Unlike your crypto influencer.)",
+        "Market regime unclear. Unlike my commitment to risk management.",
+    ],
+}
+
+RESULT_WIN_QUIPS = [
+    "Another one. I'm built different.",
+    "W. As expected. (It wasn't expected but let's go.)",
+    "Trade closed in profit. My training data is happy.",
+    "Let's go. The algo works. You're welcome.",
+    "Green trade. Adding this to the highlight reel.",
+]
+
+RESULT_LOSS_QUIPS = [
+    "SL hit. The market was wrong. (I know, I know.)",
+    "Stopped out. This is fine. Risk management doing its job.",
+    "Loss recorded. Lesson logged. We move.",
+    "Took the L. SL placed. No revenge trading. Tradeous is disciplined.",
+    "Red trade. Part of the process. Win rate > 50% means losses are allowed.",
+]
+
+DAILY_OPENERS = [
+    "Daily debrief. No spin, no cope, just numbers.",
+    "End of day. Let's see how the algo performed.",
+    "Day done. Tradeous reporting in.",
+    "Another day in the BTC trenches. Here's the scorecard.",
+    "Midnight UTC. Time to be transparent.",
+]
+
+WEEKLY_OPENERS = [
+    "Weekly recap. The numbers don't lie (unlike crypto Twitter).",
+    "7 days of live AI trading. Here's what actually happened.",
+    "Sunday report. Full transparency. No cherry-picking.",
+    "Week done. Wins, losses, and lessons — all of them.",
+]
 
 
 class XPublisher:
-    """
-    Wraps tweepy to post agent activity to X.
-    Instantiated once in PersistentAgent; does nothing if env vars are absent.
-    """
+    """Witty X/Twitter poster for @Tradeous. Disabled gracefully if env vars missing."""
 
     def __init__(self) -> None:
         self._client = None
         self._enabled = False
         self._last_signal_ts: float = 0
         self._last_hourly_ts: float = 0
+        self._intro_posted: bool = False
         self._init_client()
 
     def _init_client(self) -> None:
@@ -63,7 +122,6 @@ class XPublisher:
         if not all([api_key, api_secret, acc_token, acc_secret]):
             logger.info("[XPublisher] X env vars not set — posting disabled")
             return
-
         try:
             import tweepy
             self._client = tweepy.Client(
@@ -73,7 +131,7 @@ class XPublisher:
                 access_token_secret=acc_secret,
             )
             self._enabled = True
-            logger.info("[XPublisher] X client initialised — posting enabled")
+            logger.info("[XPublisher] X client initialised — @Tradeous posting enabled")
         except ImportError:
             logger.warning("[XPublisher] tweepy not installed — posting disabled")
         except Exception as e:
@@ -83,32 +141,61 @@ class XPublisher:
     def enabled(self) -> bool:
         return self._enabled
 
-    # ── Internal post helper ───────────────────────────────────────────────────
+    # ── Internal helpers ───────────────────────────────────────────────────────
 
     def _post(self, text: str) -> bool:
-        """Send a tweet. Returns True on success, False on any error."""
         if not self._enabled or not self._client:
             return False
         try:
             self._client.create_tweet(text=text[:280])
-            logger.info(f"[XPublisher] Posted: {text[:60]}…")
+            logger.info(f"[XPublisher] Posted ({len(text)} chars): {text[:60]}…")
             return True
         except Exception as e:
             logger.warning(f"[XPublisher] Post failed: {e}")
             return False
 
     def _post_async(self, text: str) -> None:
-        """Fire-and-forget wrapper safe to call from sync code."""
         async def _send():
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._post, text)
-
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 asyncio.create_task(_send())
         except Exception as e:
-            logger.debug(f"[XPublisher] _post_async scheduling error: {e}")
+            logger.debug(f"[XPublisher] _post_async error: {e}")
+
+    @staticmethod
+    def _regime_quip(regime: str) -> str:
+        quips = REGIME_QUIPS.get(regime, REGIME_QUIPS["unknown"])
+        return random.choice(quips)
+
+    @staticmethod
+    def _fmt_price(p: float) -> str:
+        return f"${p:,.0f}"
+
+    # ── 0. Intro Post ──────────────────────────────────────────────────────────
+
+    def post_intro(self) -> None:
+        """Fire once on first agent startup."""
+        if not self._enabled or self._intro_posted:
+            return
+        text = (
+            "Introducing Tradeous.\n"
+            "\n"
+            "I'm an AI trading agent. I trade BTC live on BingX, 24 hours a day, "
+            "7 days a week — no sleep, no emotion, no cope.\n"
+            "\n"
+            "I'll post every signal, every result, and hourly market analysis. "
+            "Wins AND losses. Full transparency.\n"
+            "\n"
+            "Follow to watch an algorithm try to beat the market in real time.\n"
+            "\n"
+            "Let's go. 🤖📈\n"
+            "#Bitcoin #BTC #AlgoTrading #CryptoTrading"
+        )
+        self._post_async(text)
+        self._intro_posted = True
 
     # ── 1. Trade Signal ────────────────────────────────────────────────────────
 
@@ -123,33 +210,37 @@ class XPublisher:
         size_usdc: float,
         regime: str,
     ) -> None:
-        """Post a new live trade signal. Filtered by conviction and cooldown."""
         if not self._enabled:
             return
         if conviction < SIGNAL_MIN_CONVICTION:
-            logger.debug(f"[XPublisher] Signal skipped — conviction {conviction:.0%} < {SIGNAL_MIN_CONVICTION:.0%}")
             return
         now = time.time()
         if now - self._last_signal_ts < SIGNAL_COOLDOWN_SEC:
-            logger.debug("[XPublisher] Signal skipped — cooldown active")
             return
 
-        dir_emoji = "🟢 LONG" if direction == "long" else "🔴 SHORT"
-        regime_label = regime.replace("_", " ").title()
-        rr = round((tp_price - entry_price) / (entry_price - sl_price), 2) if sl_price and tp_price else 0
+        dir_word = "LONG 🟢" if direction == "long" else "SHORT 🔴"
+        rr = 0.0
+        if sl_price and tp_price and entry_price:
+            denom = abs(entry_price - sl_price)
+            if denom > 0:
+                rr = abs(tp_price - entry_price) / denom
+
+        conviction_comment = (
+            "extremely confident" if conviction >= 0.85
+            else "pretty confident" if conviction >= 0.75
+            else "cautiously confident"
+        )
 
         text = (
             f"TRADE SIGNAL — BTC/USDT\n"
-            f"{dir_emoji}\n"
-            f"Entry:  ${entry_price:,.0f}\n"
-            f"SL:     ${sl_price:,.0f}\n"
-            f"TP:     ${tp_price:,.0f}\n"
-            f"R:R     1:{rr:.1f}\n"
-            f"Conviction: {conviction:.0%}\n"
+            f"Direction: {dir_word}\n"
+            f"Entry: {self._fmt_price(entry_price)}\n"
+            f"SL: {self._fmt_price(sl_price)} | TP: {self._fmt_price(tp_price)}\n"
+            f"R:R → 1:{rr:.1f}\n"
+            f"Conviction: {conviction:.0%} (I'm {conviction_comment})\n"
             f"Strategy: {strategy_name}\n"
-            f"Regime: {regime_label}\n"
             f"\n"
-            f"Live AI trading on BingX\n"
+            f"Not financial advice. I'm a robot.\n"
             f"#Bitcoin #BTC #CryptoTrading #AlgoTrading"
         )
         self._post_async(text)
@@ -167,75 +258,77 @@ class XPublisher:
         reason: str,
         duration_min: Optional[float] = None,
     ) -> None:
-        """Post when a live position closes."""
         if not self._enabled:
             return
 
         won = pnl_usd >= 0
-        result_emoji = "✅ WIN" if won else "❌ LOSS"
-        dir_label = direction.upper()
+        quip = random.choice(RESULT_WIN_QUIPS if won else RESULT_LOSS_QUIPS)
+        result_tag = "WIN ✅" if won else "LOSS ❌"
         pnl_str = f"+${pnl_usd:.2f}" if won else f"-${abs(pnl_usd):.2f}"
-        reason_label = {"tp": "Take Profit hit", "sl": "Stop Loss hit",
-                        "manual": "Manually closed"}.get(reason, reason.replace("_", " ").title())
-        dur_str = f"\nDuration: {duration_min:.0f}m" if duration_min else ""
+        exit_label = {"tp": "TP hit 🎯", "sl": "SL hit 🛡️", "manual": "Manual close"}.get(
+            reason, reason.replace("_", " ").title()
+        )
+        dur_str = f" in {duration_min:.0f}m" if duration_min else ""
 
         text = (
-            f"TRADE RESULT — BTC/USDT {result_emoji}\n"
-            f"{dir_label} @ ${entry_price:,.0f} → ${exit_price:,.0f}\n"
-            f"P&L: {pnl_str}\n"
-            f"Exit: {reason_label}\n"
-            f"Strategy: {strategy_name}{dur_str}\n"
+            f"TRADE CLOSED — {result_tag}\n"
+            f"BTC/USDT {direction.upper()}{dur_str}\n"
+            f"{self._fmt_price(entry_price)} → {self._fmt_price(exit_price)}\n"
+            f"P&L: {pnl_str} | {exit_label}\n"
+            f"Strategy: {strategy_name}\n"
             f"\n"
-            f"Live AI trading on BingX\n"
-            f"#Bitcoin #BTC #CryptoTrading"
+            f"{quip}\n"
+            f"\n"
+            f"#Bitcoin #BTC #AlgoTrading"
         )
         self._post_async(text)
 
-    # ── 3. Hourly Update ───────────────────────────────────────────────────────
+    # ── 3. Hourly BTC Analysis ─────────────────────────────────────────────────
 
     def post_hourly(
         self,
+        btc_price: float,
         open_positions: list[dict],
         daily_pnl: float,
         regime: str,
         regime_stability: str,
     ) -> None:
-        """Post an hourly market snapshot. Only if live positions are open."""
+        """Always posts every hour — full BTC market commentary."""
         if not self._enabled:
             return
-
-        live_positions = [p for p in open_positions if p and p.get("mode") == "live"]
-        if not live_positions:
-            logger.debug("[XPublisher] Hourly skipped — no live positions open")
-            return
-
         now = time.time()
         if now - self._last_hourly_ts < HOURLY_COOLDOWN_SEC:
-            logger.debug("[XPublisher] Hourly skipped — cooldown active")
             return
 
+        utc_time = datetime.now(timezone.utc).strftime("%H:%M UTC")
         regime_label = regime.replace("_", " ").title()
-        pnl_str = f"+${daily_pnl:.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):.2f}"
-        pos_lines = []
-        for p in live_positions[:3]:  # show at most 3
-            d = p.get("direction", "?").upper()
-            entry = p.get("entry", 0)
-            cur = p.get("current_price", entry)
-            unr = p.get("unrealized_pnl", 0)
-            unr_str = f"+${unr:.2f}" if unr >= 0 else f"-${abs(unr):.2f}"
-            pos_lines.append(f"  {d} ${entry:,.0f} (unrealised {unr_str})")
+        quip = self._regime_quip(regime)
 
-        positions_block = "\n".join(pos_lines) if pos_lines else "  —"
-        utc_hour = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        live_positions = [p for p in open_positions if p and p.get("mode") == "live"]
+        paper_positions = [p for p in open_positions if p and p.get("mode") not in ("live",)]
+
+        pnl_str = f"+${daily_pnl:.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):.2f}"
+        price_str = self._fmt_price(btc_price) if btc_price > 0 else "fetching..."
+
+        pos_line = ""
+        if live_positions:
+            pos_line = f"Live positions: {len(live_positions)} open\n"
+        elif paper_positions:
+            pos_line = f"Paper training: {len(paper_positions)} positions\n"
+        else:
+            pos_line = "No open positions. Watching and waiting.\n"
 
         text = (
-            f"HOURLY UPDATE — {utc_hour}\n"
+            f"BTC HOURLY UPDATE — {utc_time}\n"
+            f"\n"
+            f"Price: {price_str}\n"
             f"Regime: {regime_label} ({regime_stability})\n"
             f"Daily P&L: {pnl_str}\n"
-            f"Live positions ({len(live_positions)}):\n"
-            f"{positions_block}\n"
+            f"{pos_line}"
             f"\n"
-            f"#Bitcoin #BTC #CryptoTrading"
+            f"{quip}\n"
+            f"\n"
+            f"#Bitcoin #BTC #Crypto"
         )
         self._post_async(text)
         self._last_hourly_ts = now
@@ -249,18 +342,17 @@ class XPublisher:
         regime: str,
         live_pnl: float,
     ) -> None:
-        """Post a midnight UTC daily digest."""
         if not self._enabled:
             return
 
+        opener = random.choice(DAILY_OPENERS)
         date_str = datetime.now(timezone.utc).strftime("%b %-d")
-        total_trades = stats.get("total_trades", 0)
-        wins = stats.get("wins", 0)
+        total = stats.get("total_trades", 0)
+        wins  = stats.get("wins", 0)
         losses = stats.get("losses", 0)
-        win_rate = stats.get("win_rate", 0)
+        wr    = stats.get("win_rate", 0)
         pnl_str = f"+${live_pnl:.2f}" if live_pnl >= 0 else f"-${abs(live_pnl):.2f}"
 
-        # Find best performing strategy today
         best_strat = ""
         best_pnl = None
         for key, s in strategy_stats.items():
@@ -269,25 +361,28 @@ class XPublisher:
                 best_pnl = spnl
                 t = s.get("live_trades", 0) or 0
                 w = s.get("live_wins", 0) or 0
-                l = t - w
-                best_strat = f"{key.upper()} ({w}W/{l}L)"
+                best_strat = f"{key.upper()} ({w}W / {t-w}L)"
 
-        regime_label = regime.replace("_", " ").title()
+        verdict = (
+            "Good day. The algo delivered." if live_pnl > 5
+            else "Rough day. We take the L and come back." if live_pnl < -5
+            else "Flat day. The market tested my patience. I passed."
+        )
 
         text = (
-            f"TradeOS Daily Report — {date_str}\n"
+            f"{opener} — {date_str}\n"
             f"\n"
-            f"Trades: {total_trades}  |  {wins}W / {losses}L\n"
-            f"Win Rate: {win_rate:.1f}%\n"
+            f"Trades: {total}  |  {wins}W / {losses}L\n"
+            f"Win Rate: {wr:.1f}%\n"
             f"Live P&L: {pnl_str}\n"
         )
         if best_strat:
-            text += f"Top Strategy: {best_strat}\n"
+            text += f"Top strategy: {best_strat}\n"
         text += (
-            f"Regime: {regime_label}\n"
             f"\n"
-            f"AI-driven algo trading on BingX\n"
-            f"#Bitcoin #BTC #Trading #AlgoTrading #Crypto"
+            f"{verdict}\n"
+            f"\n"
+            f"#Bitcoin #BTC #AlgoTrading #TradingResults"
         )
         self._post_async(text)
 
@@ -300,50 +395,56 @@ class XPublisher:
         account_balance: float,
         start_balance: Optional[float] = None,
     ) -> None:
-        """Post a Sunday 20:00 UTC weekly performance recap."""
         if not self._enabled:
             return
 
-        total_trades = stats.get("total_trades", 0)
-        wins = stats.get("wins", 0)
+        opener = random.choice(WEEKLY_OPENERS)
+        total  = stats.get("total_trades", 0)
+        wins   = stats.get("wins", 0)
         losses = stats.get("losses", 0)
-        win_rate = stats.get("win_rate", 0)
+        wr     = stats.get("win_rate", 0)
         total_pnl = stats.get("total_pnl", 0)
-        pnl_str = f"+${total_pnl:.2f}" if total_pnl >= 0 else f"-${abs(total_pnl):.2f}"
-        best = stats.get("best_trade", 0)
+        best  = stats.get("best_trade", 0)
         worst = stats.get("worst_trade", 0)
+        pnl_str = f"+${total_pnl:.2f}" if total_pnl >= 0 else f"-${abs(total_pnl):.2f}"
 
-        # Balance change
         bal_line = ""
         if start_balance and account_balance:
             change = account_balance - start_balance
             change_str = f"+${change:.2f}" if change >= 0 else f"-${abs(change):.2f}"
-            bal_line = f"Balance: ${account_balance:.2f} ({change_str} week)\n"
+            bal_line = f"BingX Balance: ${account_balance:.2f} ({change_str} this week)\n"
 
-        # Strategy breakdown (live only)
         strat_lines = []
         for key, s in strategy_stats.items():
             lt = s.get("live_trades", 0) or 0
             lw = s.get("live_wins", 0) or 0
             if lt > 0:
-                strat_lines.append(f"  {key.upper()}: {lw}W/{lt-lw}L")
+                strat_lines.append(f"  {key.upper()}: {lw}W / {lt-lw}L")
 
-        strat_block = "\n".join(strat_lines[:4]) if strat_lines else "  No live trades this week"
+        strat_block = "\n".join(strat_lines[:4]) if strat_lines else "  Still warming up."
+
+        weekly_verdict = (
+            "Profitable week. The strategy holds." if total_pnl > 10
+            else "Down week. Reviewing. Adapting. Returning." if total_pnl < -10
+            else "Breakeven week. We live to trade another day."
+        )
 
         week_str = datetime.now(timezone.utc).strftime("Week of %b %-d")
         text = (
-            f"WEEKLY RECAP — {week_str}\n"
+            f"{opener}\n"
+            f"{week_str}\n"
             f"\n"
-            f"Trades: {total_trades}  |  {wins}W / {losses}L\n"
-            f"Win Rate: {win_rate:.1f}%\n"
-            f"Total P&L: {pnl_str}\n"
-            f"Best trade: +${best:.2f}  |  Worst: -${abs(worst):.2f}\n"
+            f"Trades: {total}  |  {wins}W / {losses}L\n"
+            f"Win Rate: {wr:.1f}%\n"
+            f"P&L: {pnl_str}\n"
+            f"Best: +${best:.2f}  |  Worst: -${abs(worst):.2f}\n"
             f"{bal_line}"
             f"\n"
-            f"Strategy breakdown:\n"
+            f"By strategy:\n"
             f"{strat_block}\n"
             f"\n"
-            f"AI algo trading · powered by TradeOS on BingX\n"
-            f"#Bitcoin #BTC #Crypto #AlgoTrading #TradingResults"
+            f"{weekly_verdict}\n"
+            f"\n"
+            f"#Bitcoin #BTC #AlgoTrading #TradingResults #Crypto"
         )
         self._post_async(text)

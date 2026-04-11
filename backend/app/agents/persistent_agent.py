@@ -925,6 +925,8 @@ class PersistentAgent:
         self._running = True
         self._task = asyncio.create_task(self._loop())
         asyncio.create_task(self._x_scheduler())
+        # Fire intro post once on first startup
+        self.x_publisher.post_intro()
         mode = self.config.get("mode", "paper")
         if mode == "live":
             self._log("Agent STARTED — DUAL MODE: paper shadow training + live BingX (qualified strategies only)")
@@ -970,13 +972,21 @@ class PersistentAgent:
                 else:
                     regime_stability = "unknown"
 
-                # ── Hourly (only when live positions are open) ────────────────
+                # ── Hourly BTC analysis — always posts ───────────────────────
                 if now.hour != last_hour_posted:
                     open_pos = [p for p in self.positions.values() if p]
                     live_pnl = sum(
                         p.get("unrealized_pnl", 0) for p in open_pos if p.get("mode") == "live"
                     ) + self.stats.get("total_pnl", 0)
+                    # Fetch current BTC price from market stream cache
+                    btc_price = 0.0
+                    try:
+                        from app.agents.live_market_stream import LIVE_PRICES
+                        btc_price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
+                    except Exception:
+                        pass
                     self.x_publisher.post_hourly(
+                        btc_price=btc_price,
                         open_positions=open_pos,
                         daily_pnl=live_pnl,
                         regime=regime,
