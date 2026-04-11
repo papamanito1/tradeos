@@ -1027,6 +1027,13 @@ class PersistentAgent:
                     )
                     last_week_posted = iso_week
 
+                # ── Viral content — news, philosophy, hot takes, engagement ───
+                await self.x_publisher.post_news()
+                await self.x_publisher.post_fear_greed()
+                self.x_publisher.post_hot_take()
+                self.x_publisher.post_philosophy()
+                self.x_publisher.post_engagement()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

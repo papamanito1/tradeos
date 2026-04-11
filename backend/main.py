@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis_client import get_redis, close_redis
 from app.api import auth, overview, strategies, positions, orders, risk, market, backtest, journal, settings as settings_router, websocket, paper as paper_router, agent as agent_router
+from app.api import x_agent as x_agent_router
 from app.websockets.manager import redis_listener
 from app.risk.risk_engine import RiskConfig, update_risk_engine
 from app.exchange.paper_trading import PaperTradingEngine
@@ -49,6 +50,7 @@ app.include_router(settings_router.router)
 app.include_router(websocket.router)
 app.include_router(paper_router.router)
 app.include_router(agent_router.router)
+app.include_router(x_agent_router.router)
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 _background_tasks: list[asyncio.Task] = []

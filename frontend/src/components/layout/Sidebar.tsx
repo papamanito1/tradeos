@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, ShieldAlert,
-  BarChart2, Settings, LogOut, Bot,
+  BarChart2, Settings, LogOut, Bot, Twitter,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Logo } from "@/components/ui/Logo";
@@ -18,6 +18,7 @@ const NAV_SECTIONS = [
     items: [
       { label: "Overview",   href: "/dashboard",            icon: LayoutDashboard },
       { label: "Live Agent", href: "/dashboard/agent",      icon: Bot },
+      { label: "X Agent",    href: "/dashboard/x-agent",   icon: Twitter },
     ],
   },
   {
