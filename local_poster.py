@@ -29,14 +29,15 @@ EDGE_DATA    = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
 EDGE_EXE     = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 STATE_FILE   = os.path.join(os.path.dirname(__file__), ".poster_state.json")
 
-# Cooldowns (seconds)
+# Cooldowns (seconds) — 25-min cadence matching x_publisher.py
 COOLDOWNS = {
-    "hourly":     3300,
-    "hot_take":   28800,
-    "philosophy": 43200,
-    "engagement": 43200,
-    "news":       7200,
-    "fear_greed": 14400,
+    "hourly":       1500,   # 25 min
+    "hot_take":     3600,   # 60 min
+    "philosophy":   7200,   # 2 h
+    "engagement":   7200,   # 2 h
+    "news":         3000,   # 50 min
+    "fear_greed":   7200,   # 2 h
+    "algo_insight": 10800,  # 3 h
 }
 
 # ── Content banks (mirrored from x_publisher.py) ──────────────────────────────
@@ -254,54 +255,86 @@ logging.basicConfig(
 )
 log = logging.getLogger("poster")
 
+def poll_railway_queue() -> tuple[str, str] | None:
+    """Check Railway /next-post for any queued tweet from dashboard triggers."""
+    try:
+        r = urllib.request.urlopen(f"{RAILWAY_URL}/api/x-agent/next-post", timeout=8)
+        d = json.loads(r.read())
+        if d.get("has_post") and d.get("text"):
+            return d.get("type", "auto"), d["text"]
+    except Exception:
+        pass
+    return None
+
+
+def confirm_railway(post_type: str, tweet_id: str):
+    """Tell Railway a post was sent so the dashboard Activity feed updates."""
+    try:
+        body = json.dumps({
+            "id": f"{post_type}_{int(time.time())}",
+            "post_type": post_type,
+            "tweet_id": tweet_id,
+        }).encode()
+        req = urllib.request.Request(
+            f"{RAILWAY_URL}/api/x-agent/confirm-post",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=8)
+    except Exception:
+        pass
+
+
 async def run():
     global _event_loop
     _event_loop = asyncio.get_running_loop()
 
     log.info("=" * 52)
-    log.info("  Tradeous Local X Poster")
+    log.info("  Tradeous Local X Poster  — 25-min cadence")
     log.info(f"  Local API  →  http://localhost:{LOCAL_PORT}/post")
     log.info(f"  Railway    →  {RAILWAY_URL}")
     log.info("=" * 52)
 
-    # Start HTTP server in background thread
+    # Start HTTP server in background thread (handles instant dashboard posts)
     t = threading.Thread(target=run_http_server, daemon=True)
     t.start()
 
     while True:
-        result = gen_next_auto()
-        if result:
-            post_type, text = result
-            log.info(f"Auto-posting [{post_type}]: {text[:55]}…")
+        post_type = None
+        text = None
+
+        # 1. Priority: queued item from Railway (dashboard "Post Now" triggers)
+        queued = poll_railway_queue()
+        if queued:
+            post_type, text = queued
+            log.info(f"Railway queue [{post_type}]: {text[:55]}…")
+
+        # 2. Auto-schedule: generate next post if cooldown elapsed
+        if not text:
+            result = gen_next_auto()
+            if result:
+                post_type, text = result
+                log.info(f"Auto [{post_type}]: {text[:55]}…")
+
+        if text and post_type:
             try:
                 tid = await post_tweet(text)
                 if tid:
                     touch(post_type)
-                    # Notify Railway so dashboard shows it
-                    try:
-                        body = json.dumps({"id": f"{post_type}_{int(time.time())}", "post_type": post_type, "tweet_id": tid}).encode()
-                        req = urllib.request.Request(
-                            f"{RAILWAY_URL}/api/x-agent/confirm-post",
-                            data=body,
-                            headers={"Content-Type": "application/json"},
-                            method="POST",
-                        )
-                        urllib.request.urlopen(req, timeout=8)
-                    except Exception:
-                        pass
-                    log.info(f"✅ Auto-posted! tweet_id={tid}")
+                    confirm_railway(post_type, tid)
+                    log.info(f"✅ Posted! tweet_id={tid}")
                 else:
-                    log.warning("❌ Auto-post failed (empty response)")
+                    log.warning("❌ Post failed (Playwright returned empty)")
             except Exception as e:
-                log.error(f"❌ Auto-post error: {e}")
+                log.error(f"❌ Post error: {e}")
         else:
-            # Show next scheduled post
             next_times = [(k, COOLDOWNS[k] - (time.time() - _state.get(k, 0))) for k in COOLDOWNS]
             soonest = min(next_times, key=lambda x: x[1])
             mins = max(0, int(soonest[1] / 60))
-            log.info(f"All on cooldown. Next: {soonest[0]} in {mins}m")
+            log.info(f"Idle — next auto: {soonest[0]} in {mins}m | polling Railway queue…")
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(25)  # poll every 25s for fast response to triggers
 
 
 if __name__ == "__main__":

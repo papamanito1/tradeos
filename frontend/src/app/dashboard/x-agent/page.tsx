@@ -19,12 +19,28 @@ async function postViaLocal(text: string, type: string): Promise<{ ok: boolean; 
   return { ok: false, msg: "local_poster.py not running" };
 }
 
-async function queueViaRailway(endpoint: string): Promise<{ ok: boolean; msg: string; queued?: boolean }> {
+async function triggerPost(endpoint: string): Promise<{ ok: boolean; msg: string }> {
   try {
+    // Step 1: ask Railway to generate the tweet text
     const r = await fetch(`${API}${endpoint}`, { method: "POST" });
     const d = await r.json();
-    if (d.ok) return { ok: true, msg: d.queued ? "Queued — posts within 60s" : "Posted!", queued: true };
-    return { ok: false, msg: d.error || "Failed" };
+    if (!d.ok) return { ok: false, msg: d.error || "Failed" };
+    if (d.posted) return { ok: true, msg: "Posted ✓ on X" };
+
+    // Step 2: Railway couldn't post (IP block) — forward text to local_poster.py
+    if (d.text) {
+      try {
+        const lr = await fetch(`${LOCAL}/post`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: d.text, type: d.type || "auto" }),
+        });
+        if (lr.ok) return { ok: true, msg: "Posted ✓ via local browser" };
+      } catch {
+        // local_poster.py not running — tweet is queued on Railway
+      }
+    }
+    return { ok: true, msg: "Queued — start local_poster.py to send" };
   } catch {
     return { ok: false, msg: "Cannot reach backend" };
   }
@@ -105,15 +121,15 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
   const trigger = async () => {
     setLoading(true);
     setResult(null);
-    const res = await queueViaRailway(endpoint);
+    const res = await triggerPost(endpoint);
     if (res.ok) {
-      setResult({ ok: true, msg: res.queued ? "Queued ✓" : "Posted ✓ on X" });
+      setResult({ ok: true, msg: res.msg });
       onTriggered();
     } else {
       setResult({ ok: false, msg: res.msg });
     }
     setLoading(false);
-    setTimeout(() => setResult(null), 6000);
+    setTimeout(() => setResult(null), 8000);
   };
 
   return (
@@ -219,7 +235,23 @@ export default function XAgentPage() {
   const [manualText, setManualText] = useState("");
   const [posting, setPosting] = useState(false);
   const [postResult, setPostResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [localOnline, setLocalOnline] = useState<boolean | null>(null);
   const charCount = manualText.length;
+
+  // Check if local_poster.py is running
+  useEffect(() => {
+    const check = async () => {
+      try {
+        await fetch(`${LOCAL}/post`, { method: "OPTIONS", signal: AbortSignal.timeout(1500) });
+        setLocalOnline(true);
+      } catch {
+        setLocalOnline(false);
+      }
+    };
+    check();
+    const iv = setInterval(check, 15000);
+    return () => clearInterval(iv);
+  }, []);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -332,6 +364,39 @@ export default function XAgentPage() {
   return (
     <div className="min-h-screen text-white">
       <div className="max-w-5xl mx-auto px-1 py-2 space-y-8">
+
+        {/* local_poster.py status — required for posting */}
+        {localOnline === false && (
+          <div className="rounded-2xl border p-4 flex items-start gap-4"
+            style={{ background: "rgba(251,191,36,0.06)", borderColor: "rgba(251,191,36,0.2)" }}>
+            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+              style={{ background: "rgba(251,191,36,0.12)" }}>
+              <span className="text-sm">⚡</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold text-yellow-300">local_poster.py not running — tweets will queue but not send</div>
+              <div className="text-[11px] text-yellow-400/60 mt-1 leading-relaxed">
+                X blocks server IPs, so posts go through your PC&apos;s browser. Open a terminal in the project folder and run:
+              </div>
+              <code className="block mt-2 text-[11px] font-mono bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-yellow-300 select-all">
+                python local_poster.py
+              </code>
+              <div className="text-[10px] text-yellow-400/40 mt-1">Keep it running — it posts every 25 min automatically + handles trigger buttons instantly</div>
+            </div>
+            {localOnline !== null && (
+              <div className="flex items-center gap-1.5 shrink-0 text-[10px] text-yellow-400/50">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/50" />OFFLINE
+              </div>
+            )}
+          </div>
+        )}
+        {localOnline === true && (
+          <div className="rounded-2xl border p-3 flex items-center gap-3"
+            style={{ background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.15)" }}>
+            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
+            <span className="text-[12px] text-green-400 font-medium">local_poster.py running — triggers post instantly via your browser</span>
+          </div>
+        )}
 
         {/* Offline banner */}
         {status && !status.enabled && (

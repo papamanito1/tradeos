@@ -42,19 +42,22 @@ async def get_status():
 
 async def _send_now(pub, post_type: str, text: str) -> dict:
     """
-    Post directly via Railway using the publisher's _send_tweet (curl_cffi impersonation).
-    Falls back to local poster queue if direct send fails.
+    Queue tweet for local_poster.py (Playwright via real Edge browser).
+    Also tries direct Railway send — returns the text so frontend can post via localhost:4242.
     """
-    ok = await pub._send_tweet(text[:280], post_type)
+    text = text[:280]
+    # Try direct Railway send (works if curl_cffi can bypass X IP block)
+    ok = await pub._send_tweet(text, post_type)
     if ok:
         pub._touch(post_type.replace("-", "_"))
-        return {"ok": True, "queued": False, "message": "Posted ✓"}
-    # Fallback: add to local poster queue
+        return {"ok": True, "queued": False, "posted": True, "text": text, "message": "Posted ✓"}
+    # Add to queue so local_poster.py can pick it up
     import uuid
     qid = str(uuid.uuid4())[:8] + f"_{post_type}"
-    _tweet_queue.append({"id": qid, "type": post_type, "text": text[:280], "ts": time.time()})
-    return {"ok": True, "queued": True, "id": qid,
-            "message": "Queued — local_poster.py will send it"}
+    _tweet_queue.append({"id": qid, "type": post_type, "text": text, "ts": time.time()})
+    # Return the text so the frontend can forward it to local_poster.py directly
+    return {"ok": True, "queued": True, "posted": False, "text": text,
+            "id": qid, "message": "Ready — sending via local poster"}
 
 
 def _check(pub) -> dict | None:
