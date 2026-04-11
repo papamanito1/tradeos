@@ -14,7 +14,7 @@
  */
 
 import { useMemo, useRef, useCallback } from "react";
-import { BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "./useBinanceStream";
+import { BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "./useBingXStream";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TICK_SIZE   = 0.10;   // BTC/USDT minimum price increment

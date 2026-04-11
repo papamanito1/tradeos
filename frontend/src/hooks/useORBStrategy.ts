@@ -19,7 +19,7 @@
  */
 
 import { useMemo } from "react";
-import { BinanceCandle } from "./useBinanceStream";
+import { BinanceCandle } from "./useBingXStream";
 
 // ── Strategy parameters ───────────────────────────────────────────────────────
 const P = {

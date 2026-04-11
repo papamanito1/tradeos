@@ -18,7 +18,7 @@ import { useHFTScalper, useAggTradeBuffer, HFTResult } from "@/hooks/useHFTScalp
 import { useORBStrategy } from "@/hooks/useORBStrategy";
 import { useOBIScalper, OBIResult } from "@/hooks/useOBIScalper";
 import { useGridStrategy, GridResult } from "@/hooks/useGridStrategy";
-import { useBinanceStream, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBinanceStream";
+import { useBingXStream, seedBingXCandles, BinanceCandle, BinanceOrderBook, BinanceAggTrade } from "@/hooks/useBingXStream";
 import { useServerAgent, type ServerAgentConfig } from "@/hooks/useServerAgent";
 import { formatUSD } from "@/lib/utils";
 
@@ -110,39 +110,10 @@ function TradeRow({ trade }: { trade: ReturnType<typeof usePhantomAgent>["trades
   );
 }
 
-// ─── Candle seeder ────────────────────────────────────────────────────────────
+// ─── Candle seeder (BingX primary, Bybit fallback) ────────────────────────────
 async function seedCandles(tf: "1m" | "15m"): Promise<BinanceCandle[]> {
-  const interval = tf === "1m" ? "1m" : "15m";
-  const bybitInterval = tf === "1m" ? "1" : "15";
-  // ORB-30 needs 30 bars for opening range + up to 90 bars after = 120 min minimum.
-  // Use 300 bars so we always cover the full 4-hour session regardless of when we load.
   const limit = tf === "1m" ? 300 : 120;
-  try {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
-    if (r.ok) {
-      const raw: unknown[][] = await r.json();
-      return raw.map(k => ({
-        timestamp: new Date(k[0] as number).toISOString(),
-        open:  parseFloat(k[1] as string), high: parseFloat(k[2] as string),
-        low:   parseFloat(k[3] as string), close: parseFloat(k[4] as string),
-        volume:parseFloat(k[5] as string), is_closed: true,
-      }));
-    }
-  } catch { /* fall through */ }
-  try {
-    const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=${bybitInterval}&limit=${limit}`);
-    if (r.ok) {
-      const json = await r.json();
-      const list: string[][] = json?.result?.list ?? [];
-      return [...list].reverse().map(k => ({
-        timestamp: new Date(parseInt(k[0])).toISOString(),
-        open: parseFloat(k[1]), high: parseFloat(k[2]),
-        low:  parseFloat(k[3]), close: parseFloat(k[4]),
-        volume: parseFloat(k[5]), is_closed: true,
-      }));
-    }
-  } catch { /* ignore */ }
-  return [];
+  return seedBingXCandles(tf, limit);
 }
 
 // ─── HFT Indicator bar ────────────────────────────────────────────────────────
@@ -879,8 +850,8 @@ function AgentContent() {
     return () => { if (aggSnapTimer.current) clearInterval(aggSnapTimer.current); };
   }, [getTrades]);
 
-  // ── 15m stream (Momentum) ─────────────────────────────────────────────
-  useBinanceStream({
+  // ── 15m stream from BingX (Momentum) ──────────────────────────────────
+  useBingXStream({
     symbols: ["BTC/USDT"],
     timeframe: "15m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {
@@ -896,8 +867,8 @@ function AgentContent() {
     }, []),
   });
 
-  // ── 1m stream (HFT + ORB) — keep 299 bars ────────────────────────────
-  useBinanceStream({
+  // ── 1m stream from BingX (HFT + ORB) — keep 299 bars ─────────────────
+  useBingXStream({
     symbols: ["BTC/USDT"],
     timeframe: "1m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {
@@ -1636,7 +1607,7 @@ function AgentContent() {
             <div className="flex items-center gap-2 mb-3">
               <DollarSign size={13} className="text-orange-400" />
               <span className="text-[13px] font-semibold text-white">BTC / USDT</span>
-              <span className="text-[9px] text-neutral-600 ml-1">1m candles</span>
+              <span className="text-[9px] text-neutral-600 ml-1">1m · BingX</span>
               <span className="ml-auto flex items-center gap-1.5 text-[9px] text-green-400">
                 <span className="w-1 h-1 rounded-full bg-green-400 animate-pulse" />live
               </span>

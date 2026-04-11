@@ -19,7 +19,7 @@
  */
 
 import { useMemo, useRef, useCallback } from "react";
-import { BinanceCandle } from "./useBinanceStream";
+import { BinanceCandle } from "./useBingXStream";
 
 const GRID_SIZE       = 50;    // $50 spacing
 const MAX_LEVELS      = 20;    // 20 levels each side → $1,000 range

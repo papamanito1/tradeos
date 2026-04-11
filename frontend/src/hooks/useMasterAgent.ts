@@ -33,7 +33,7 @@ import { ORBResult } from "./useORBStrategy";
 import { HFTResult } from "./useHFTScalper";
 import { OBIResult } from "./useOBIScalper";
 import { GridResult } from "./useGridStrategy";
-import { BinanceCandle, BinanceTicker, BinanceOrderBook } from "./useBinanceStream";
+import { BinanceCandle, BinanceTicker, BinanceOrderBook } from "./useBingXStream";
 import { ServerStatus } from "./useServerAgent";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

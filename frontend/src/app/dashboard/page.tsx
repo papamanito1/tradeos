@@ -13,8 +13,8 @@ import { Overview } from "@/types";
 import { formatUSD, formatPct, pnlColor, cn } from "@/lib/utils";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import {
-  useBinanceStream, BinanceCandle, BinanceTicker, BinanceOrderBook,
-} from "@/hooks/useBinanceStream";
+  useBingXStream, seedBingXCandles, BinanceCandle, BinanceTicker, BinanceOrderBook,
+} from "@/hooks/useBingXStream";
 import { useStrategyEngine, type StrategyResult } from "@/hooks/useStrategyEngine";
 import { useORBStrategy, type ORBResult } from "@/hooks/useORBStrategy";
 import { useHFTScalper, type HFTResult } from "@/hooks/useHFTScalper";
@@ -1397,7 +1397,7 @@ function CommandBar({
           : <span className="flex items-center gap-1.5 text-[8px] text-neutral-600">Agent offline</span>}
         <div className="h-5 w-px bg-neutral-800 hidden sm:block" />
         {streamConnected
-          ? <span className="flex items-center gap-1.5 text-[8px] text-green-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />Binance LIVE</span>
+          ? <span className="flex items-center gap-1.5 text-[8px] text-green-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />BingX LIVE</span>
           : <span className="flex items-center gap-1.5 text-[8px] text-neutral-600"><WifiOff size={9} />Connecting</span>}
         <div className="h-5 w-px bg-neutral-800 hidden sm:block" />
         <button
@@ -1880,46 +1880,17 @@ export default function OverviewPage() {
   }, [authFetch]);
 
   const fetchChartCandles = useCallback(async () => {
-    // 1) Try backend (Bybit-backed)
+    // Primary: BingX perpetual swap klines
+    const candles = await seedBingXCandles("15m", 120);
+    if (candles.length > 0) {
+      setChartCandles(candles);
+      return;
+    }
+    // Fallback: try backend
     const d = await authFetch("/api/market/candles/BTC%2FUSDT?timeframe=15m&limit=120");
     if (Array.isArray(d) && d.length > 0) {
       setChartCandles(d.map((c: { timestamp: string; open: number; high: number; low: number; close: number; volume: number }) => ({ ...c, is_closed: true })));
-      return;
     }
-    // 2) Fallback: Binance public REST (no auth, no key required)
-    try {
-      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=120");
-      if (r.ok) {
-        const raw: unknown[][] = await r.json();
-        setChartCandles(raw.map(k => ({
-          timestamp:  new Date(k[0] as number).toISOString(),
-          open:       parseFloat(k[1] as string),
-          high:       parseFloat(k[2] as string),
-          low:        parseFloat(k[3] as string),
-          close:      parseFloat(k[4] as string),
-          volume:     parseFloat(k[5] as string),
-          is_closed:  true,
-        })));
-        return;
-      }
-    } catch { /* ignore */ }
-    // 3) Last resort: try Bybit directly
-    try {
-      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=120");
-      if (r.ok) {
-        const json = await r.json();
-        const list: string[][] = json?.result?.list ?? [];
-        setChartCandles([...list].reverse().map(k => ({
-          timestamp: new Date(parseInt(k[0])).toISOString(),
-          open:      parseFloat(k[1]),
-          high:      parseFloat(k[2]),
-          low:       parseFloat(k[3]),
-          close:     parseFloat(k[4]),
-          volume:    parseFloat(k[5]),
-          is_closed: true,
-        })));
-      }
-    } catch { /* ignore */ }
   }, [authFetch]);
 
   const fetchSignals = useCallback(async () => {
@@ -1927,35 +1898,10 @@ export default function OverviewPage() {
     if (d) setSignals(d);
   }, [authFetch]);
 
-  // Seed 1m candles for ORB + Master Agent
+  // Seed 1m candles from BingX for ORB + Master Agent
   const seed1mCandles = useCallback(async () => {
-    try {
-      // 300 bars so ORB-30 always has its full 4-hour session history
-      const r = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=300");
-      if (r.ok) {
-        const raw: unknown[][] = await r.json();
-        setCandles1m(raw.map(k => ({
-          timestamp: new Date(k[0] as number).toISOString(),
-          open:  parseFloat(k[1] as string), high:  parseFloat(k[2] as string),
-          low:   parseFloat(k[3] as string), close: parseFloat(k[4] as string),
-          volume:parseFloat(k[5] as string), is_closed: true,
-        })));
-        return;
-      }
-    } catch { /* fall through */ }
-    try {
-      const r = await fetch("https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=300");
-      if (r.ok) {
-        const json = await r.json();
-        const list: string[][] = json?.result?.list ?? [];
-        setCandles1m([...list].reverse().map(k => ({
-          timestamp: new Date(parseInt(k[0])).toISOString(),
-          open: parseFloat(k[1]), high: parseFloat(k[2]),
-          low:  parseFloat(k[3]), close: parseFloat(k[4]),
-          volume: parseFloat(k[5]), is_closed: true,
-        })));
-      }
-    } catch { /* ignore */ }
+    const candles = await seedBingXCandles("1m", 300);
+    if (candles.length > 0) setCandles1m(candles);
   }, []);
 
   useEffect(() => {
@@ -1967,8 +1913,8 @@ export default function OverviewPage() {
     return () => [i1, i2, i3, i5].forEach(clearInterval);
   }, [fetchData, fetchActivity, fetchChartCandles, fetchSignals, seed1mCandles]);
 
-  // ── Direct Binance stream (BTC only) ─────────────────────────────────────
-  useBinanceStream({
+  // ── BingX stream (BTC only) ──────────────────────────────────────────────
+  useBingXStream({
     symbols: ["BTC/USDT"],
     timeframe: "15m",
     onTicker: useCallback((t: BinanceTicker) => {
@@ -1978,7 +1924,6 @@ export default function OverviewPage() {
       if (sym !== "BTC/USDT") return;
       setLiveCandle(candle);
       setChartCandles(prev => {
-        // Seed the chart from WebSocket if REST fetch produced nothing
         if (!prev.length) return [{ ...candle, is_closed: false }];
         const lastMs = new Date(prev[prev.length - 1].timestamp).getTime();
         const curMs  = new Date(candle.timestamp).getTime();
@@ -1992,8 +1937,8 @@ export default function OverviewPage() {
     }, []),
   });
 
-  // ── 1m stream for ORB + Master Agent — keep 299 bars so ORB-30 always has its window ──
-  useBinanceStream({
+  // ── 1m stream from BingX for ORB + Master Agent — keep 299 bars ───────
+  useBingXStream({
     symbols: ["BTC/USDT"],
     timeframe: "1m",
     onCandle: useCallback((_sym: string, c: BinanceCandle) => {

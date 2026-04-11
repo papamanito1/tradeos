@@ -13,7 +13,7 @@
  */
 
 import { useMemo } from "react";
-import { BinanceCandle, BinanceOrderBook } from "./useBinanceStream";
+import { BinanceCandle, BinanceOrderBook } from "./useBingXStream";
 import { StrategyResult, StrategySignal } from "./useStrategyEngine";
 
 // ─── Parameters ──────────────────────────────────────────────────────────────
