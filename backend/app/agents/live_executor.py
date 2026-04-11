@@ -514,6 +514,7 @@ class LiveExecutor:
     def status(self) -> dict:
         total_cap = self._cached_balance.get("total", 0)
         return {
+            "connected":         True,
             "halted":            self._halted,
             "daily_pnl":         round(self._daily_pnl, 2),
             "daily_loss_limit":  self.daily_loss_limit,
