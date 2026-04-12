@@ -7,6 +7,7 @@ require a valid JWT.
 """
 from __future__ import annotations
 
+import os
 import random
 import time
 from fastapi import APIRouter, Depends
@@ -159,7 +160,6 @@ async def test_post(_: dict = Depends(get_current_user)):
 @router.get("/diagnose")
 async def diagnose():
     """Returns detailed status without posting anything — use this to debug."""
-    import os
     from app.agents import x_publisher as xp
     pub = _publisher()
     auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
@@ -272,7 +272,6 @@ def _check_poster_secret(secret: str) -> None:
 @router.get("/creds")
 async def get_creds(secret: str = ""):
     _check_poster_secret(secret)
-    import os
     auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
     ct0        = os.environ.get("X_CT0", "").strip()
     if not auth_token or not ct0:
