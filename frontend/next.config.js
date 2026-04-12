@@ -8,7 +8,7 @@ const nextConfig = {
     NEXT_PUBLIC_WS_URL:  process.env.NEXT_PUBLIC_WS_URL  || "wss://tradeos-production-8f21.up.railway.app",
   },
 
-  generateBuildId: async () => `build-${Date.now()}`,
+  generateBuildId: async () => `v2-build-${Date.now()}`,
 
   headers: async () => [
     {
