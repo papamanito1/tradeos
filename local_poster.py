@@ -1,21 +1,24 @@
 """
-Tradeous Local X Poster — posts tweets from YOUR residential IP using curl_cffi.
-No Playwright, no browser needed.
+Tradeous Local X Poster — posts tweets from YOUR residential IP.
+
+Tries Playwright (real Chromium browser) first, then curl_cffi GraphQL fallback.
+The browser method bypasses X's anti-bot detection (error 226).
 
 HOW TO USE:
   1. Run this script:  python local_poster.py
-  2. Leave it running — it posts every 25 seconds automatically.
-  3. Dashboard "Post Now" buttons will also route through here instantly.
+  2. Leave it running — it polls Railway every 25 seconds.
+  3. Dashboard "Post Now" buttons also route through here.
 
 HOW IT WORKS:
-  1. Fetches X auth cookies from Railway (X_AUTH_TOKEN / X_CT0 env vars)
+  1. Fetches X auth cookies from Railway (/api/x-agent/creds)
   2. Polls Railway /api/x-agent/next-post for scheduled tweets
-  3. Posts directly to X using curl_cffi (TLS fingerprint impersonation)
+  3. Posts via Playwright browser (primary) or curl_cffi GraphQL (fallback)
   4. Runs an HTTP server on :4242 for instant dashboard posts
+  5. Confirms successful posts back to Railway (/api/x-agent/confirm-post)
 
 IF COOKIES ARE EXPIRED:
   Run: python grab_cookies_and_tweet.py
-  Then update X_AUTH_TOKEN and X_CT0 in Railway → Variables tab.
+  Then update X_AUTH_TOKEN and X_CT0 in Railway Variables tab.
 """
 import asyncio
 import json
@@ -37,7 +40,12 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 RAILWAY_URL   = os.environ.get("RAILWAY_URL", "https://tradeos-production-8f21.up.railway.app").rstrip("/")
-POSTER_SECRET = os.environ.get("POSTER_SECRET", "tradeos-local-2024")
+POSTER_SECRET = os.environ.get("POSTER_SECRET", "")
+if not POSTER_SECRET:
+    print("WARNING: POSTER_SECRET env var not set. Set it to match Railway's POSTER_SECRET.")
+    print("  Example: set POSTER_SECRET=your-secret-here")
+    print("  Using fallback for now: tradeos-local-2024")
+    POSTER_SECRET = "tradeos-local-2024"
 POLL_INTERVAL = 25      # seconds between queue polls
 LOCAL_PORT    = 4242
 CREDS_REFRESH_INTERVAL = 3600   # re-fetch cookies from Railway every hour
@@ -226,8 +234,27 @@ async def _post_playwright(text: str) -> str:
                 await post_btn.click()
                 await page.wait_for_timeout(4000)
 
-                log.info(f"[OK] Playwright browser posted — {text[:60]}{'...' if len(text) > 60 else ''}")
-                return "playwright_ok"
+                # Try to extract the real tweet ID from the URL after posting
+                tweet_id = ""
+                try:
+                    current_url = page.url
+                    import re
+                    m = re.search(r"/status/(\d+)", current_url)
+                    if m:
+                        tweet_id = m.group(1)
+                    else:
+                        # Check for notification or redirect containing the tweet ID
+                        for entry in (await ctx.cookies("https://x.com")):
+                            pass  # cookies won't help, but URL might change
+                except Exception:
+                    pass
+
+                if tweet_id:
+                    log.info(f"[OK] Playwright posted (id={tweet_id}) — {text[:60]}{'...' if len(text) > 60 else ''}")
+                else:
+                    tweet_id = f"pw_{int(time.time())}"
+                    log.info(f"[OK] Playwright posted (no id captured) — {text[:60]}{'...' if len(text) > 60 else ''}")
+                return tweet_id
             except Exception as e:
                 try:
                     await page.screenshot(path="poster_error.png")

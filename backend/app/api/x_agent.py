@@ -16,7 +16,6 @@ from app.core.security import get_current_user
 router = APIRouter(prefix="/api/x-agent", tags=["x-agent"])
 
 _tweet_queue: list[dict] = []
-_posted_ids:  set[str]   = set()
 
 
 def _publisher():
@@ -261,12 +260,11 @@ async def fire_all(_: dict = Depends(get_current_user)):
 
 # -- Local poster queue -------------------------------------------------------
 
-_DEFAULT_POSTER_SECRET = "tradeos-local-2024"
-
 def _check_poster_secret(secret: str) -> None:
-    import os
     from fastapi import HTTPException
-    expected = os.environ.get("POSTER_SECRET", _DEFAULT_POSTER_SECRET)
+    expected = os.environ.get("POSTER_SECRET", "").strip()
+    if not expected:
+        raise HTTPException(status_code=500, detail="POSTER_SECRET env var not configured on server")
     if not secret or secret != expected:
         raise HTTPException(status_code=403, detail="Invalid poster secret")
 
@@ -342,13 +340,14 @@ class ConfirmRequest(BaseModel):
 
 @router.post("/confirm-post")
 async def confirm_post(req: ConfirmRequest, secret: str = ""):
-    """Called by local poster after successfully posting -- updates cooldowns."""
+    """Called by local poster after successfully posting -- updates cooldowns + budget."""
     _check_poster_secret(secret)
     pub = _publisher()
     if pub:
         key = req.post_type.replace("-", "_")
-        if key in pub._last:
-            pub._last[key] = time.time()
+        pub._touch(key)
+        pub._increment_daily()
+        pub.memory.record_post(key, f"local_poster:{req.post_type}")
         pub._recent_posts.append({
             "id": req.tweet_id or req.id,
             "type": req.post_type,

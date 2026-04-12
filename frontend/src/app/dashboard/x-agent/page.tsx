@@ -62,6 +62,7 @@ interface Status {
   last_contrarian: number;
   last_psychology: number;
   last_poll: number;
+  last_trade_breakdown?: number;
   last_trending_hook?: number;
   last_viral_commentary?: number;
   last_bold_prediction?: number;
@@ -346,7 +347,7 @@ export default function XAgentPage() {
     {
       icon: "◈", label: "Trade Breakdown",
       description: "Technical thread explaining the algo's decision logic",
-      nextPost: nextIn(status?.last_result || 0, BREAKDOWN_CD),
+      nextPost: nextIn(status?.last_trade_breakdown || 0, BREAKDOWN_CD),
       endpoint: "/api/x-agent/trigger/breakdown",
     },
   ];

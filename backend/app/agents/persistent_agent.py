@@ -890,14 +890,11 @@ class PersistentAgent:
         if not self.x_publisher.enabled:
             return
 
-        # Wait for market data to initialise before first post
+        # Wait for market data to initialise before first content cycle
         await asyncio.sleep(30)
-
-        # Single intro post on startup — then wait a random 2–5 min before anything else
-        self.x_publisher.post_intro()
         await asyncio.sleep(random.uniform(120, 300))
 
-        last_day_posted  = -1
+        last_day_posted  = ""
         last_week_posted = -1
 
         # Content candidates (key, async_fn or sync_fn) — excluding news (handled separately)
@@ -919,7 +916,6 @@ class PersistentAgent:
                 rs = "unknown"
             return r, rs
 
-        MAX_SILENCE_SEC   = 3600   # 60 min — longer silence OK (max 5 posts/day)
 
         while self._running:
             try:
@@ -933,7 +929,8 @@ class PersistentAgent:
                     self.x_publisher.memory.set_btc_price(btc_price)
 
                 # ── Daily summary at midnight UTC ─────────────────────────────
-                if now.hour == 0 and now.day != last_day_posted:
+                today_str = now.strftime("%Y-%m-%d")
+                if now.hour == 0 and today_str != last_day_posted:
                     live_pnl = sum(t.get("pnl_usd", 0) for t in self.trades if t.get("is_live"))
                     self.x_publisher.post_daily(
                         stats=self.stats,
@@ -941,7 +938,7 @@ class PersistentAgent:
                         regime=regime,
                         live_pnl=live_pnl,
                     )
-                    last_day_posted = now.day
+                    last_day_posted = today_str
                     await asyncio.sleep(random.uniform(60, 300))
                     continue
 

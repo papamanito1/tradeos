@@ -84,9 +84,6 @@ REPLY_HOOK_COOLDOWN    = 3600      # 1 h    -- reply to viral BTC tweet
 GROK_TREND_REFRESH     = 2700      # 45 min -- background Grok trend refresh
 MAX_DAILY_POSTS        = 5
 
-# Headline dedup window
-NEWS_SEEN_TTL_HOURS = 72
-
 # -- X internal API ------------------------------------------------------------
 _X_QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
 _X_CREATE_TWEET_URL = (
@@ -545,15 +542,6 @@ class XPublisher:
         h = datetime.now(timezone.utc).hour
         return h in {13, 14, 15, 17, 18, 19, 23, 0, 1, 2}
 
-    @staticmethod
-    def _posting_cooldown(base: float) -> float:
-        h = datetime.now(timezone.utc).hour
-        if h in {3, 4, 5, 6, 7, 8}:
-            return base * 2.0
-        if XPublisher._is_peak_hour():
-            return base * 0.8
-        return base
-
     # -- Trending topics from RSS (for AI context) -----------------------------
 
     async def _get_trending_context(self) -> str:
@@ -608,6 +596,7 @@ class XPublisher:
             "last_contrarian":    self._last.get("contrarian", 0),
             "last_psychology":    self._last.get("psychology_thread", 0),
             "last_poll":          self._last.get("poll", 0),
+            "last_trade_breakdown": self._last.get("trade_breakdown", 0),
             "last_trending_hook": self._last.get("trending_hook", 0),
             "last_viral_commentary": self._last.get("viral_commentary", 0),
             "last_bold_prediction":  self._last.get("bold_prediction", 0),
@@ -649,46 +638,6 @@ class XPublisher:
             logger.info(f"[XPublisher] Queued for local poster: [{post_type}] {text[:50]}...")
         except Exception as e:
             logger.debug(f"[XPublisher] queue error: {e}")
-
-    async def _post_v1(self, text: str, post_type: str) -> bool:
-        url = "https://api.x.com/1.1/statuses/update.json"
-        headers = {
-            "authorization": f"Bearer {_X_BEARER}",
-            "x-csrf-token": self._ct0,
-            "cookie": f"auth_token={self._auth_token}; ct0={self._ct0}",
-            "content-type": "application/x-www-form-urlencoded",
-            "x-twitter-active-user": "yes",
-            "x-twitter-auth-type": "OAuth2Session",
-            "x-twitter-client-language": "en",
-            "origin": "https://x.com",
-            "referer": "https://x.com",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-        }
-        import urllib.parse
-        body = urllib.parse.urlencode({"status": text})
-        try:
-            if _CURL_AVAILABLE:
-                async with CurlSession(impersonate="edge101") as session:
-                    resp = await session.post(url, data=body, headers=headers, timeout=20)
-                status_code, resp_text = resp.status_code, resp.text
-            else:
-                r = await self._http.post(url, content=body, headers=headers)
-                status_code, resp_text = r.status_code, r.text
-
-            if status_code == 200:
-                import json as _json
-                data = _json.loads(resp_text)
-                tweet_id = str(data.get("id_str", ""))
-                self._record_success(tweet_id, text, post_type)
-                logger.info(f"[XPublisher] [{post_type}] v1.1 Posted: {text[:60]}...")
-                return True
-            self._last_error = f"v1.1 HTTP {status_code}: {resp_text[:150]}"
-            logger.warning(f"[XPublisher] v1.1 failed: {self._last_error}")
-            return False
-        except Exception as e:
-            self._last_error = f"v1.1 error: {e}"
-            logger.warning(f"[XPublisher] {self._last_error}")
-            return False
 
     async def _post_graphql(self, text: str, post_type: str) -> bool:
         headers = {
@@ -769,6 +718,7 @@ class XPublisher:
             return False
 
     def _record_success(self, tweet_id: str, text: str, post_type: str) -> None:
+        self._touch(post_type)
         self._recent_posts.append({
             "id": tweet_id,
             "type": post_type,
@@ -1021,7 +971,6 @@ class XPublisher:
                 )
 
         self._fire_async(_post())
-        self._touch("signal")
 
     async def _post_signal_explainer(
         self,
@@ -1122,7 +1071,6 @@ class XPublisher:
                 self._last_signal_tweet_id = ""
 
         self._fire_async(_post())
-        self._touch("result")
 
     # -- 3. Daily Recap --------------------------------------------------------
 
@@ -1166,7 +1114,6 @@ class XPublisher:
         text += f"\n{verdict}"
 
         self._fire(text, "daily")
-        self._touch("daily")
 
     # -- 4. Weekly Recap -------------------------------------------------------
 
@@ -1209,7 +1156,6 @@ class XPublisher:
             f"{verdict}"
         )
         self._fire(text, "weekly")
-        self._touch("weekly")
 
     # -- 5. Contrarian Take (replaces hot_take) --------------------------------
 
@@ -1255,7 +1201,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_contrarian error: {e}")
 
         self._fire_async(_gen())
-        self._touch("contrarian")
 
     # -- 6. Psychology Thread (replaces philosophy) ----------------------------
 
@@ -1310,7 +1255,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_psychology_thread error: {e}")
 
         self._fire_async(_gen())
-        self._touch("psychology_thread")
 
     # -- 7. Poll (replaces engagement) -----------------------------------------
 
@@ -1351,7 +1295,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_poll error: {e}")
 
         self._fire_async(_gen())
-        self._touch("poll")
 
     # -- 8. Trade Breakdown (replaces algo_explainer) --------------------------
 
@@ -1411,7 +1354,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_trade_breakdown error: {e}")
 
         self._fire_async(_gen())
-        self._touch("trade_breakdown")
 
     # -- Fear & Greed fetcher (kept for context, not standalone posts) ----------
 
@@ -1462,7 +1404,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_trending_hook error: {e}")
 
         self._fire_async(_gen())
-        self._touch("trending_hook")
 
     def post_viral_commentary(self) -> None:
         """Grok finds viral BTC content and generates sharp commentary."""
@@ -1489,7 +1430,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_viral_commentary error: {e}")
 
         self._fire_async(_gen())
-        self._touch("viral_commentary")
 
     def post_bold_prediction(self, macro_trend: str = "", fear_greed: int = 50) -> None:
         """Grok-powered bold BTC price prediction."""
@@ -1507,7 +1447,6 @@ class XPublisher:
                 f"Position accordingly."
             )
             self._fire(fallback, "bold_prediction")
-            self._touch("bold_prediction")
             return
 
         ctx = self._live_context
@@ -1527,7 +1466,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_bold_prediction error: {e}")
 
         self._fire_async(_gen())
-        self._touch("bold_prediction")
 
     async def refresh_grok_trends(self) -> None:
         if not self.grok or not getattr(self.grok, "enabled", False):
@@ -1561,13 +1499,12 @@ class XPublisher:
             try:
                 hook_data = await self.grok.generate_reply_hook(
                     btc_price=ctx.get("price", 0),
-                    mood_tone=self.mood.tone,
-                    recent_posts=self._recent_texts_for_ai(4),
+                    regime=ctx.get("regime", ""),
                 )
                 if not hook_data:
                     return
                 if isinstance(hook_data, dict):
-                    reply_text = hook_data.get("reply", "")
+                    reply_text = hook_data.get("suggested_reply", "") or hook_data.get("reply", "")
                     tweet_url  = hook_data.get("tweet_url", "")
                 else:
                     reply_text = str(hook_data)
@@ -1587,42 +1524,6 @@ class XPublisher:
                 logger.error(f"[XPublisher] post_reply_hook error: {e}")
 
         self._fire_async(_gen())
-        self._touch("reply_hook")
-
-    # -- Killed post types (no-ops for backward compatibility) -----------------
-
-    def post_hourly(self, *args, **kwargs) -> None:
-        pass
-
-    def post_btc_move(self, *args, **kwargs) -> None:
-        pass
-
-    def post_algo_insight(self, *args, **kwargs) -> None:
-        pass
-
-    def post_gm(self) -> None:
-        pass
-
-    def post_gn(self) -> None:
-        pass
-
-    def post_algo_explainer(self) -> None:
-        pass
-
-    async def post_news(self) -> bool:
-        return False
-
-    async def post_fear_greed(self) -> bool:
-        return False
-
-    def post_hot_take(self) -> None:
-        self.post_contrarian()
-
-    def post_philosophy(self) -> None:
-        self.post_psychology_thread()
-
-    def post_engagement(self) -> None:
-        self.post_poll()
 
     # -- Manual post (from dashboard) ------------------------------------------
 
