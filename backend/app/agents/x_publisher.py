@@ -1242,27 +1242,21 @@ class XPublisher:
                     fg_ctx = f"Fear & Greed index: {fg_data.get('value', '?')}/100 ({fg_data.get('value_classification', 'Unknown')}). "
 
                 extra = (
-                    f"Write a contrarian market take. Must reference specific data.\n"
+                    f"Write a sharp contrarian take on BTC right now.\n"
                     f"{fg_ctx}"
-                    f"Challenge a common narrative with evidence. What does the algo see that retail doesn't?\n"
-                    f"Cold, slightly savage. Call out herd behavior with data.\n"
-                    f"Example tone: 'Retail is screaming breakout on the 15m. Algo sees distribution on daily + weakening volume. Staying flat.'\n"
-                    f"Max 240 chars. No hashtags."
+                    f"Challenge what the majority believe with a specific data point or pattern.\n"
+                    f"What is the crowd getting wrong? What does the algo see that retail misses?\n"
+                    f"Cold, slightly savage. Start with the uncomfortable truth, not with the price.\n"
+                    f"Examples of the RIGHT tone:\n"
+                    f"  'The funding rate has been elevated for 72h. Longs are crowded. This is where the algo steps back.'\n"
+                    f"  'Everyone sees a double bottom. The volume behind both legs is different. That matters.'\n"
+                    f"  'Retail sentiment flipped bullish at the 200-day. Historically, that's a mean-reversion zone.'\n"
+                    f"Max 240 chars. No hashtags. Do NOT start with 'BTC at $'."
                 )
                 ai = await self._ai_generate(self._build_ai_prompt("contrarian take", extra))
                 if ai:
                     await self._send_tweet(ai, "contrarian")
-                else:
-                    ctx = self._live_context
-                    regime = ctx.get("regime", "unknown").replace("_", " ")
-                    price = self._fmt_price(ctx.get("price", 0))
-                    fallback = (
-                        f"BTC at {price}. Regime: {regime}.\n\n"
-                        f"Humans are euphoric. Algo remains disciplined.\n\n"
-                        f"3 reasons the algo is flat right now:\n"
-                        f"Volume declining. Funding elevated. No structure break."
-                    )
-                    await self._send_tweet(fallback, "contrarian")
+                # If AI fails, skip — do not post a template
             except Exception as e:
                 logger.error(f"[XPublisher] post_contrarian error: {e}")
 
@@ -1348,12 +1342,12 @@ class XPublisher:
                 )
                 ai = await self._ai_generate(self._build_ai_prompt("poll", extra))
                 fallback = (
-                    f"BTC at {price}. Regime: {regime}.\n\n"
-                    f"What would you do here?\n\n"
-                    f"A) Long -- breakout setup\n"
-                    f"B) Short -- distribution pattern\n"
-                    f"C) Flat -- no edge\n"
-                    f"D) Already positioned\n\n"
+                    f"BTC {price}. The algo is watching one thing.\n\n"
+                    f"What's your read?\n\n"
+                    f"A) Long — momentum intact\n"
+                    f"B) Short — distribution forming\n"
+                    f"C) Flat — no clear edge\n"
+                    f"D) Already in a position\n\n"
                     f"Reply below. Algo's decision in 1 hour."
                 )
                 await self._send_tweet((ai or fallback)[:280], "poll")
@@ -1504,15 +1498,7 @@ class XPublisher:
         if not self._can_post(priority=4):
             return
         if not self.grok or not getattr(self.grok, "enabled", False):
-            ctx = self._live_context
-            price = self._fmt_price(ctx.get("price", 0))
-            fallback = (
-                f"BTC at {price}.\n\n"
-                f"The model sees what the crowd doesn't.\n"
-                f"Structure over narrative. Data over emotion.\n\n"
-                f"Position accordingly."
-            )
-            self._fire(fallback, "bold_prediction")
+            return   # bold predictions require live Grok data — skip if unavailable
             return
 
         ctx = self._live_context
