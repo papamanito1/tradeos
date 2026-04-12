@@ -141,17 +141,13 @@ async def post_tweet(text: str) -> str:
         return ""
 
     async with _post_lock:
-        result = await _post_v1(text)
-        if result:
-            _post_count += 1
-            return result
-
+        # v1.1 statuses/update is dead since 2023 — go straight to GraphQL
         result = await _post_graphql(text)
         if result:
             _post_count += 1
             return result
 
-        log.warning("Both v1.1 and GraphQL failed — cookies may be expired.")
+        log.warning("GraphQL failed — cookies may be expired.")
         log.warning("Run 'python grab_cookies_and_tweet.py' to get fresh cookies,")
         log.warning("then update X_AUTH_TOKEN and X_CT0 in Railway Variables.")
         return ""
