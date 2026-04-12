@@ -54,8 +54,12 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-7s  %(message)s",
     datefmt="%H:%M:%S",
     level=logging.INFO,
+    force=True,
 )
 log = logging.getLogger("local_poster")
+# Force unbuffered output so logs appear immediately
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, "reconfigure") else None
+sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, "reconfigure") else None
 
 # ── X API constants ──────────────────────────────────────────────────────────
 
@@ -151,10 +155,15 @@ async def post_tweet(text: str) -> str:
 
     async with _post_lock:
         # 1. Playwright browser (most reliable — real browser, real TLS, no bot-detection)
-        result = await _post_playwright(text)
-        if result:
-            _post_count += 1
-            return result
+        try:
+            result = await asyncio.wait_for(_post_playwright(text), timeout=90)
+            if result:
+                _post_count += 1
+                return result
+        except asyncio.TimeoutError:
+            log.warning("Playwright timed out (90s) — falling back to GraphQL")
+        except Exception as e:
+            log.warning(f"Playwright unexpected error: {e}")
 
         # 2. GraphQL fallback (faster but may get 226 anti-bot error)
         result = await _post_graphql(text)
@@ -182,11 +191,14 @@ async def _post_playwright(text: str) -> str:
 
     try:
         async with async_playwright() as p:
+            # Use headless=True with stealth args so it works without a GUI
             browser = await p.chromium.launch(
-                headless=False,   # visible window — avoids headless detection + navigation hangs
+                headless=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
-                    "--start-maximized",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-web-security",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],
@@ -195,9 +207,9 @@ async def _post_playwright(text: str) -> str:
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
+                    "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
                 ),
-                viewport=None,   # use full window
+                viewport={"width": 1280, "height": 800},
                 locale="en-US",
             )
             await ctx.add_init_script(
