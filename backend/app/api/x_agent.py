@@ -44,15 +44,16 @@ async def get_status():
 
 async def _send_now(pub, post_type: str, text: str) -> dict:
     text = text[:280]
-    ok = await pub._send_tweet(text, post_type)
+    # queue_on_fail=False: we handle queuing here to avoid double-queuing
+    ok = await pub._send_tweet(text, post_type, queue_on_fail=False)
     if ok:
         pub._touch(post_type.replace("-", "_"))
         return {"ok": True, "queued": False, "posted": True, "text": text, "message": "Posted"}
     import uuid
     qid = str(uuid.uuid4())[:8] + f"_{post_type}"
     _tweet_queue.append({"id": qid, "type": post_type, "text": text, "ts": time.time()})
-    return {"ok": True, "queued": True, "posted": False, "text": text,
-            "id": qid, "message": "Ready -- sending via local poster"}
+    return {"ok": True, "queued": True, "posted": False, "text": text, "type": post_type,
+            "id": qid, "message": "Queued -- start local_poster.py on your PC to send"}
 
 
 def _check(pub) -> dict | None:
@@ -137,13 +138,47 @@ async def trigger_breakdown(_: dict = Depends(get_current_user)):
 async def test_post(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
-    text = f"Test post from Tradeous algo -- {int(time.time())}"
-    ok = await pub._send_tweet(text, "test")
+    text = f"Tradeous algo online -- {int(time.time())} -- ignore this test"
+    ok = await pub._send_tweet(text, "test", queue_on_fail=False)
+    from app.agents import x_publisher as xp
     return {
         "ok": ok,
-        "method_tried": "v1.1 + GraphQL",
+        "posted": ok,
+        "queued": False,
         "last_error": pub._last_error if not ok else None,
-        "curl_cffi_available": (lambda: __import__("app.agents.x_publisher", fromlist=["_CURL_AVAILABLE"])._CURL_AVAILABLE)(),
+        "curl_cffi_available": xp._CURL_AVAILABLE,
+        "cookies_set": bool(pub._auth_token and pub._ct0),
+        "auth_token_prefix": pub._auth_token[:8] + "..." if pub._auth_token else "MISSING",
+        "ct0_prefix": pub._ct0[:8] + "..." if pub._ct0 else "MISSING",
+    }
+
+
+# -- Diagnose (no test post, just checks) --------------------------------------
+
+@router.get("/diagnose")
+async def diagnose():
+    """Returns detailed status without posting anything — use this to debug."""
+    import os
+    from app.agents import x_publisher as xp
+    pub = _publisher()
+    auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
+    ct0        = os.environ.get("X_CT0", "").strip()
+    return {
+        "agent_running":        pub is not None,
+        "x_enabled":            pub.enabled if pub and hasattr(pub, "enabled") else pub._enabled if pub else False,
+        "cookies_in_env":       bool(auth_token and ct0),
+        "auth_token_prefix":    auth_token[:10] + "..." if auth_token else "MISSING",
+        "ct0_prefix":           ct0[:10] + "..." if ct0 else "MISSING",
+        "curl_cffi_available":  xp._CURL_AVAILABLE,
+        "last_error":           pub._last_error if pub else "agent not running",
+        "queue_length":         len(_tweet_queue),
+        "daily_posts":          pub._daily_posts if pub else 0,
+        "daily_budget":         xp.MAX_DAILY_POSTS,
+        "recent_posts_count":   len(pub._recent_posts) if pub else 0,
+        "hint": (
+            "Cookies missing — run grab_cookies_and_tweet.py then set X_AUTH_TOKEN+X_CT0 in Railway" if not auth_token or not ct0
+            else "Cookies set. If posting still fails, Railway IP is blocked by X — run local_poster.py on your PC."
+        ),
     }
 
 

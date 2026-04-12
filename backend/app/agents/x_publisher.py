@@ -621,18 +621,26 @@ class XPublisher:
 
     _last_error: str = ""
 
-    async def _send_tweet(self, text: str, post_type: str = "manual") -> bool:
+    async def _send_tweet(self, text: str, post_type: str = "manual", queue_on_fail: bool = True) -> bool:
         if not self._enabled:
             self._last_error = "X_AUTH_TOKEN / X_CT0 not configured"
             return False
 
         text = text[:280]
 
+        # 1. Try GraphQL (best method -- returns full tweet_id)
         ok = await self._post_graphql(text, post_type)
         if ok:
             return True
 
-        self._queue_for_local_poster(text, post_type)
+        # 2. Try v1.1 fallback (datacenter IPs often blocked here too, but worth trying)
+        ok = await self._post_v1(text, post_type)
+        if ok:
+            return True
+
+        # 3. Queue for local_poster.py running on residential IP
+        if queue_on_fail:
+            self._queue_for_local_poster(text, post_type)
         return False
 
     def _queue_for_local_poster(self, text: str, post_type: str) -> None:

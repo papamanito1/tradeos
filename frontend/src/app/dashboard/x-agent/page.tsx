@@ -70,6 +70,7 @@ interface Status {
   total_posts?: number;
   next_post_in_sec?: number;
   last_error?: string;
+  queue_length?: number;
 }
 
 const TYPE_META: Record<string, { label: string; icon: string; accent: string }> = {
@@ -298,6 +299,21 @@ export default function XAgentPage() {
     setTimeout(() => setPostResult(null), 7000);
   };
 
+  const [diagResult, setDiagResult] = useState<Record<string, unknown> | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+
+  const runDiagnose = async () => {
+    setDiagLoading(true);
+    setDiagResult(null);
+    try {
+      const r = await fetch(`${API}/api/x-agent/diagnose`);
+      setDiagResult(await r.json());
+    } catch {
+      setDiagResult({ error: "Cannot reach backend" });
+    }
+    setDiagLoading(false);
+  };
+
   const todayPosts   = status?.daily_posts ?? status?.recent_posts.filter(p => Date.now() / 1000 - p.ts < 86400).length ?? 0;
   const dailyBudget  = status?.daily_budget ?? 5;
   const totalPosts   = status?.total_posts ?? status?.recent_posts.length ?? 0;
@@ -427,6 +443,48 @@ export default function XAgentPage() {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Last error banner */}
+        {status?.last_error && (
+          <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-4 flex items-start gap-3">
+            <span className="text-red-400 text-sm shrink-0 mt-0.5">✗</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] font-semibold text-red-300 mb-0.5">Last posting error</div>
+              <code className="text-[11px] text-red-400/70 font-mono break-all">{status.last_error}</code>
+              {status.last_error.includes("IP") || status.last_error.includes("blocked") || status.last_error.includes("ghost") ? (
+                <div className="text-[11px] text-amber-400/70 mt-1.5">
+                  Railway datacenter IP is blocked by X — run <code className="bg-black/30 px-1 rounded">python local_poster.py</code> on your PC to post from a residential IP.
+                </div>
+              ) : status.last_error.includes("403") || status.last_error.includes("expired") ? (
+                <div className="text-[11px] text-amber-400/70 mt-1.5">
+                  Cookies expired — run <code className="bg-black/30 px-1 rounded">python grab_cookies_and_tweet.py</code>, then update <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> + <code className="bg-black/30 px-1 rounded">X_CT0</code> in Railway Variables.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        {/* Diagnose panel */}
+        <div className="rounded-2xl bg-white/[0.03] border border-white/[0.06] p-4 flex items-center gap-3 flex-wrap">
+          <span className="text-[11px] text-white/30">Posting not working?</span>
+          <button onClick={runDiagnose} disabled={diagLoading}
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium border border-white/10 bg-white/[0.05] hover:bg-white/[0.1] text-white/60 hover:text-white transition-all disabled:opacity-40">
+            {diagLoading ? "Checking…" : "Run Diagnose"}
+          </button>
+          {diagResult && (
+            <div className="w-full mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {Object.entries(diagResult).map(([k, v]) => (
+                <div key={k} className="rounded-lg bg-black/30 px-3 py-2">
+                  <div className="text-[9px] text-white/30 uppercase tracking-wide mb-0.5">{k.replace(/_/g, " ")}</div>
+                  <div className={`text-[11px] font-mono break-all ${
+                    v === true ? "text-green-400" : v === false ? "text-red-400" :
+                    String(v).includes("MISSING") ? "text-red-400" : "text-white/60"
+                  }`}>{String(v)}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Stats row */}
