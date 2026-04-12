@@ -10,7 +10,7 @@ Uses the xAI Grok API (api.x.ai) to:
 2. Analyze viral tweet formats — what hooks, structures and styles are working
    on X at this moment, so we can replicate the format while keeping our voice.
 
-3. Generate viral-optimised post text in @mistor style, informed by what's
+3. Generate viral-optimised post text in @Tradeous style, informed by what's
    actually working on X today — not yesterday's content bank.
 
 4. Score and prioritise trending angles so each post has a real shot at reach.
@@ -336,7 +336,7 @@ class GrokIntelligence:
         """
         Ask Grok to generate a viral-optimised tweet using:
         - Current X trend intelligence (live search)
-        - The @mistor voice and style
+        - The @Tradeous voice and style
         - Our trading context (price, regime, PnL)
         - What formats are currently getting traction
         - A specific angle to avoid generic content
@@ -383,7 +383,7 @@ class GrokIntelligence:
             f"Post type: {post_type}\n\n"
             f"Write ONE tweet that:\n"
             f"• Taps into what's trending/viral on X TODAY (use your live X search)\n"
-            f"• Sounds exactly like @mistor — short, lowercase, punchy, no hashtags\n"
+            f"• Cold, robotic, data-driven. Short sentences. Line breaks between thoughts.\n"
             f"• Has a psychological hook that makes people want to reply or RT\n"
             f"• Is BTC-only — dismisses alts/memecoins if relevant\n"
             f"• MAX 240 characters\n\n"
@@ -425,7 +425,7 @@ class GrokIntelligence:
         user_prompt = (
             f"Search X RIGHT NOW and find ONE specific topic, tweet, or narrative "
             f"that is currently going viral in the BTC/bitcoin community today.\n\n"
-            f"Then write a short, sharp @mistor-style commentary on it for @Tradeous.\n\n"
+            f"Then write a short, sharp @Tradeous-style commentary on it.\n\n"
             f"Context:\n"
             f"{'- BTC: $' + f'{btc_price:,.0f}' + chr(10) if btc_price else ''}"
             f"{'- ' + on_topic + chr(10) if on_topic else ''}"
@@ -433,7 +433,7 @@ class GrokIntelligence:
             f"{'- Avoid repeating: ' + recent_posts[:200] + chr(10) if recent_posts else ''}\n"
             f"Requirements:\n"
             f"• Based on something actually going viral on X TODAY (use live search)\n"
-            f"• @mistor style: lowercase, punchy, 1-3 lines, no hashtags, max 1 emoji\n"
+            f"• @Tradeous style: cold, robotic, data-driven, 1-3 lines, no hashtags, max 1 emoji\n"
             f"• BTC-only energy — diss alts if relevant\n"
             f"• Should make people who see it feel like they're missing out or want to reply\n"
             f"• Max 240 chars\n\n"
@@ -474,7 +474,7 @@ class GrokIntelligence:
             f"in the BTC/bitcoin space (lots of RTs, likes, replies).\n\n"
             f"Then write a short reply we can post that:\n"
             f"• Adds value or a sharp contrarian take\n"
-            f"• Sounds like @mistor — 1-2 lines, lowercase, no hashtags\n"
+            f"• @Tradeous style: cold, robotic, 1-2 lines, no hashtags\n"
             f"• Will get noticed in the replies\n\n"
             f"Context: BTC at ${btc_price:,.0f}, regime: {regime}\n\n"
             f"Return ONLY in this exact format:\n"
@@ -545,7 +545,7 @@ class GrokIntelligence:
             f"• Based on real current data from X and news (use live search)\n"
             f"• SPECIFIC — give a price level or time frame, not vague\n"
             f"• Confident and controversial enough that people reply\n"
-            f"• @mistor style: short, lowercase, 1-3 lines, no hashtags\n"
+            f"• @Tradeous style: cold, robotic, data-driven, 1-3 lines, no hashtags\n"
             f"• BTC only — no altcoin predictions\n"
             f"• Max 240 chars\n\n"
             f"Output ONLY the tweet text."
