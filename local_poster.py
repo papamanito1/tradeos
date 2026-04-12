@@ -230,9 +230,8 @@ async def _post_playwright(text: str) -> str:
                 await editor.click()
                 await page.wait_for_timeout(300)
 
-                # Paste text via clipboard — less detectable than char-by-char typing
-                await page.evaluate(f"navigator.clipboard.writeText({repr(text)})")
-                await page.keyboard.press("Control+v")
+                # Type text via keyboard (clipboard API blocked in headless)
+                await page.keyboard.type(text, delay=20)
                 await page.wait_for_timeout(1000)
 
                 # Wait for the Post button to become enabled (up to 8s)
