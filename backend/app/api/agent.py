@@ -208,6 +208,56 @@ async def live_balance(_: dict = Depends(get_current_user)):
     return {"balance": bal}
 
 
+@router.get("/live/test-connection")
+async def test_bingx_connection(_: dict = Depends(get_current_user)):
+    """Test BingX API connectivity — returns balance or detailed error message."""
+    from app.core.config import settings
+    if not settings.bingx_api_key or not settings.bingx_api_secret:
+        return {
+            "ok": False,
+            "keys_set": False,
+            "error": "BINGX_API_KEY or BINGX_API_SECRET not set in environment variables",
+        }
+    try:
+        import ccxt.async_support as ccxt
+        exchange = ccxt.bingx({
+            "apiKey":          settings.bingx_api_key,
+            "secret":          settings.bingx_api_secret,
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap", "defaultSubType": "linear"},
+        })
+        try:
+            bal = await exchange.fetch_balance({"type": "swap"})
+            usdt = bal.get("USDT", {})
+            total = float(usdt.get("total", 0))
+            free  = float(usdt.get("free", 0))
+            return {
+                "ok": True,
+                "keys_set": True,
+                "balance": {"total": total, "free": free},
+                "message": f"Connected — USDT balance ${total:.2f} (free ${free:.2f})",
+            }
+        except Exception as e:
+            err = str(e)
+            hint = ""
+            if "Invalid API-key" in err or "signature" in err.lower():
+                hint = "API key or secret is wrong — copy them again from BingX API management."
+            elif "IP" in err or "whitelist" in err.lower():
+                hint = "BingX is rejecting Railway's IP. Disable IP whitelist in BingX API settings."
+            elif "permission" in err.lower():
+                hint = "API key lacks Futures trading permission. Enable it in BingX API management."
+            return {
+                "ok": False,
+                "keys_set": True,
+                "error": err[:300],
+                "hint": hint or "Check the error message above.",
+            }
+        finally:
+            await exchange.close()
+    except Exception as e:
+        return {"ok": False, "keys_set": True, "error": str(e)}
+
+
 @router.post("/live/reset-circuit-breaker")
 async def reset_circuit_breaker(_: dict = Depends(get_current_user)):
     """Manually reset the daily loss circuit breaker (use with caution)."""

@@ -485,6 +485,26 @@ function BingXPanel({
   executor: LiveExecutorStatus | null;
   onResetCircuit: () => void;
 }) {
+  const [testing, setTesting]     = useState(false);
+  const [testResult, setTestResult] = useState<{ok: boolean; message?: string; error?: string; hint?: string} | null>(null);
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("tradeos_token") : null;
+      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/agent/live/test-connection`, {
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      const data = await r.json();
+      setTestResult(data);
+    } catch (e) {
+      setTestResult({ ok: false, error: "Network error — Railway may be down" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   if (!executor) {
     return (
       <div className="card p-5 flex flex-col gap-3">
@@ -493,8 +513,26 @@ function BingXPanel({
           <span className="text-[13px] font-semibold text-white">BingX Live Executor</span>
         </div>
         <div className="flex items-center gap-2 py-4 text-neutral-600 text-[12px]">
-          <WifiOff size={13} /> Not available in paper mode
+          <WifiOff size={13} /> Not available — set mode to Live to activate
         </div>
+        <button onClick={runTest} disabled={testing}
+          className="w-full py-2 rounded-lg text-[10px] font-bold border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50">
+          {testing ? <><Loader2 size={10} className="animate-spin" /> Testing...</> : <><Wifi size={10} /> Test BingX Connection</>}
+        </button>
+        {testResult && (
+          <div className={`p-2.5 rounded-lg border text-[10px] space-y-1 ${testResult.ok ? "border-green-500/30 bg-green-500/8 text-green-400" : "border-red-500/30 bg-red-500/8 text-red-400"}`}>
+            <div className="font-bold flex items-center gap-1">
+              {testResult.ok ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
+              {testResult.ok ? testResult.message : "Connection failed"}
+            </div>
+            {!testResult.ok && testResult.error && (
+              <div className="text-[9px] opacity-80 font-mono break-all">{testResult.error}</div>
+            )}
+            {!testResult.ok && testResult.hint && (
+              <div className="text-[9px] text-amber-400 mt-1">{testResult.hint}</div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -544,6 +582,28 @@ function BingXPanel({
           Last error: {executor.last_error}
         </div>
       )}
+
+      {/* Connection test */}
+      <div className="space-y-2">
+        <button onClick={runTest} disabled={testing}
+          className="w-full py-2 rounded-lg text-[10px] font-bold border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50">
+          {testing ? <><Loader2 size={10} className="animate-spin" /> Testing BingX connection...</> : <><Wifi size={10} /> Test BingX Connection</>}
+        </button>
+        {testResult && (
+          <div className={`p-2.5 rounded-lg border text-[10px] space-y-1 ${testResult.ok ? "border-green-500/30 bg-green-500/8 text-green-400" : "border-red-500/30 bg-red-500/8 text-red-400"}`}>
+            <div className="font-bold flex items-center gap-1">
+              {testResult.ok ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
+              {testResult.ok ? testResult.message : "Connection failed"}
+            </div>
+            {!testResult.ok && testResult.error && (
+              <div className="text-[9px] opacity-80 font-mono break-all">{testResult.error}</div>
+            )}
+            {!testResult.ok && testResult.hint && (
+              <div className="text-[9px] text-amber-400 mt-1">{testResult.hint}</div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Account */}
       <div className="grid grid-cols-2 gap-2">
