@@ -358,19 +358,8 @@ export default function XAgentPage() {
     <div className="min-h-screen text-white">
       <div className="max-w-5xl mx-auto px-1 py-2 space-y-8">
 
-        {/* Official API badge — no PC needed */}
-        {status?.posting_method === "official_api" && (
-          <div className="rounded-2xl border p-3 flex items-center gap-3"
-            style={{ background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.15)" }}>
-            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
-            <span className="text-[12px] text-green-400 font-medium">
-              Official X API active — posts from Railway directly, no PC required
-            </span>
-          </div>
-        )}
-
-        {/* local_poster.py status — only relevant for cookie method */}
-        {status?.posting_method !== "official_api" && localOnline === false && (
+        {/* local_poster.py status */}
+        {localOnline === false && (
           <div className="rounded-2xl border p-4 flex items-start gap-4"
             style={{ background: "rgba(251,191,36,0.06)", borderColor: "rgba(251,191,36,0.2)" }}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5"
@@ -394,7 +383,7 @@ export default function XAgentPage() {
             </div>
           </div>
         )}
-        {status?.posting_method !== "official_api" && localOnline === true && (
+        {localOnline === true && (
           <div className="rounded-2xl border p-3 flex items-center gap-3"
             style={{ background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.15)" }}>
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />

@@ -1,24 +1,21 @@
 """
 Tradeous Local X Poster — posts tweets from YOUR residential IP.
 
-Tries Playwright (real Chromium browser) first, then curl_cffi GraphQL fallback.
-The browser method bypasses X's anti-bot detection (error 226).
+Railway's datacenter IP is blocked by X (226 error). This script runs
+on your PC and posts via headless Playwright or curl_cffi GraphQL.
 
 HOW TO USE:
   1. Run this script:  python local_poster.py
   2. Leave it running — it polls Railway every 25 seconds.
   3. Dashboard "Post Now" buttons also route through here.
+  4. Only ONE instance can run at a time (port 4242 lock).
 
 HOW IT WORKS:
   1. Fetches X auth cookies from Railway (/api/x-agent/creds)
   2. Polls Railway /api/x-agent/next-post for scheduled tweets
-  3. Posts via Playwright browser (primary) or curl_cffi GraphQL (fallback)
+  3. Posts via headless Playwright (primary) or curl_cffi GraphQL (fallback)
   4. Runs an HTTP server on :4242 for instant dashboard posts
   5. Confirms successful posts back to Railway (/api/x-agent/confirm-post)
-
-IF COOKIES ARE EXPIRED:
-  Run: python grab_cookies_and_tweet.py
-  Then update X_AUTH_TOKEN and X_CT0 in Railway Variables tab.
 """
 import asyncio
 import json
@@ -191,12 +188,10 @@ async def _post_playwright(text: str) -> str:
 
     try:
         async with async_playwright() as p:
-            # Headed browser — X disables the Post button in headless mode
             browser = await p.chromium.launch(
-                headless=False,
+                headless=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
-                    "--start-maximized",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],
@@ -526,7 +521,21 @@ async def run():
         await asyncio.sleep(POLL_INTERVAL)
 
 
+def _check_single_instance():
+    """Prevent multiple copies from running at the same time."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", LOCAL_PORT))
+        s.close()
+    except OSError:
+        print(f"\nERROR: local_poster.py is already running (port {LOCAL_PORT} in use).")
+        print("Only one instance can run at a time. Kill the other one first.")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
+    _check_single_instance()
     try:
         asyncio.run(run())
     except KeyboardInterrupt:

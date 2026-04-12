@@ -259,21 +259,10 @@ class XPublisher:
         access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
         access_secret = (os.environ.get("X_ACCESS_SECRET", "") or os.environ.get("X_ACCESS_TOKEN_SECRET", "")).strip()
 
-        if _TWEEPY_AVAILABLE and api_key and api_secret and access_token and access_secret:
-            self._tweepy_client = _tweepy.Client(  # type: ignore[union-attr]
-                consumer_key=api_key,
-                consumer_secret=api_secret,
-                access_token=access_token,
-                access_token_secret=access_secret,
-                wait_on_rate_limit=False,
-            )
-            self._enabled = True
-            self._posting_method = "official_api"
-            logger.info("[XPublisher] Official X API v2 (tweepy) ready -- no IP restrictions")
-        elif self._auth_token and self._ct0:
+        if self._auth_token and self._ct0:
             self._enabled = True
             self._posting_method = "cookie_graphql"
-            logger.info("[XPublisher] Cookie auth ready -- X posting enabled (Railway IP may be blocked)")
+            logger.info("[XPublisher] Cookie auth ready -- posts queue for local_poster.py if Railway IP is blocked")
         else:
             self._posting_method = "none"
             logger.info("[XPublisher] No X credentials -- posting disabled")
@@ -653,27 +642,16 @@ class XPublisher:
 
         text = text[:280]
 
-        # 1. Official API v2 (tweepy) -- works from any IP, no cookies required
-        if self._tweepy_client:
-            ok = await self._post_twitter_api(text, post_type)
+        # 1. Cookie GraphQL (from Railway, may get 226 but worth trying)
+        if self._auth_token and self._ct0:
+            ok = await self._post_graphql(text, post_type)
             if ok:
                 return True
-            # Rate-limited or account error -- do NOT fall through to cookies,
-            # they'll fail too. Queue instead.
-            if queue_on_fail:
-                self._queue_for_local_poster(text, post_type)
-                self._last_error += " | Queued for retry"
-            return False
 
-        # 2. Cookie GraphQL (Railway datacenter IP may be blocked by X)
-        ok = await self._post_graphql(text, post_type)
-        if ok:
-            return True
-
-        # GraphQL failed -- queue for local_poster.py on residential IP
+        # 2. GraphQL failed or no cookies -- queue for local_poster.py on residential IP
         if queue_on_fail:
             self._queue_for_local_poster(text, post_type)
-            self._last_error += " | Queued for local_poster.py — run it on your PC to send"
+            self._last_error += " | Queued for local_poster.py"
         return False
 
     async def _post_twitter_api(self, text: str, post_type: str) -> bool:
