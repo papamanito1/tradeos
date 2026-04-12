@@ -27,6 +27,14 @@ import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
+# Force UTF-8 output so special chars don't crash on Windows cp1252 console
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 RAILWAY_URL   = os.environ.get("RAILWAY_URL", "https://tradeos-production-8f21.up.railway.app").rstrip("/")
@@ -101,16 +109,13 @@ async def fetch_creds(force: bool = False) -> bool:
         err = data.get("error", "Unknown error")
         log.error(f"Railway /creds error: {err}")
         if "X_AUTH_TOKEN" in err:
-            log.error("╔══════════════════════════════════════════════════════╗")
-            log.error("║  X_AUTH_TOKEN and X_CT0 are not set in Railway!     ║")
-            log.error("║                                                      ║")
-            log.error("║  1. Run: python grab_cookies_and_tweet.py            ║")
-            log.error("║     (logs into x.com, saves cookies)                ║")
-            log.error("║  2. Open: C:/tmp/x_cookie_values.txt                ║")
-            log.error("║  3. Go to Railway → your backend → Variables         ║")
-            log.error("║  4. Add  X_AUTH_TOKEN  and  X_CT0  from that file   ║")
-            log.error("║  5. Redeploy + restart local_poster.py              ║")
-            log.error("╚══════════════════════════════════════════════════════╝")
+            log.error("*** X_AUTH_TOKEN and X_CT0 are not set in Railway! ***")
+            log.error("  1. Run: python grab_cookies_and_tweet.py")
+            log.error("     (logs into x.com, saves cookies)")
+            log.error("  2. Open: C:/tmp/x_cookie_values.txt")
+            log.error("  3. Go to Railway > your backend > Variables")
+            log.error("  4. Add X_AUTH_TOKEN and X_CT0 from that file")
+            log.error("  5. Redeploy + restart local_poster.py")
         return False
 
     new_token = data.get("a", "").strip()
@@ -181,7 +186,7 @@ async def _post_v1(text: str) -> str:
         if r.status_code == 200:
             data      = r.json()
             tweet_id  = str(data.get("id_str", ""))
-            log.info(f"✅ v1.1 posted — {text[:60]}{'…' if len(text)>60 else ''}")
+            log.info(f"[OK] v1.1 posted -- {text[:60]}{'...' if len(text)>60 else ''}")
             return tweet_id or "posted"
         elif r.status_code == 403:
             log.warning("v1.1 HTTP 403 — cookies expired or account suspended")
@@ -245,7 +250,7 @@ async def _post_graphql(text: str) -> str:
                     .get("result", {})
                     .get("rest_id", "")
             )
-            log.info(f"✅ GraphQL posted — {text[:60]}{'…' if len(text)>60 else ''}")
+            log.info(f"[OK] GraphQL posted -- {text[:60]}{'...' if len(text)>60 else ''}")
             return tweet_id or "posted"
         elif r.status_code == 403:
             log.warning("GraphQL HTTP 403 — cookies expired or CSRF token mismatch")
@@ -355,9 +360,9 @@ async def run():
     print()
     print("=" * 58)
     print("  Tradeous Local X Poster")
-    print(f"  Railway  → {RAILWAY_URL}")
-    print(f"  Local API→ http://localhost:{LOCAL_PORT}/post")
-    print(f"  Secret   → {'*' * len(POSTER_SECRET)}")
+    print(f"  Railway  : {RAILWAY_URL}")
+    print(f"  Local API: http://localhost:{LOCAL_PORT}/post")
+    print(f"  Secret   : {'*' * len(POSTER_SECRET)}")
     print("=" * 58)
     print()
 
@@ -372,7 +377,7 @@ async def run():
         log.warning("Starting in degraded mode — will retry cookies on next cycle.")
     else:
         # Quick connectivity test (no actual post)
-        log.info("Cookies loaded. Ready to post from residential IP ✅")
+        log.info("Cookies loaded. Ready to post from residential IP [OK]")
         log.info(f"Polling every {POLL_INTERVAL}s. Press Ctrl+C to stop.")
 
     print()
@@ -388,7 +393,7 @@ async def run():
             # 1. Process direct posts from dashboard (:4242/post)
             while _incoming_queue:
                 text = _incoming_queue.pop(0)
-                log.info(f"Dashboard post: {text[:60]}…")
+                log.info(f"Dashboard post: {text[:60]}...")
                 tweet_id = await post_tweet(text)
                 if tweet_id:
                     await confirm_to_railway("dashboard", "manual", tweet_id)
@@ -402,7 +407,7 @@ async def run():
                 text      = item.get("text", "")
                 post_type = item.get("type", "auto")
                 post_id   = item.get("id", "")
-                log.info(f"[{post_type.upper()}] {text[:70]}{'…' if len(text)>70 else ''}")
+                log.info(f"[{post_type.upper()}] {text[:70]}{'...' if len(text)>70 else ''}")
                 tweet_id  = await post_tweet(text)
                 if tweet_id:
                     await confirm_to_railway(post_id, post_type, tweet_id)
@@ -412,7 +417,7 @@ async def run():
 
             # Re-fetch cookies if posting repeatedly fails
             if consecutive_failures >= 3:
-                log.warning(f"{consecutive_failures} consecutive failures — refreshing cookies…")
+                log.warning(f"{consecutive_failures} consecutive failures - refreshing cookies...")
                 await fetch_creds(force=True)
                 consecutive_failures = 0
 
