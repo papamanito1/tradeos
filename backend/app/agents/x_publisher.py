@@ -693,8 +693,15 @@ class XPublisher:
             logger.info(f"[XPublisher] [{post_type}] Official API posted (id={tweet_id}): {text[:60]}...")
             return True
         except Exception as e:
-            err = str(e)
-            self._last_error = f"Official API error: {err[:180]}"
+            detail = ""
+            if hasattr(e, "api_messages") and e.api_messages:
+                detail = f" | {e.api_messages}"
+            elif hasattr(e, "response") and e.response is not None:
+                try:
+                    detail = f" | {e.response.text[:200]}"
+                except Exception:
+                    pass
+            self._last_error = f"Official API error: {e}{detail}"[:240]
             logger.warning(f"[XPublisher] {self._last_error}")
             return False
 
