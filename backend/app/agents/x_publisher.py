@@ -257,7 +257,7 @@ class XPublisher:
         api_key      = os.environ.get("X_API_KEY", "").strip()
         api_secret   = os.environ.get("X_API_SECRET", "").strip()
         access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
-        access_secret = os.environ.get("X_ACCESS_SECRET", "").strip()
+        access_secret = (os.environ.get("X_ACCESS_SECRET", "") or os.environ.get("X_ACCESS_TOKEN_SECRET", "")).strip()
 
         if _TWEEPY_AVAILABLE and api_key and api_secret and access_token and access_secret:
             self._tweepy_client = _tweepy.Client(  # type: ignore[union-attr]

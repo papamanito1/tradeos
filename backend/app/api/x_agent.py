@@ -167,7 +167,7 @@ async def diagnose():
     api_key      = os.environ.get("X_API_KEY", "").strip()
     api_secret   = os.environ.get("X_API_SECRET", "").strip()
     access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
-    access_secret = os.environ.get("X_ACCESS_SECRET", "").strip()
+    access_secret = (os.environ.get("X_ACCESS_SECRET", "") or os.environ.get("X_ACCESS_TOKEN_SECRET", "")).strip()
     official_api_configured = bool(api_key and api_secret and access_token and access_secret)
     posting_method = pub._posting_method if pub else "none"
 
@@ -287,7 +287,7 @@ async def test_api(secret: str = ""):
     api_key      = os.environ.get("X_API_KEY", "").strip()
     api_secret   = os.environ.get("X_API_SECRET", "").strip()
     access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
-    access_secret = os.environ.get("X_ACCESS_SECRET", "").strip()
+    access_secret = (os.environ.get("X_ACCESS_SECRET", "") or os.environ.get("X_ACCESS_TOKEN_SECRET", "")).strip()
 
     if not (api_key and api_secret and access_token and access_secret):
         return {"ok": False, "error": "Missing API keys", "missing": [
