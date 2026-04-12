@@ -190,25 +190,83 @@ class LiveExecutor:
 
     async def _place_sl_tp_orders(self, direction: str, btc_qty: float,
                                    sl_price: float, tp_price: float,
-                                   pos_side: str) -> None:
-        """Place SL and TP as separate stop-market orders after position is opened."""
+                                   pos_side: str) -> tuple[str, str]:
+        """
+        Place SL and TP as separate stop-market orders after position is opened.
+        Returns (sl_order_id, tp_order_id).
+        """
         close_side = "sell" if direction == "long" else "buy"
-        for label, price, order_type in [("SL", sl_price, "stop"), ("TP", tp_price, "take_profit")]:
+        sl_oid = ""
+        tp_oid = ""
+
+        for label, price, is_sl in [("SL", sl_price, True), ("TP", tp_price, False)]:
             if price <= 0:
                 continue
-            try:
-                params: dict = {"positionSide": pos_side, "reduceOnly": True}
-                if order_type == "stop":
-                    params["stopPrice"] = round(price, 2)
-                    await self._exchange.create_order(
-                        SYMBOL, "stop_market", close_side, btc_qty, None, params=params)
-                else:
-                    params["stopPrice"] = round(price, 2)
-                    await self._exchange.create_order(
-                        SYMBOL, "take_profit_market", close_side, btc_qty, None, params=params)
-                logger.info(f"[LiveExecutor] {label} order placed at ${price:.2f}")
-            except Exception as e:
-                logger.warning(f"[LiveExecutor] {label} order failed (non-fatal): {e}")
+            # Try multiple order type formats — BingX CCXT naming varies by version
+            attempts = [
+                {"type": "STOP_MARKET",       "stopPrice": round(price, 2)},
+                {"type": "TAKE_PROFIT_MARKET", "stopPrice": round(price, 2)},
+                {"type": "TRIGGER_MARKET",     "stopPrice": round(price, 2)},
+            ] if not is_sl else [
+                {"type": "STOP_MARKET",       "stopPrice": round(price, 2)},
+                {"type": "TRIGGER_MARKET",     "stopPrice": round(price, 2)},
+            ]
+
+            if not is_sl:
+                attempts = [
+                    {"type": "TAKE_PROFIT_MARKET", "stopPrice": round(price, 2)},
+                    {"type": "STOP_MARKET",        "stopPrice": round(price, 2)},
+                    {"type": "TRIGGER_MARKET",     "stopPrice": round(price, 2)},
+                ]
+
+            placed = False
+            for attempt in attempts:
+                try:
+                    order_type = attempt.pop("type")
+                    params: dict = {
+                        "positionSide": pos_side,
+                        "reduceOnly": True,
+                        **attempt,
+                    }
+                    result = await self._exchange.create_order(
+                        SYMBOL, order_type, close_side, btc_qty, None, params=params)
+                    oid = str(result.get("id", ""))
+                    if is_sl:
+                        sl_oid = oid
+                    else:
+                        tp_oid = oid
+                    logger.info(f"[LiveExecutor] {label} order placed at ${price:.2f} "
+                                f"(type={order_type}, id={oid})")
+                    placed = True
+                    break
+                except Exception as e:
+                    logger.debug(f"[LiveExecutor] {label} attempt {order_type} failed: {e}")
+                    continue
+
+            if not placed:
+                # Last resort: use the raw BingX API via CCXT's private endpoint
+                try:
+                    side_str = "BUY" if close_side == "buy" else "SELL"
+                    raw_type = "STOP" if is_sl else "TAKE_PROFIT"
+                    raw_params = {
+                        "symbol": "BTC-USDT",
+                        "side": side_str,
+                        "positionSide": pos_side,
+                        "type": raw_type,
+                        "quantity": btc_qty,
+                        "stopPrice": round(price, 2),
+                    }
+                    result = await self._exchange.swap_v1_trade_order_post(raw_params)
+                    oid = str(result.get("data", {}).get("order", {}).get("orderId", ""))
+                    if is_sl:
+                        sl_oid = oid
+                    else:
+                        tp_oid = oid
+                    logger.info(f"[LiveExecutor] {label} placed via raw API at ${price:.2f} (id={oid})")
+                except Exception as e:
+                    logger.warning(f"[LiveExecutor] {label} ALL attempts failed for ${price:.2f}: {e}")
+
+        return sl_oid, tp_oid
 
     # ── Core: open a live position ───────────────────────────────────────────
 
@@ -277,36 +335,16 @@ class LiveExecutor:
                 pos_side = "BOTH"
 
             order_params: dict = {"positionSide": pos_side}
-            if sl_price > 0:
-                order_params["stopLossPrice"] = round(sl_price, 2)
-            if tp_price > 0:
-                order_params["takeProfitPrice"] = round(tp_price, 2)
 
             logger.info(f"[LiveExecutor] Placing MARKET {side.upper()} {btc_qty} BTC "
                         f"· notional ~${notional:.0f} · lev {leverage}x "
                         f"· SL ${sl_price:.2f} · TP ${tp_price:.2f} "
                         f"· positionSide={pos_side}")
 
-            # First attempt with SL/TP attached to the order
-            try:
-                order = await self._exchange.create_order(
-                    SYMBOL, "market", side, btc_qty, None,
-                    params=order_params,
-                )
-            except Exception as sl_tp_err:
-                err_code = str(sl_tp_err)
-                # If SL/TP attachment fails, retry without them — place SL/TP separately
-                if "109420" in err_code or "stopLoss" in err_code.lower() or "takeProfit" in err_code.lower():
-                    logger.warning(f"[LiveExecutor] Order with SL/TP failed ({err_code[:80]}), retrying without SL/TP")
-                    bare_params: dict = {"positionSide": pos_side}
-                    order = await self._exchange.create_order(
-                        SYMBOL, "market", side, btc_qty, None,
-                        params=bare_params,
-                    )
-                    # Place SL/TP as separate stop orders after fill
-                    await self._place_sl_tp_orders(direction, btc_qty, sl_price, tp_price, pos_side)
-                else:
-                    raise
+            order = await self._exchange.create_order(
+                SYMBOL, "market", side, btc_qty, None,
+                params=order_params,
+            )
 
             order_id   = str(order.get("id", ""))
             fill_price = float(order.get("average") or order.get("price") or entry_price)
@@ -320,11 +358,19 @@ class LiveExecutor:
 
             logger.info(f"[LiveExecutor] MARKET order filled: id={order_id} @ ${fill_price:.2f}")
 
+            # Place SL/TP as separate stop orders now that position exists
+            sl_oid, tp_oid = await self._place_sl_tp_orders(
+                direction, btc_qty, sl_price, tp_price, pos_side)
+            if sl_oid:
+                logger.info(f"[LiveExecutor] SL order confirmed: {sl_oid}")
+            if tp_oid:
+                logger.info(f"[LiveExecutor] TP order confirmed: {tp_oid}")
+
             pos = {
                 "id":               f"{strategy_key}-live-{int(time.time()*1000)}",
                 "exchange_order_id": order_id,
-                "sl_order_id":      "",
-                "tp_order_id":      "",
+                "sl_order_id":      sl_oid,
+                "tp_order_id":      tp_oid,
                 "strategy_key":     strategy_key,
                 "strategy_name":    strategy_name,
                 "direction":        direction,
@@ -508,6 +554,26 @@ class LiveExecutor:
                 "unrealized_pnl": pnl,
                 "unrealized_pct": pct,
             }
+
+            # Repair missing SL/TP orders
+            sl_missing = not pos.get("sl_order_id") and pos.get("sl", 0) > 0
+            tp_missing = not pos.get("tp_order_id") and pos.get("tp", 0) > 0
+            if sl_missing or tp_missing:
+                if self._hedge_mode:
+                    ps = "LONG" if d == "long" else "SHORT"
+                else:
+                    ps = "BOTH"
+                sl_p = pos.get("sl", 0) if sl_missing else 0
+                tp_p = pos.get("tp", 0) if tp_missing else 0
+                logger.info(f"[LiveExecutor] Repairing missing SL/TP for {key} "
+                            f"(SL={'$'+str(sl_p) if sl_missing else 'ok'}, "
+                            f"TP={'$'+str(tp_p) if tp_missing else 'ok'})")
+                sl_oid, tp_oid = await self._place_sl_tp_orders(
+                    d, pos["btc_size"], sl_p, tp_p, ps)
+                if sl_oid:
+                    self.live_positions[key]["sl_order_id"] = sl_oid
+                if tp_oid:
+                    self.live_positions[key]["tp_order_id"] = tp_oid
 
         exchange_positions = await self.fetch_exchange_positions()
         active_sides: set[str] = set()
