@@ -1,13 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
 import {
   Bot, Power, RefreshCw, AlertTriangle, Activity, Brain,
   TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   ChevronRight, RotateCcw, Zap, Shield, X, CheckCircle2, XCircle,
   DollarSign, FileText, Cpu, Wifi, WifiOff,
-  LineChart, Settings,
+  LineChart,
 } from "lucide-react";
 import {
   useServerAgent,
@@ -60,28 +59,6 @@ function AgentLog({ logs }: { logs: string[] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-// ─── Settings link card (replaces ConfigPanel, which moved to /dashboard/settings) ──
-function ConfigLinkCard({ mode, keysSet }: { mode: string; keysSet: boolean }) {
-  return (
-    <Link href="/dashboard/settings"
-      className="card p-5 flex items-center justify-between group hover:border-blue-500/30 transition-colors">
-      <div className="flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center group-hover:border-blue-500/40 transition-colors">
-          <Settings size={16} className="text-neutral-400 group-hover:text-blue-400 transition-colors" />
-        </div>
-        <div>
-          <div className="text-[13px] font-semibold text-white">Agent Configuration</div>
-          <div className="text-[10px] text-neutral-600 mt-0.5">
-            Mode: <span className={mode === "live" ? "text-amber-400" : "text-violet-400"}>{mode === "live" ? "🔴 Live BingX" : "📄 Paper"}</span>
-            {mode === "live" && !keysSet && <span className="ml-2 text-amber-500">⚠ API keys missing</span>}
-          </div>
-        </div>
-      </div>
-      <ChevronRight size={16} className="text-neutral-700 group-hover:text-blue-400 transition-colors" />
-    </Link>
   );
 }
 
@@ -867,14 +844,9 @@ function AgentContent() {
         </div>
       )}
 
-      {/* ─── 4. Config link + BingX 2-col ────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ConfigLinkCard mode={mode} keysSet={exec?.keys_set ?? false} />
-        <div className="space-y-4">
-          <BingXPanel executor={exec} onResetCircuit={server.resetCircuitBreaker} />
-          <PaperTraderPanel data={server.paperTrader} />
-        </div>
-      </div>
+      {/* ─── 4. BingX + Paper Trader ─────────────────────────────────────── */}
+      <BingXPanel executor={exec} onResetCircuit={server.resetCircuitBreaker} />
+      <PaperTraderPanel data={server.paperTrader} />
 
       {/* ─── 5. Master Brain ─────────────────────────────────────────────── */}
       <BrainPanel brain={brain} />
