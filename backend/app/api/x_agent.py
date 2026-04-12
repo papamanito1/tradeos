@@ -1,5 +1,5 @@
 """
-X Agent API — dashboard control for @Tradeous X posting.
+X Agent API -- dashboard control for @Tradeous X posting.
 
 Read endpoints (status, next-post, confirm-post) are open so the local
 poster script can operate without a token. All write/trigger endpoints
@@ -15,7 +15,6 @@ from app.core.security import get_current_user
 
 router = APIRouter(prefix="/api/x-agent", tags=["x-agent"])
 
-# In-memory queue of tweets to be posted by the local poster script
 _tweet_queue: list[dict] = []
 _posted_ids:  set[str]   = set()
 
@@ -31,7 +30,7 @@ def _publisher():
     return None
 
 
-# ── Status ────────────────────────────────────────────────────────────────────
+# -- Status --------------------------------------------------------------------
 
 @router.get("/status")
 async def get_status():
@@ -41,30 +40,19 @@ async def get_status():
     return pub.status()
 
 
-
-
-
-
-# ── Manual triggers ───────────────────────────────────────────────────────────
+# -- Manual triggers -----------------------------------------------------------
 
 async def _send_now(pub, post_type: str, text: str) -> dict:
-    """
-    Queue tweet for local_poster.py (Playwright via real Edge browser).
-    Also tries direct Railway send — returns the text so frontend can post via localhost:4242.
-    """
     text = text[:280]
-    # Try direct Railway send (works if curl_cffi can bypass X IP block)
     ok = await pub._send_tweet(text, post_type)
     if ok:
         pub._touch(post_type.replace("-", "_"))
-        return {"ok": True, "queued": False, "posted": True, "text": text, "message": "Posted ✓"}
-    # Add to queue so local_poster.py can pick it up
+        return {"ok": True, "queued": False, "posted": True, "text": text, "message": "Posted"}
     import uuid
     qid = str(uuid.uuid4())[:8] + f"_{post_type}"
     _tweet_queue.append({"id": qid, "type": post_type, "text": text, "ts": time.time()})
-    # Return the text so the frontend can forward it to local_poster.py directly
     return {"ok": True, "queued": True, "posted": False, "text": text,
-            "id": qid, "message": "Ready — sending via local poster"}
+            "id": qid, "message": "Ready -- sending via local poster"}
 
 
 def _check(pub) -> dict | None:
@@ -75,111 +63,81 @@ def _check(pub) -> dict | None:
     return None
 
 
-def _gen_hourly_text(pub) -> str:
-    import random
-    from datetime import datetime, timezone
-    from app.agents import x_publisher as xp
-    try:
-        from app.agents.live_market_stream import LIVE_PRICES
-        price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-    except Exception:
-        price = 0.0
-    utc = datetime.now(timezone.utc).strftime("%H:%M UTC")
-    quip = random.choice(xp.REGIME_QUIPS.get("unknown", ["Watching the market."]))
-    price_str = f"${price:,.0f}" if price > 0 else "loading..."
-    return (
-        f"\U0001f916 BTC HOURLY \u2014 {utc}\n\n"
-        f"Price: {price_str}\n"
-        f"No open positions. Watching.\n\n"
-        f"{quip}\n\n"
-        f""
-    )
-
-
-@router.post("/trigger/news")
-async def trigger_news(_: dict = Depends(get_current_user)):
+@router.post("/trigger/contrarian")
+async def trigger_contrarian(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
-    pub._last["news"] = 0
-    story = await pub._fetch_top_news()
-    if not story:
-        return {"ok": False, "error": "Could not fetch news"}
-    hooks = ["My take:", "Translation for traders:", "Signal implication:", "Algo opinion:", "The real story:"]
-    comments = ["Watching for BTC reaction.", "Monitoring closely.", "Eyes on $BTC.", "Price is the final word."]
+    pub._last["contrarian"] = 0
+    ctx = pub._live_context
+    price = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
+    regime = ctx.get("regime", "unknown").replace("_", " ")
     text = (
-        f"\U0001f4f0 CRYPTO NEWS\n\n"
-        f"\u201c{story['title'][:120]}\u201d\n\n"
-        f"{random.choice(hooks)} {random.choice(comments)}\n\n"
+        f"BTC at {price}. Regime: {regime}.\n\n"
+        f"Humans are euphoric. Algo remains disciplined.\n\n"
+        f"Volume declining. Funding elevated. No structure break.\n"
+        f"Staying flat until the edge appears."
     )
-    if story.get("link"):
-        remaining = 280 - len(text)
-        if remaining > 30:
-            text += story["link"][:remaining]
-    return await _send_now(pub, "news", text)
+    return await _send_now(pub, "contrarian", text)
 
 
-@router.post("/trigger/fear-greed")
-async def trigger_fear_greed(_: dict = Depends(get_current_user)):
+@router.post("/trigger/psychology")
+async def trigger_psychology(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
-    pub._last["fear_greed"] = 0
-    data = await pub._fetch_fear_greed()
-    if not data:
-        return {"ok": False, "error": "Could not fetch Fear & Greed"}
-    from app.agents.x_publisher import FEAR_GREED_COMMENTARY
-    score = int(data.get("value", 50))
-    label = data.get("value_classification", "Neutral")
-    templates = FEAR_GREED_COMMENTARY.get(label, FEAR_GREED_COMMENTARY["Neutral"])
-    text = pub.memory.pick(f"fear_greed_{label}", templates).format(score=score, label=label)
-    return await _send_now(pub, "fear_greed", text)
+    pub._last["psychology_thread"] = 0
+    text = (
+        "The algo ignores news. Here's the pattern that repeated 7/8 times this cycle.\n\n"
+        "Humans react to headlines. The model reacts to price structure.\n\n"
+        "Thread below."
+    )
+    return await _send_now(pub, "psychology_thread", text)
 
 
-@router.post("/trigger/hot-take")
-async def trigger_hot_take(_: dict = Depends(get_current_user)):
-    from app.agents.x_publisher import HOT_TAKES
+@router.post("/trigger/poll")
+async def trigger_poll(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
-    pub._last["hot_take"] = 0
-    text = pub.memory.pick("hot_take", HOT_TAKES)
-    return await _send_now(pub, "hot_take", text)
+    pub._last["poll"] = 0
+    ctx = pub._live_context
+    price = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
+    regime = ctx.get("regime", "unknown").replace("_", " ")
+    text = (
+        f"BTC at {price}. Regime: {regime}.\n\n"
+        f"What would you do here?\n\n"
+        f"A) Long -- breakout setup\n"
+        f"B) Short -- distribution pattern\n"
+        f"C) Flat -- no edge\n"
+        f"D) Already positioned\n\n"
+        f"Reply below. Algo's decision in 1 hour."
+    )
+    return await _send_now(pub, "poll", text)
 
 
-@router.post("/trigger/philosophy")
-async def trigger_philosophy(_: dict = Depends(get_current_user)):
-    from app.agents.x_publisher import PHILOSOPHY_POSTS
+@router.post("/trigger/breakdown")
+async def trigger_breakdown(_: dict = Depends(get_current_user)):
     pub = _publisher()
     if err := _check(pub): return err
-    pub._last["philosophy"] = 0
-    text = pub.memory.pick("philosophy", PHILOSOPHY_POSTS)
-    return await _send_now(pub, "philosophy", text)
+    pub._last["trade_breakdown"] = 0
+    ctx = pub._live_context
+    regime = ctx.get("regime", "unknown").replace("_", " ")
+    text = (
+        f"How the algo evaluates BTC setups right now:\n\n"
+        f"Regime: {regime}\n"
+        f"Checks: EMA confluence, VWAP distance, volume profile, OBI\n"
+        f"Conviction threshold: 70%+\n"
+        f"Risk/reward minimum: 1:2\n\n"
+        f"No entry unless all conditions align."
+    )
+    return await _send_now(pub, "trade_breakdown", text)
 
 
-@router.post("/trigger/engagement")
-async def trigger_engagement(_: dict = Depends(get_current_user)):
-    from app.agents.x_publisher import ENGAGEMENT_QUESTIONS
-    pub = _publisher()
-    if err := _check(pub): return err
-    pub._last["engagement"] = 0
-    text = pub.memory.pick("engagement", ENGAGEMENT_QUESTIONS)
-    return await _send_now(pub, "engagement", text)
-
-
-@router.post("/trigger/hourly")
-async def trigger_hourly(_: dict = Depends(get_current_user)):
-    pub = _publisher()
-    if err := _check(pub): return err
-    pub._last["hourly"] = 0
-    return await _send_now(pub, "hourly", _gen_hourly_text(pub))
-
-
-# ── Test post (debug) ─────────────────────────────────────────────────────────
+# -- Test post (debug) --------------------------------------------------------
 
 @router.post("/test-post")
 async def test_post(_: dict = Depends(get_current_user)):
-    """Debug endpoint — tries to post a test tweet and returns the exact error."""
     pub = _publisher()
     if err := _check(pub): return err
-    text = f"Test post from Tradeous · {int(time.time())}"
+    text = f"Test post from Tradeous algo -- {int(time.time())}"
     ok = await pub._send_tweet(text, "test")
     return {
         "ok": ok,
@@ -189,7 +147,7 @@ async def test_post(_: dict = Depends(get_current_user)):
     }
 
 
-# ── Manual compose ────────────────────────────────────────────────────────────
+# -- Manual compose ------------------------------------------------------------
 
 class ManualPostRequest(BaseModel):
     text: str
@@ -203,11 +161,11 @@ async def manual_post(req: ManualPostRequest, _: dict = Depends(get_current_user
         return {"ok": False, "error": "Text too short"}
     ok = await pub._send_tweet(req.text.strip(), "manual")
     if ok:
-        return {"ok": True, "message": "Posted ✓"}
-    return {"ok": False, "error": "Post failed — check X credentials in Railway env vars"}
+        return {"ok": True, "message": "Posted"}
+    return {"ok": False, "error": "Post failed -- check X credentials in Railway env vars"}
 
 
-# ── Reset cooldowns ───────────────────────────────────────────────────────────
+# -- Reset cooldowns -----------------------------------------------------------
 
 @router.post("/reset-cooldowns")
 async def reset_cooldowns(_: dict = Depends(get_current_user)):
@@ -216,70 +174,57 @@ async def reset_cooldowns(_: dict = Depends(get_current_user)):
         return {"ok": False}
     for k in list(pub._last.keys()):
         pub._last[k] = 0
-    return {"ok": True, "message": "All cooldowns reset — next scheduler tick will post everything"}
+    return {"ok": True, "message": "All cooldowns reset -- next tick will evaluate"}
 
 
-# ── Fire all now ──────────────────────────────────────────────────────────────
+# -- Fire all now --------------------------------------------------------------
 
 @router.post("/fire-all")
 async def fire_all(_: dict = Depends(get_current_user)):
-    """Reset all cooldowns and immediately post every content type directly."""
+    """Reset all cooldowns and post available content types."""
     pub = _publisher()
     if err := _check(pub): return err
 
     results = {}
 
-    # Reset all cooldowns first
     for k in list(pub._last.keys()):
         pub._last[k] = 0
 
-    try:
-        from app.agents.live_market_stream import LIVE_PRICES
-        price = LIVE_PRICES.get("BTC/USDT", {}).get("last", 0.0)
-    except Exception:
-        price = 0.0
+    ctx = pub._live_context
+    price = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
+    regime = ctx.get("regime", "unknown").replace("_", " ")
 
-    # Post hourly/update first
-    hourly_text = _gen_hourly_text(pub)
-    ok = await pub._send_tweet(hourly_text, "hourly")
-    results["hourly"] = "posted ✓" if ok else "failed"
+    # Contrarian take
+    text = (
+        f"BTC at {price}. Regime: {regime}.\n\n"
+        f"Humans are euphoric. Algo remains disciplined.\n\n"
+        f"Volume declining. No structure break. Staying flat."
+    )
+    ok = await pub._send_tweet(text, "contrarian")
+    results["contrarian"] = "posted" if ok else "failed"
     if ok:
-        pub._touch("hourly")
+        pub._touch("contrarian")
     await __import__("asyncio").sleep(3)
 
-    # Hot take
-    from app.agents.x_publisher import HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS
-    ok = await pub._send_tweet(pub.memory.pick("hot_take", HOT_TAKES), "hot_take")
-    results["hot_take"] = "posted ✓" if ok else "failed"
+    # Poll
+    text = (
+        f"BTC at {price}. Regime: {regime}.\n\n"
+        f"What would you do here?\n\n"
+        f"A) Long\nB) Short\nC) Flat\nD) Already positioned\n\n"
+        f"Reply below."
+    )
+    ok = await pub._send_tweet(text, "poll")
+    results["poll"] = "posted" if ok else "failed"
     if ok:
-        pub._touch("hot_take")
-    await __import__("asyncio").sleep(3)
+        pub._touch("poll")
 
-    # Philosophy
-    ok = await pub._send_tweet(pub.memory.pick("philosophy", PHILOSOPHY_POSTS), "philosophy")
-    results["philosophy"] = "posted ✓" if ok else "failed"
-    if ok:
-        pub._touch("philosophy")
-    await __import__("asyncio").sleep(3)
-
-    # News
-    ok_news = await pub.post_news()
-    results["news"] = "posted ✓" if ok_news else "failed"
-    await __import__("asyncio").sleep(3)
-
-    # Fear & Greed
-    ok_fg = await pub.post_fear_greed()
-    results["fear_greed"] = "posted ✓" if ok_fg else "failed"
-
-    n_ok = sum(1 for v in results.values() if "✓" in str(v))
+    n_ok = sum(1 for v in results.values() if v == "posted")
     return {"ok": True, "results": results, "posted": n_ok}
 
 
-# ── Local poster queue (bypasses datacenter IP block) ─────────────────────────
-# The local_poster.py script on the user's PC polls /next-post and posts via
-# Playwright with their real residential IP + Edge session.
+# -- Local poster queue -------------------------------------------------------
 
-_DEFAULT_POSTER_SECRET = "tradeos-local-2024"   # matches local_poster.py default
+_DEFAULT_POSTER_SECRET = "tradeos-local-2024"
 
 def _check_poster_secret(secret: str) -> None:
     import os
@@ -291,11 +236,6 @@ def _check_poster_secret(secret: str) -> None:
 
 @router.get("/creds")
 async def get_creds(secret: str = ""):
-    """
-    Return X auth cookies so local_poster.py can post from a residential IP.
-    Reads X_AUTH_TOKEN and X_CT0 from Railway environment variables.
-    Requires POSTER_SECRET query param.
-    """
     _check_poster_secret(secret)
     import os
     auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
@@ -303,52 +243,52 @@ async def get_creds(secret: str = ""):
     if not auth_token or not ct0:
         return {
             "ok": False,
-            "error": "X_AUTH_TOKEN and/or X_CT0 not set in Railway environment variables. "
-                     "Run grab_cookies_and_tweet.py to get fresh cookies, then add them to Railway Variables.",
+            "error": "X_AUTH_TOKEN and/or X_CT0 not set in Railway environment variables.",
         }
     return {"ok": True, "a": auth_token, "c": ct0}
 
 
 @router.get("/next-post")
 async def next_post(secret: str = ""):
-    """Return the next tweet for the local poster to send.
-    Requires POSTER_SECRET query param to prevent queue draining."""
+    """Return the next tweet for the local poster to send."""
     _check_poster_secret(secret)
     from app.agents import x_publisher as xp
-    from app.agents.x_publisher import (
-        HOT_TAKES, PHILOSOPHY_POSTS, ENGAGEMENT_QUESTIONS,
-    )
 
     pub = _publisher()
     now = time.time()
 
-    # 1. Manual queue (from dashboard "Post Now" buttons) — highest priority
+    # 1. Manual queue -- highest priority
     if _tweet_queue:
         item = _tweet_queue.pop(0)
         return {"has_post": True, **item}
 
-    # 2. Auto-schedule based on cooldowns
+    # 2. Auto-schedule based on cooldowns (only high-value content)
     def _ok(key, cooldown):
         return pub._cooldown_ok(key, cooldown) if pub else True
 
     post_type = None
     text = ""
 
-    if _ok("hourly", xp.HOURLY_COOLDOWN):
-        text = _gen_hourly_text(pub)
-        post_type = "hourly"
+    ctx = pub._live_context if pub else {}
+    price = f"${ctx.get('price', 0):,.0f}" if ctx.get("price") else "unknown"
+    regime = ctx.get("regime", "unknown").replace("_", " ")
 
-    elif _ok("hot_take", xp.HOT_TAKE_COOLDOWN):
-        text = pub.memory.pick("hot_take", HOT_TAKES) if pub else random.choice(HOT_TAKES)
-        post_type = "hot_take"
+    if _ok("contrarian", xp.CONTRARIAN_COOLDOWN):
+        text = (
+            f"BTC at {price}. Regime: {regime}.\n\n"
+            f"Humans are euphoric. Algo remains disciplined.\n\n"
+            f"No edge. Staying flat."
+        )
+        post_type = "contrarian"
 
-    elif _ok("philosophy", xp.PHILOSOPHY_COOLDOWN):
-        text = pub.memory.pick("philosophy", PHILOSOPHY_POSTS) if pub else random.choice(PHILOSOPHY_POSTS)
-        post_type = "philosophy"
-
-    elif _ok("engagement", xp.ENGAGEMENT_COOLDOWN):
-        text = pub.memory.pick("engagement", ENGAGEMENT_QUESTIONS) if pub else random.choice(ENGAGEMENT_QUESTIONS)
-        post_type = "engagement"
+    elif _ok("poll", xp.POLL_COOLDOWN):
+        text = (
+            f"BTC at {price}. Regime: {regime}.\n\n"
+            f"What would you do here?\n\n"
+            f"A) Long\nB) Short\nC) Flat\nD) Already positioned\n\n"
+            f"Reply below."
+        )
+        post_type = "poll"
 
     if not post_type or not text:
         return {"has_post": False}
@@ -365,8 +305,7 @@ class ConfirmRequest(BaseModel):
 
 @router.post("/confirm-post")
 async def confirm_post(req: ConfirmRequest, secret: str = ""):
-    """Called by local poster after successfully posting — updates cooldowns.
-    Requires POSTER_SECRET query param."""
+    """Called by local poster after successfully posting -- updates cooldowns."""
     _check_poster_secret(secret)
     pub = _publisher()
     if pub:

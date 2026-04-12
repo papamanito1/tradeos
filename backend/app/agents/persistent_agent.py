@@ -882,13 +882,10 @@ class PersistentAgent:
 
         Rules:
           • Trade signals / results → fired instantly by the trading engine (not here).
-          • News              → checked every 5 min; posted immediately when fresh story found.
-          • BTC price move    → fired immediately when BTC moves ≥1.5%.
-          • All other content → one post chosen at random from cooldown-ready types,
-                                with a random 5–30 min wait between posts.
-          • Max gap guarantee → if 30 min have passed since any post, force the best
-                                available content type so the account never goes silent.
-          • Daily / Weekly    → fired once at the right UTC hour.
+          • Trade signals/results → posted immediately (priority 1-2).
+          • Daily / Weekly       → fired once at the right UTC hour.
+          • Other content        → one post chosen at random from cooldown-ready types,
+                                   only during peak hours, max 5 posts/day.
         """
         if not self.x_publisher.enabled:
             return
@@ -902,9 +899,6 @@ class PersistentAgent:
 
         last_day_posted  = -1
         last_week_posted = -1
-        last_news_check  = 0.0   # tracks when we last polled RSS
-        last_gm_posted   = -1    # UTC hour of last GM post
-        last_gn_posted   = -1    # UTC hour of last GN post
 
         # Content candidates (key, async_fn or sync_fn) — excluding news (handled separately)
         def _get_btc_price() -> float:
@@ -925,8 +919,7 @@ class PersistentAgent:
                 rs = "unknown"
             return r, rs
 
-        MAX_SILENCE_SEC   = 1200   # 20 min — force a post (target 4-6 posts/day)
-        NEWS_CHECK_SEC    = 300    # 5 min — how often to poll RSS for fresh stories
+        MAX_SILENCE_SEC   = 3600   # 60 min — longer silence OK (max 5 posts/day)
 
         while self._running:
             try:
@@ -935,36 +928,9 @@ class PersistentAgent:
                 btc_price = _get_btc_price()
                 open_pos  = [p for p in self.positions.values() if p]
 
-                # ── News: checked every 5 min, fires immediately when fresh ─────
-                if time.time() - last_news_check >= NEWS_CHECK_SEC:
-                    last_news_check = time.time()
-                    posted_news = await self.x_publisher.post_news()
-                    if posted_news:
-                        # News just went out — sleep random 5–20 min before next post
-                        await asyncio.sleep(random.uniform(300, 1200))
-                        continue
-
-                # ── BTC price move alert — fires immediately if ≥1.5% move ─────
-                prev_price = self.x_publisher.memory.get_btc_price()
-                if btc_price > 0 and prev_price > 0:
-                    if abs(btc_price - prev_price) / prev_price * 100 >= 1.5:
-                        self.x_publisher.post_btc_move(btc_price, prev_price)
-                        await asyncio.sleep(random.uniform(300, 900))
-                        continue
-
-                # ── GM post — 08:00–09:00 UTC (London open energy) ───────────
-                if now.hour == 8 and now.day != last_gm_posted:
-                    self.x_publisher.post_gm()
-                    last_gm_posted = now.day
-                    await asyncio.sleep(random.uniform(60, 300))
-                    continue
-
-                # ── GN post — 22:00–23:00 UTC ────────────────────────────────
-                if now.hour == 22 and now.day != last_gn_posted:
-                    self.x_publisher.post_gn()
-                    last_gn_posted = now.day
-                    await asyncio.sleep(random.uniform(60, 300))
-                    continue
+                # Update BTC price in memory for context
+                if btc_price > 0:
+                    self.x_publisher.memory.set_btc_price(btc_price)
 
                 # ── Daily summary at midnight UTC ─────────────────────────────
                 if now.hour == 0 and now.day != last_day_posted:
@@ -1003,26 +969,16 @@ class PersistentAgent:
                 await self.x_publisher.refresh_grok_trends()
 
                 # ── Regular content: one post at a time, randomly chosen ───────
-                # Grok-powered types get priority when Grok is enabled (more reach)
+                # Only high-value content types; daily budget enforced by XPublisher
                 grok_enabled = (
                     self.x_publisher.grok is not None
                     and getattr(self.x_publisher.grok, "enabled", False)
                 )
                 content_map: dict[str, any] = {
-                    "hourly": lambda: self.x_publisher.post_hourly(
-                        btc_price=btc_price,
-                        open_positions=open_pos,
-                        daily_pnl=self.brain.daily_pnl,
-                        regime=regime,
-                        regime_stability=regime_stability,
-                    ),
-                    "fear_greed":        self.x_publisher.post_fear_greed,
-                    "hot_take":          self.x_publisher.post_hot_take,
-                    "philosophy":        self.x_publisher.post_philosophy,
-                    "engagement":        self.x_publisher.post_engagement,
-                    "algo_insight":      self.x_publisher.post_algo_insight,
-                    "algo_explainer":    self.x_publisher.post_algo_explainer,
-                    # Grok-powered posts — only included when Grok key is set
+                    "contrarian":        self.x_publisher.post_contrarian,
+                    "psychology_thread": self.x_publisher.post_psychology_thread,
+                    "poll":              self.x_publisher.post_poll,
+                    "trade_breakdown":   self.x_publisher.post_trade_breakdown,
                     **({"trending_hook":    self.x_publisher.post_trending_hook,
                         "viral_commentary": self.x_publisher.post_viral_commentary,
                         "bold_prediction":  lambda: self.x_publisher.post_bold_prediction(
@@ -1033,32 +989,9 @@ class PersistentAgent:
                         } if grok_enabled else {}),
                 }
                 available = self.x_publisher.available_post_types()
-                # Remove news/btc_move (handled separately above)
                 candidates = [k for k in available if k in content_map]
 
-                # Grok posts get weighted higher in random selection (2× chance)
-                if grok_enabled:
-                    # Grok posts get 2× weight — live X data = more reach
-                    grok_types = {"trending_hook", "viral_commentary", "bold_prediction", "reply_hook"}
-                    weighted_candidates = []
-                    for c in candidates:
-                        weighted_candidates.append(c)
-                        if c in grok_types:
-                            weighted_candidates.append(c)
-                    candidates = weighted_candidates
-
-                # Enforce max-silence guarantee: if no post in 30 min, force one
-                time_since_any = time.time() - self.x_publisher.last_any_post_ts()
-                force_post = time_since_any >= MAX_SILENCE_SEC
-
-                if candidates or force_post:
-                    if not candidates:
-                        # All cooldowns still active but silence too long — pick least-recent
-                        candidates = sorted(
-                            content_map.keys(),
-                            key=lambda k: self.x_publisher._last.get(k, 0),
-                        )
-                    # Pick ONE at random
+                if candidates:
                     random.shuffle(candidates)
                     chosen_key = candidates[0]
                     fn = content_map[chosen_key]
@@ -1067,8 +1000,8 @@ class PersistentAgent:
                         await result
                     logger.debug(f"[XScheduler] Posted: {chosen_key}")
 
-                # Sleep 5–20 min before next check — targets 4-6 posts/day
-                sleep_sec = random.uniform(300, MAX_SILENCE_SEC)
+                # Sleep 20-60 min between checks (targets 3-5 posts/day)
+                sleep_sec = random.uniform(1200, 3600)
                 await asyncio.sleep(sleep_sec)
 
             except asyncio.CancelledError:
