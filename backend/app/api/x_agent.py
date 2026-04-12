@@ -276,6 +276,61 @@ async def fire_all(_: dict = Depends(get_current_user)):
     return {"ok": True, "results": results, "posted": n_ok}
 
 
+# -- Quick test (no JWT needed, uses poster secret) ---------------------------
+
+@router.get("/test-api")
+async def test_api(secret: str = ""):
+    """Test Official API credentials directly -- returns full error detail."""
+    _check_poster_secret(secret)
+    from app.agents import x_publisher as xp
+    api_key      = os.environ.get("X_API_KEY", "").strip()
+    api_secret   = os.environ.get("X_API_SECRET", "").strip()
+    access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
+    access_secret = os.environ.get("X_ACCESS_SECRET", "").strip()
+
+    if not (api_key and api_secret and access_token and access_secret):
+        return {"ok": False, "error": "Missing API keys", "missing": [
+            k for k, v in {"X_API_KEY": api_key, "X_API_SECRET": api_secret,
+                           "X_ACCESS_TOKEN": access_token, "X_ACCESS_SECRET": access_secret}.items() if not v
+        ]}
+
+    if not xp._TWEEPY_AVAILABLE:
+        return {"ok": False, "error": "tweepy not installed"}
+
+    import tweepy as _tw
+    client = _tw.Client(
+        consumer_key=api_key, consumer_secret=api_secret,
+        access_token=access_token, access_token_secret=access_secret,
+    )
+
+    # Step 1: verify identity
+    try:
+        me = client.get_me()
+        username = me.data.username if me.data else "unknown"
+    except Exception as e:
+        return {"ok": False, "step": "get_me", "error": str(e),
+                "hint": "API Key/Secret or Access Token/Secret are invalid or mismatched."}
+
+    # Step 2: try posting
+    import time as _time
+    try:
+        resp = client.create_tweet(text=f"Tradeos API test {int(_time.time())} — ignore")
+        tweet_id = str(resp.data["id"])
+        return {"ok": True, "username": username,
+                "tweet_id": tweet_id,
+                "url": f"https://x.com/{username}/status/{tweet_id}"}
+    except Exception as e:
+        detail = ""
+        if hasattr(e, "api_messages"):
+            detail = str(e.api_messages)
+        elif hasattr(e, "response") and e.response is not None:
+            try: detail = e.response.text[:300]
+            except Exception: pass
+        return {"ok": False, "step": "create_tweet", "authenticated_as": username,
+                "error": str(e), "detail": detail,
+                "hint": "Authenticated OK but tweet failed. Check app permissions (Read+Write) and regenerate Access Token after saving permissions."}
+
+
 # -- Local poster queue -------------------------------------------------------
 
 _POSTER_SECRET_DEFAULT = "tradeos-local-2024"
