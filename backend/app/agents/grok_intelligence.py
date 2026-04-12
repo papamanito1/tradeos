@@ -568,6 +568,105 @@ class GrokIntelligence:
         return result
 
     # ══════════════════════════════════════════════════════════════════════════════
+    #  PROACTIVE VIRAL SUGGESTION (every 25 min)
+    # ══════════════════════════════════════════════════════════════════════════════
+
+    async def suggest_and_generate_post(
+        self,
+        recent_posts: str,
+        btc_price: float = 0,
+        regime: str = "",
+        mood_tone: str = "",
+    ) -> Optional[dict]:
+        """
+        Core proactive loop:
+        1. Grok searches X RIGHT NOW for what's going viral in BTC space
+        2. Looks at @Tradeous recent tweet history to avoid repeating
+        3. Decides the best content type for the profile at this moment
+        4. Writes the tweet
+
+        Returns {"post_type": str, "angle": str, "tweet": str}
+        """
+        if not self.enabled:
+            return None
+
+        price_ctx = f"${btc_price:,.0f}" if btc_price else "unknown"
+        regime_ctx = regime.replace("_", " ") if regime else "unknown"
+        mood_ctx = f"\n- Algo state: {mood_tone}" if mood_tone else ""
+
+        user_prompt = (
+            f"You are the content brain for @Tradeous — a cold, robotic BTC algo account on X.\n\n"
+            f"STEP 1: Search X right now. What is going viral or getting high engagement "
+            f"in the BTC/crypto twitter space at this exact moment?\n\n"
+            f"STEP 2: Look at @Tradeous's recent tweets below and identify gaps — "
+            f"what topics/angles have NOT been covered recently?\n\n"
+            f"RECENT @TRADEOUS TWEETS (do NOT repeat any of these topics or phrasings):\n"
+            f"{recent_posts}\n\n"
+            f"CURRENT CONTEXT:\n"
+            f"- BTC: {price_ctx}\n"
+            f"- Market regime: {regime_ctx}{mood_ctx}\n\n"
+            f"STEP 3: Choose the single best content type that would:\n"
+            f"  a) Tap into what's actually viral on X right now\n"
+            f"  b) NOT repeat anything already in the recent tweets above\n"
+            f"  c) Perform well for a cold, data-driven algo trading account\n\n"
+            f"Content types to choose from:\n"
+            f"  contrarian_take — challenge a popular BTC narrative with hard data\n"
+            f"  market_insight  — cold read on current price action / regime\n"
+            f"  psychology      — expose a specific trader mistake happening right now\n"
+            f"  bold_prediction — specific, controversial BTC price call with reasoning\n"
+            f"  viral_reaction  — sharp take on something blowing up on X today\n\n"
+            f"STEP 4: Write the tweet.\n\n"
+            f"Return ONLY in this exact format (no extra text):\n"
+            f"TYPE: [content type]\n"
+            f"ANGLE: [the specific angle in 1 sentence]\n"
+            f"TWEET: [the actual tweet, max 240 chars, cold robotic @Tradeous voice, "
+            f"no hashtags unless trade post, no emoji spam]"
+        )
+
+        raw = await self._call_grok(
+            system=_GROK_WRITER_PROMPT,
+            user=user_prompt,
+            model=_MODEL_SMART,
+            temperature=0.82,
+            max_tokens=220,
+            live_search=True,
+        )
+
+        if not raw:
+            return None
+
+        result: dict = {"post_type": "grok_viral", "angle": "", "tweet": ""}
+        remaining = ""
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.upper().startswith("TYPE:"):
+                result["post_type"] = stripped.split(":", 1)[1].strip().replace(" ", "_")
+            elif stripped.upper().startswith("ANGLE:"):
+                result["angle"] = stripped.split(":", 1)[1].strip()
+            elif stripped.upper().startswith("TWEET:"):
+                result["tweet"] = stripped.split(":", 1)[1].strip()
+            elif result["tweet"]:
+                result["tweet"] += " " + stripped   # multi-line tweet
+
+        # Fallback: if parsing fails but raw looks like a tweet, use it directly
+        if not result["tweet"]:
+            lines = [l.strip() for l in raw.splitlines() if l.strip()
+                     and not l.strip().upper().startswith(("TYPE:", "ANGLE:"))]
+            if lines:
+                result["tweet"] = " ".join(lines)[:240]
+                result["post_type"] = "grok_viral"
+
+        if result["tweet"]:
+            result["tweet"] = result["tweet"].strip().strip('"').strip("'")[:240]
+            logger.info(
+                f"[GrokIntel] Viral suggestion → [{result['post_type']}] "
+                f"{result.get('angle', '')[:50]} | {result['tweet'][:60]}…"
+            )
+            return result
+
+        return None
+
+    # ══════════════════════════════════════════════════════════════════════════════
     #  INTELLIGENCE CONTEXT (for injecting into other AI calls)
     # ══════════════════════════════════════════════════════════════════════════════
 

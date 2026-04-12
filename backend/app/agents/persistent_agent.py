@@ -976,7 +976,8 @@ class PersistentAgent:
                     "psychology_thread": self.x_publisher.post_psychology_thread,
                     "poll":              self.x_publisher.post_poll,
                     "trade_breakdown":   self.x_publisher.post_trade_breakdown,
-                    **({"trending_hook":    self.x_publisher.post_trending_hook,
+                    **({"grok_viral":       self.x_publisher.post_grok_viral,
+                        "trending_hook":    self.x_publisher.post_trending_hook,
                         "viral_commentary": self.x_publisher.post_viral_commentary,
                         "bold_prediction":  lambda: self.x_publisher.post_bold_prediction(
                             macro_trend=self.brain.macro_trend,
@@ -989,16 +990,21 @@ class PersistentAgent:
                 candidates = [k for k in available if k in content_map]
 
                 if candidates:
-                    random.shuffle(candidates)
-                    chosen_key = candidates[0]
+                    # Prioritise grok_viral — it reads live X trends every 25 min
+                    if grok_enabled and "grok_viral" in candidates:
+                        chosen_key = "grok_viral"
+                    else:
+                        random.shuffle(candidates)
+                        chosen_key = candidates[0]
                     fn = content_map[chosen_key]
                     result = fn()
                     if asyncio.iscoroutine(result):
                         await result
                     logger.debug(f"[XScheduler] Posted: {chosen_key}")
 
-                # Sleep 20-60 min between checks (targets 3-5 posts/day)
-                sleep_sec = random.uniform(1200, 3600)
+                # Check every 20-30 min — Grok fetches every 25 min,
+                # daily budget of 5 posts enforced by XPublisher
+                sleep_sec = random.uniform(1200, 1800)
                 await asyncio.sleep(sleep_sec)
 
             except asyncio.CancelledError:

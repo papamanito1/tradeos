@@ -93,7 +93,8 @@ TRENDING_COOLDOWN      = 3600      # 60 min -- Grok X-trend post
 VIRAL_COMMENTARY_COOLDOWN = 5400   # 90 min -- Grok viral commentary
 BOLD_PREDICTION_COOLDOWN  = 10800  # 3 h    -- Grok bold prediction
 REPLY_HOOK_COOLDOWN    = 3600      # 1 h    -- reply to viral BTC tweet
-GROK_TREND_REFRESH     = 2700      # 45 min -- background Grok trend refresh
+GROK_TREND_REFRESH     = 1500      # 25 min -- background Grok trend refresh
+GROK_VIRAL_COOLDOWN    = 1500      # 25 min -- proactive Grok viral post
 MAX_DAILY_POSTS        = 5
 
 # -- X internal API ------------------------------------------------------------
@@ -247,6 +248,7 @@ class XPublisher:
         self._daily_date: str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self._tweepy_client: Optional[object] = None
         self._posting_method: str = "none"
+        self._posted_hashes: set[str] = set()   # exact dedup fingerprints
         self._init_client()
 
     def _init_client(self) -> None:
@@ -771,7 +773,16 @@ class XPublisher:
             logger.warning(f"[XPublisher] {self._last_error}")
             return False
 
+    def _is_duplicate(self, text: str) -> bool:
+        """True if this exact (normalised) text was already posted this session."""
+        fp = hashlib.md5(text.strip().lower().encode()).hexdigest()
+        if fp in self._posted_hashes:
+            return True
+        return False
+
     def _record_success(self, tweet_id: str, text: str, post_type: str) -> None:
+        fp = hashlib.md5(text.strip().lower().encode()).hexdigest()
+        self._posted_hashes.add(fp)
         self._touch(post_type)
         self._recent_posts.append({
             "id": tweet_id,
@@ -906,6 +917,7 @@ class XPublisher:
         "viral_commentary": VIRAL_COMMENTARY_COOLDOWN,
         "bold_prediction":  BOLD_PREDICTION_COOLDOWN,
         "reply_hook":       REPLY_HOOK_COOLDOWN,
+        "grok_viral":       GROK_VIRAL_COOLDOWN,
     }
 
     def _cooldown_ok(self, key: str, seconds: float) -> bool:
@@ -1537,6 +1549,55 @@ class XPublisher:
             )
         except Exception as e:
             logger.debug(f"[XPublisher] Grok refresh error: {e}")
+
+    def post_grok_viral(self) -> None:
+        """
+        Proactive Grok-powered post (every 25 min):
+        Grok searches X, decides what's viral, avoids repeats, writes the tweet.
+        Primary driver of @Tradeous content when trading signals aren't firing.
+        """
+        if not self._enabled or not self._cooldown_ok("grok_viral", GROK_VIRAL_COOLDOWN):
+            return
+        if not self._can_post(priority=4):
+            return
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            return
+
+        ctx = self._live_context
+
+        async def _gen():
+            try:
+                # Always refresh trends first so context is fresh
+                await self.grok.fetch_btc_trends()
+
+                recent = self._recent_texts_for_ai(15)  # Last 15 tweets for dedup
+                suggestion = await self.grok.suggest_and_generate_post(
+                    recent_posts=recent,
+                    btc_price=ctx.get("price", 0),
+                    regime=ctx.get("regime", ""),
+                    mood_tone=self.mood.tone,
+                )
+
+                if not suggestion or not suggestion.get("tweet"):
+                    return
+
+                tweet = suggestion["tweet"][:280]
+                post_type = suggestion.get("post_type", "grok_viral")
+
+                # Hard dedup: skip if identical to a recent post
+                if self._is_duplicate(tweet):
+                    logger.info(f"[XPublisher] Grok suggestion is a duplicate — skipping")
+                    return
+
+                ok = await self._send_tweet(tweet, post_type)
+                if ok:
+                    logger.info(
+                        f"[XPublisher] Grok viral posted [{post_type}]: {tweet[:70]}…"
+                    )
+            except Exception as e:
+                logger.error(f"[XPublisher] post_grok_viral error: {e}")
+
+        self._fire_async(_gen())
 
     def post_reply_hook(self) -> None:
         """Grok finds a viral BTC tweet and generates a sharp reply."""
