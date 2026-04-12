@@ -191,14 +191,12 @@ async def _post_playwright(text: str) -> str:
 
     try:
         async with async_playwright() as p:
-            # Use headless=True with stealth args so it works without a GUI
+            # Headed browser — X disables the Post button in headless mode
             browser = await p.chromium.launch(
-                headless=True,
+                headless=False,
                 args=[
                     "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-web-security",
+                    "--start-maximized",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],
@@ -207,7 +205,7 @@ async def _post_playwright(text: str) -> str:
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
+                    "Chrome/124.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 800},
                 locale="en-US",
@@ -215,7 +213,7 @@ async def _post_playwright(text: str) -> str:
             await ctx.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
-            # Inject Railway cookies
+            # Inject cookies so we're already logged in
             await ctx.add_cookies([
                 {"name": "auth_token", "value": _auth_token, "domain": ".x.com", "path": "/"},
                 {"name": "ct0",        "value": _ct0,        "domain": ".x.com", "path": "/"},
@@ -223,49 +221,44 @@ async def _post_playwright(text: str) -> str:
 
             page = await ctx.new_page()
             try:
-                await page.goto("https://x.com/compose/post", wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(2500)
+                # Go to home first (less suspicious than jumping straight to /compose)
+                await page.goto("https://x.com/home", wait_until="commit", timeout=60000)
+                await page.wait_for_timeout(2000)
+
+                # Then navigate to compose
+                await page.goto("https://x.com/compose/post", wait_until="commit", timeout=60000)
+                await page.wait_for_timeout(2000)
 
                 editor = await page.wait_for_selector(
                     "[data-testid='tweetTextarea_0']", timeout=20000
                 )
                 await editor.click()
-                await page.wait_for_timeout(400)
+                await page.wait_for_timeout(300)
 
-                lines = text.split("\n")
-                for i, line in enumerate(lines):
-                    if line:
-                        await editor.type(line, delay=8)
-                    if i < len(lines) - 1:
-                        await page.keyboard.press("Shift+Enter")
+                # Paste text via clipboard — less detectable than char-by-char typing
+                await page.evaluate(f"navigator.clipboard.writeText({repr(text)})")
+                await page.keyboard.press("Control+v")
+                await page.wait_for_timeout(1000)
 
-                await page.wait_for_timeout(800)
+                # Wait for the Post button to become enabled (up to 8s)
                 post_btn = await page.wait_for_selector(
-                    "[data-testid='tweetButtonInline']", timeout=10000
+                    "[data-testid='tweetButtonInline']:not([disabled])", timeout=8000
                 )
                 await post_btn.click()
                 await page.wait_for_timeout(4000)
 
-                # Try to extract the real tweet ID from the URL after posting
+                # Extract real tweet ID from the URL
+                import re
                 tweet_id = ""
                 try:
-                    current_url = page.url
-                    import re
-                    m = re.search(r"/status/(\d+)", current_url)
+                    m = re.search(r"/status/(\d+)", page.url)
                     if m:
                         tweet_id = m.group(1)
-                    else:
-                        # Check for notification or redirect containing the tweet ID
-                        for entry in (await ctx.cookies("https://x.com")):
-                            pass  # cookies won't help, but URL might change
                 except Exception:
                     pass
 
-                if tweet_id:
-                    log.info(f"[OK] Playwright posted (id={tweet_id}) — {text[:60]}{'...' if len(text) > 60 else ''}")
-                else:
-                    tweet_id = f"pw_{int(time.time())}"
-                    log.info(f"[OK] Playwright posted (no id captured) — {text[:60]}{'...' if len(text) > 60 else ''}")
+                tweet_id = tweet_id or f"pw_{int(time.time())}"
+                log.info(f"[OK] Playwright posted (id={tweet_id}) — {text[:60]}{'...' if len(text) > 60 else ''}")
                 return tweet_id
             except Exception as e:
                 try:
