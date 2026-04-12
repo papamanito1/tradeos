@@ -22,9 +22,14 @@ Grok-powered (kept from v1):
   - Bold prediction  -- contrarian market call
   - Reply hook       -- reply to viral BTC tweet
 
-Env vars required:
-  X_AUTH_TOKEN  -- from x.com cookies ("auth_token")
-  X_CT0         -- from x.com cookies ("ct0")
+Posting methods (tried in order):
+  1. Official X API v2 (tweepy) -- works from any IP, no cookies, FREE 500 tweets/month
+     Requires: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET
+     Get them at: https://developer.twitter.com (create app, set Read+Write permissions)
+  2. Cookie GraphQL -- Railway datacenter IP often blocked by X (226 error)
+     Requires: X_AUTH_TOKEN, X_CT0
+
+AI env vars:
   XAI_API_KEY   -- xAI / Grok API key
   GROQ_API_KEY  -- Groq fallback (free)
   GEMINI_API_KEY -- Gemini fallback (free)
@@ -50,6 +55,13 @@ try:
     _CURL_AVAILABLE = True
 except ImportError:
     _CURL_AVAILABLE = False
+
+try:
+    import tweepy as _tweepy
+    _TWEEPY_AVAILABLE = True
+except ImportError:
+    _tweepy = None  # type: ignore[assignment]
+    _TWEEPY_AVAILABLE = False
 
 try:
     import aiosqlite as _aiosqlite
@@ -233,16 +245,38 @@ class XPublisher:
         # Daily post budget
         self._daily_posts: int = 0
         self._daily_date: str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self._tweepy_client: Optional[object] = None
+        self._posting_method: str = "none"
         self._init_client()
 
     def _init_client(self) -> None:
         self._auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
         self._ct0        = os.environ.get("X_CT0", "").strip()
-        if self._auth_token and self._ct0:
+
+        # Official X API v2 (tweepy) -- preferred: works from any IP, no cookies
+        api_key      = os.environ.get("X_API_KEY", "").strip()
+        api_secret   = os.environ.get("X_API_SECRET", "").strip()
+        access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
+        access_secret = os.environ.get("X_ACCESS_SECRET", "").strip()
+
+        if _TWEEPY_AVAILABLE and api_key and api_secret and access_token and access_secret:
+            self._tweepy_client = _tweepy.Client(  # type: ignore[union-attr]
+                consumer_key=api_key,
+                consumer_secret=api_secret,
+                access_token=access_token,
+                access_token_secret=access_secret,
+                wait_on_rate_limit=False,
+            )
             self._enabled = True
-            logger.info("[XPublisher] Cookie auth ready -- X posting enabled")
+            self._posting_method = "official_api"
+            logger.info("[XPublisher] Official X API v2 (tweepy) ready -- no IP restrictions")
+        elif self._auth_token and self._ct0:
+            self._enabled = True
+            self._posting_method = "cookie_graphql"
+            logger.info("[XPublisher] Cookie auth ready -- X posting enabled (Railway IP may be blocked)")
         else:
-            logger.info("[XPublisher] X_AUTH_TOKEN/X_CT0 not set -- posting disabled")
+            self._posting_method = "none"
+            logger.info("[XPublisher] No X credentials -- posting disabled")
 
     # -- Daily post budget -----------------------------------------------------
 
@@ -585,6 +619,8 @@ class XPublisher:
         grok_status = self.grok.status() if self.grok and hasattr(self.grok, "status") else {}
         return {
             "enabled":            self._enabled,
+            "posting_method":     self._posting_method,
+            "tweepy_available":   _TWEEPY_AVAILABLE,
             "intro_posted":       self._intro_posted,
             "mood":               self.mood.current,
             "ai_brain":           ai_brain,
@@ -612,22 +648,55 @@ class XPublisher:
 
     async def _send_tweet(self, text: str, post_type: str = "manual", queue_on_fail: bool = True) -> bool:
         if not self._enabled:
-            self._last_error = "X_AUTH_TOKEN / X_CT0 not configured"
+            self._last_error = "No X credentials configured (set X_API_KEY etc. or X_AUTH_TOKEN+X_CT0 in Railway)"
             return False
 
         text = text[:280]
 
-        # Try GraphQL (only viable cookie-auth method — v1.1 statuses/update is dead since 2023)
+        # 1. Official API v2 (tweepy) -- works from any IP, no cookies required
+        if self._tweepy_client:
+            ok = await self._post_twitter_api(text, post_type)
+            if ok:
+                return True
+            # Rate-limited or account error -- do NOT fall through to cookies,
+            # they'll fail too. Queue instead.
+            if queue_on_fail:
+                self._queue_for_local_poster(text, post_type)
+                self._last_error += " | Queued for retry"
+            return False
+
+        # 2. Cookie GraphQL (Railway datacenter IP may be blocked by X)
         ok = await self._post_graphql(text, post_type)
         if ok:
             return True
 
-        # GraphQL failed (Railway datacenter IP blocked by X).
-        # Queue for local_poster.py running on a residential IP.
+        # GraphQL failed -- queue for local_poster.py on residential IP
         if queue_on_fail:
             self._queue_for_local_poster(text, post_type)
             self._last_error += " | Queued for local_poster.py — run it on your PC to send"
         return False
+
+    async def _post_twitter_api(self, text: str, post_type: str) -> bool:
+        """Post via Official X API v2 (tweepy). Works from any IP. No cookie expiry."""
+        if not self._tweepy_client or not _TWEEPY_AVAILABLE:
+            return False
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _do_post():
+                return self._tweepy_client.create_tweet(text=text[:280])  # type: ignore[union-attr]
+
+            response = await loop.run_in_executor(None, _do_post)
+            tweet_id = str(response.data["id"])
+            self._record_success(tweet_id, text, post_type)
+            self._last_error = ""
+            logger.info(f"[XPublisher] [{post_type}] Official API posted (id={tweet_id}): {text[:60]}...")
+            return True
+        except Exception as e:
+            err = str(e)
+            self._last_error = f"Official API error: {err[:180]}"
+            logger.warning(f"[XPublisher] {self._last_error}")
+            return False
 
     def _queue_for_local_poster(self, text: str, post_type: str) -> None:
         try:

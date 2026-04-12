@@ -60,7 +60,7 @@ def _check(pub) -> dict | None:
     if not pub:
         return {"ok": False, "error": "Agent not running"}
     if not pub.enabled:
-        return {"ok": False, "error": "X_AUTH_TOKEN / X_CT0 not set in Railway env vars"}
+        return {"ok": False, "error": "No X credentials. Add X_API_KEY/X_API_SECRET/X_ACCESS_TOKEN/X_ACCESS_SECRET in Railway (recommended), or X_AUTH_TOKEN+X_CT0."}
     return None
 
 
@@ -162,24 +162,39 @@ async def diagnose():
     """Returns detailed status without posting anything — use this to debug."""
     from app.agents import x_publisher as xp
     pub = _publisher()
-    auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
-    ct0        = os.environ.get("X_CT0", "").strip()
+    auth_token   = os.environ.get("X_AUTH_TOKEN", "").strip()
+    ct0          = os.environ.get("X_CT0", "").strip()
+    api_key      = os.environ.get("X_API_KEY", "").strip()
+    api_secret   = os.environ.get("X_API_SECRET", "").strip()
+    access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
+    access_secret = os.environ.get("X_ACCESS_SECRET", "").strip()
+    official_api_configured = bool(api_key and api_secret and access_token and access_secret)
+    posting_method = pub._posting_method if pub else "none"
+
+    if official_api_configured:
+        hint = "Official X API configured -- posting works from Railway with no PC needed."
+    elif auth_token and ct0:
+        hint = "Using cookie auth. Railway IP may be blocked by X (226 error). Switch to Official X API to fix this permanently -- see developer.twitter.com."
+    else:
+        hint = "No credentials. Add X_API_KEY / X_API_SECRET / X_ACCESS_TOKEN / X_ACCESS_SECRET in Railway (recommended), or X_AUTH_TOKEN + X_CT0."
+
     return {
-        "agent_running":        pub is not None,
-        "x_enabled":            pub.enabled if pub and hasattr(pub, "enabled") else pub._enabled if pub else False,
-        "cookies_in_env":       bool(auth_token and ct0),
-        "auth_token_prefix":    auth_token[:10] + "..." if auth_token else "MISSING",
-        "ct0_prefix":           ct0[:10] + "..." if ct0 else "MISSING",
-        "curl_cffi_available":  xp._CURL_AVAILABLE,
-        "last_error":           pub._last_error if pub else "agent not running",
-        "queue_length":         len(_tweet_queue),
-        "daily_posts":          pub._daily_posts if pub else 0,
-        "daily_budget":         xp.MAX_DAILY_POSTS,
-        "recent_posts_count":   len(pub._recent_posts) if pub else 0,
-        "hint": (
-            "Cookies missing — run grab_cookies_and_tweet.py then set X_AUTH_TOKEN+X_CT0 in Railway" if not auth_token or not ct0
-            else "Cookies set. If posting still fails, Railway IP is blocked by X — run local_poster.py on your PC."
-        ),
+        "agent_running":              pub is not None,
+        "x_enabled":                  pub.enabled if pub and hasattr(pub, "enabled") else False,
+        "posting_method":             posting_method,
+        "official_api_configured":    official_api_configured,
+        "tweepy_available":           xp._TWEEPY_AVAILABLE,
+        "api_key_prefix":             api_key[:8] + "..." if api_key else "MISSING",
+        "cookies_in_env":             bool(auth_token and ct0),
+        "auth_token_prefix":          auth_token[:10] + "..." if auth_token else "MISSING",
+        "ct0_prefix":                 ct0[:10] + "..." if ct0 else "MISSING",
+        "curl_cffi_available":        xp._CURL_AVAILABLE,
+        "last_error":                 pub._last_error if pub else "agent not running",
+        "queue_length":               len(_tweet_queue),
+        "daily_posts":                pub._daily_posts if pub else 0,
+        "daily_budget":               xp.MAX_DAILY_POSTS,
+        "recent_posts_count":         len(pub._recent_posts) if pub else 0,
+        "hint":                       hint,
     }
 
 

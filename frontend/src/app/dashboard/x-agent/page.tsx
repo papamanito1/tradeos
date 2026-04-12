@@ -52,6 +52,8 @@ interface Post {
 
 interface Status {
   enabled: boolean;
+  posting_method?: string;      // "official_api" | "cookie_graphql" | "none"
+  tweepy_available?: boolean;
   intro_posted: boolean;
   mood?: string;
   ai_brain?: string;
@@ -356,8 +358,19 @@ export default function XAgentPage() {
     <div className="min-h-screen text-white">
       <div className="max-w-5xl mx-auto px-1 py-2 space-y-8">
 
-        {/* local_poster.py status */}
-        {localOnline === false && (
+        {/* Official API badge — no PC needed */}
+        {status?.posting_method === "official_api" && (
+          <div className="rounded-2xl border p-3 flex items-center gap-3"
+            style={{ background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.15)" }}>
+            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
+            <span className="text-[12px] text-green-400 font-medium">
+              Official X API active — posts from Railway directly, no PC required
+            </span>
+          </div>
+        )}
+
+        {/* local_poster.py status — only relevant for cookie method */}
+        {status?.posting_method !== "official_api" && localOnline === false && (
           <div className="rounded-2xl border p-4 flex items-start gap-4"
             style={{ background: "rgba(251,191,36,0.06)", borderColor: "rgba(251,191,36,0.2)" }}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5"
@@ -367,18 +380,21 @@ export default function XAgentPage() {
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold text-yellow-300">local_poster.py not running — tweets will queue but not send</div>
               <div className="text-[11px] text-yellow-400/60 mt-1 leading-relaxed">
-                X blocks server IPs, so posts are sent from your PC&apos;s residential IP via curl_cffi. Open a terminal and run:
+                X blocks Railway&apos;s server IP. Use the Official X API instead (no PC needed), or run from your PC:
               </div>
               <code className="block mt-2 text-[11px] font-mono bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-yellow-300 select-all">
                 python local_poster.py
               </code>
+              <div className="mt-2 text-[11px] text-yellow-400/50">
+                Permanent fix: add <code className="bg-black/30 px-1 rounded">X_API_KEY</code> / <code className="bg-black/30 px-1 rounded">X_API_SECRET</code> / <code className="bg-black/30 px-1 rounded">X_ACCESS_TOKEN</code> / <code className="bg-black/30 px-1 rounded">X_ACCESS_SECRET</code> in Railway → get them at developer.twitter.com (free)
+              </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0 text-[10px] text-yellow-400/50">
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/50" />OFFLINE
             </div>
           </div>
         )}
-        {localOnline === true && (
+        {status?.posting_method !== "official_api" && localOnline === true && (
           <div className="rounded-2xl border p-3 flex items-center gap-3"
             style={{ background: "rgba(34,197,94,0.04)", borderColor: "rgba(34,197,94,0.15)" }}>
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
@@ -395,9 +411,14 @@ export default function XAgentPage() {
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold text-red-300">X Agent offline — credentials missing</div>
               <div className="text-[12px] text-red-400/70 mt-0.5">
-                Add <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_AUTH_TOKEN</code> and{" "}
-                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_CT0</code>{" "}
-                to Railway environment variables
+                Best option: add{" "}
+                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_API_KEY</code>,{" "}
+                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_API_SECRET</code>,{" "}
+                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_ACCESS_TOKEN</code>,{" "}
+                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_ACCESS_SECRET</code>{" "}
+                to Railway (Official API — works from any IP, free 500 tweets/month).
+                Or add <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_AUTH_TOKEN</code> +{" "}
+                <code className="font-mono bg-red-500/10 px-1.5 py-0.5 rounded text-red-300">X_CT0</code> (cookie method, may be blocked).
               </div>
             </div>
           </div>
@@ -421,6 +442,17 @@ export default function XAgentPage() {
                   <span className="text-[13px] text-white/40 font-medium">@tradeous</span>
                   {status?.mood && (
                     <span className="text-[10px] text-white/30 font-mono px-2 py-0.5 rounded-full border border-white/10">{status.mood}</span>
+                  )}
+                  {status?.posting_method && (
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                      status.posting_method === "official_api"
+                        ? "text-emerald-400/70 border-emerald-500/20 bg-emerald-500/10"
+                        : status.posting_method === "cookie_graphql"
+                        ? "text-yellow-400/60 border-yellow-500/20 bg-yellow-500/8"
+                        : "text-red-400/60 border-red-500/20"
+                    }`}>
+                      {status.posting_method === "official_api" ? "API v2" : status.posting_method === "cookie_graphql" ? "cookies" : "offline"}
+                    </span>
                   )}
                 </div>
                 <p className="text-[13px] text-white/40 mt-1 font-light">
@@ -453,17 +485,21 @@ export default function XAgentPage() {
             <div className="flex-1 min-w-0">
               <div className="text-[12px] font-semibold text-red-300 mb-0.5">Last posting error</div>
               <code className="text-[11px] text-red-400/70 font-mono break-all">{status.last_error}</code>
-              {(status.last_error.includes("ghost") || status.last_error.includes("Queued for local")) ? (
+              {status.last_error.includes("Official API error") ? (
                 <div className="text-[11px] text-amber-400/70 mt-1.5">
-                  Railway&apos;s datacenter IP is blocked by X. Run <code className="bg-black/30 px-1 rounded">python local_poster.py</code> on your PC — tweets are queued and will send the moment it starts.
+                  Official X API returned an error. Check your API keys in Railway and make sure Read + Write permissions are enabled on your X Developer App. Free tier: 500 tweets/month.
+                </div>
+              ) : (status.last_error.includes("ghost") || status.last_error.includes("Queued for local") || status.last_error.includes("226")) ? (
+                <div className="text-[11px] text-amber-400/70 mt-1.5">
+                  Railway&apos;s datacenter IP is blocked by X. Permanent fix: add <code className="bg-black/30 px-1 rounded">X_API_KEY</code> / <code className="bg-black/30 px-1 rounded">X_API_SECRET</code> / <code className="bg-black/30 px-1 rounded">X_ACCESS_TOKEN</code> / <code className="bg-black/30 px-1 rounded">X_ACCESS_SECRET</code> in Railway (get from developer.twitter.com free). Or run <code className="bg-black/30 px-1 rounded">python local_poster.py</code> on your PC.
                 </div>
               ) : status.last_error.includes("403") || status.last_error.includes("expired") ? (
                 <div className="text-[11px] text-amber-400/70 mt-1.5">
-                  Cookies expired — run <code className="bg-black/30 px-1 rounded">python grab_cookies_and_tweet.py</code>, update <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> + <code className="bg-black/30 px-1 rounded">X_CT0</code> in Railway Variables, then redeploy.
+                  Cookies expired — update <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> + <code className="bg-black/30 px-1 rounded">X_CT0</code> in Railway, or switch to the Official X API (permanent fix, no expiry).
                 </div>
-              ) : status.last_error.includes("not configured") ? (
+              ) : status.last_error.includes("No X credentials") || status.last_error.includes("not configured") ? (
                 <div className="text-[11px] text-amber-400/70 mt-1.5">
-                  X cookies missing in Railway. Go to Railway → Variables and add <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> and <code className="bg-black/30 px-1 rounded">X_CT0</code>.
+                  Add credentials to Railway — Official API (recommended): <code className="bg-black/30 px-1 rounded">X_API_KEY</code> / <code className="bg-black/30 px-1 rounded">X_API_SECRET</code> / <code className="bg-black/30 px-1 rounded">X_ACCESS_TOKEN</code> / <code className="bg-black/30 px-1 rounded">X_ACCESS_SECRET</code>
                 </div>
               ) : null}
             </div>
