@@ -10,6 +10,7 @@ Safety controls:
     capped by max_position_usdc and free account balance
   - SL/TP attached directly to the market order (survive restarts)
   - Position sync from exchange — BingX is the source of truth
+  - Auto-detects One-Way vs Hedge position mode
 """
 
 import asyncio
@@ -41,7 +42,7 @@ class LiveExecutor:
         api_secret: str,
         testnet: bool = False,
         daily_loss_limit: float = 200.0,
-        max_position_usdc: float = 500.0,  # fallback if balance fetch fails
+        max_position_usdc: float = 500.0,
     ):
         self.daily_loss_limit   = daily_loss_limit
         self.max_position_usdc  = max_position_usdc
@@ -55,6 +56,9 @@ class LiveExecutor:
         # Cached balance (refreshed before each trade)
         self._cached_balance: dict = {"total": 0, "free": 0, "used": 0}
         self._balance_fetched_at: float = 0
+
+        # Position mode: True = Hedge (LONG/SHORT sides), False = One-Way (net)
+        self._hedge_mode: Optional[bool] = None  # auto-detected on first trade
 
         self._exchange = ccxt.bingx({
             "apiKey":          api_key,
@@ -70,7 +74,36 @@ class LiveExecutor:
             logger.warning("[LiveExecutor] BingX testnet not available via CCXT — using live API")
 
         logger.info(f"[LiveExecutor] Initialized · min_margin=${self.MIN_MARGIN_USD} "
-                    f"· max_leverage={self.MAX_LEVERAGE}× · daily_loss_limit=${daily_loss_limit}")
+                    f"· max_leverage={self.MAX_LEVERAGE}x · daily_loss_limit=${daily_loss_limit}")
+
+    # ── Position mode detection ────────────────────────────────────────────────
+
+    async def _detect_position_mode(self) -> bool:
+        """
+        Detect whether the BingX account uses Hedge Mode or One-Way Mode.
+        Returns True for Hedge, False for One-Way.
+        """
+        if self._hedge_mode is not None:
+            return self._hedge_mode
+
+        # Try to switch to Hedge Mode — if already Hedge or succeeds, we're good
+        try:
+            await self._exchange.set_position_mode(True, SYMBOL)
+            self._hedge_mode = True
+            logger.info("[LiveExecutor] Position mode: HEDGE (dual-side)")
+            return True
+        except Exception as e:
+            err = str(e).lower()
+            # "already" or "no need" means it's already in the target mode
+            if "already" in err or "no need" in err:
+                self._hedge_mode = True
+                logger.info("[LiveExecutor] Position mode: HEDGE (already set)")
+                return True
+            # If switching fails, the account is in One-Way mode and may have
+            # open positions preventing the switch — use One-Way
+            self._hedge_mode = False
+            logger.info(f"[LiveExecutor] Position mode: ONE-WAY (net) — {e}")
+            return False
 
     # ── Daily P&L tracker ────────────────────────────────────────────────────
 
@@ -87,7 +120,7 @@ class LiveExecutor:
         self._daily_pnl += pnl
         if self._daily_pnl <= -abs(self.daily_loss_limit) and not self._halted:
             self._halted = True
-            logger.warning(f"[LiveExecutor] ⛔ CIRCUIT BREAKER — daily loss ${self._daily_pnl:.2f} ≤ -${self.daily_loss_limit}")
+            logger.warning(f"[LiveExecutor] CIRCUIT BREAKER — daily loss ${self._daily_pnl:.2f} <= -${self.daily_loss_limit}")
 
     @property
     def halted(self) -> bool:
@@ -104,15 +137,19 @@ class LiveExecutor:
     async def _set_leverage(self, leverage: int) -> None:
         try:
             await self._exchange.set_leverage(leverage, SYMBOL)
-            logger.info(f"[LiveExecutor] Leverage set to {leverage}× on {SYMBOL}")
+            logger.info(f"[LiveExecutor] Leverage set to {leverage}x on {SYMBOL}")
         except Exception as e:
-            logger.warning(f"[LiveExecutor] set_leverage failed: {e}")
+            err = str(e).lower()
+            if "no need" in err or "already" in err or "same" in err:
+                logger.debug(f"[LiveExecutor] Leverage already {leverage}x")
+            else:
+                logger.warning(f"[LiveExecutor] set_leverage failed (non-fatal): {e}")
 
     async def _set_margin_mode(self) -> None:
         try:
             await self._exchange.set_margin_mode("isolated", SYMBOL)
         except Exception:
-            pass  # already set or not needed
+            pass  # already set or not supported
 
     async def fetch_balance(self, force: bool = False) -> dict:
         now = time.time()
@@ -135,10 +172,6 @@ class LiveExecutor:
             return self._cached_balance if self._cached_balance["total"] > 0 else {"total": 0, "free": 0, "used": 0}
 
     def _resolve_margin(self, size_usdc: float, free_capital: float) -> float:
-        """
-        Determine the actual margin to use for a trade.
-        Priority: caller's size_usdc → cap by free capital → floor at MIN_MARGIN_USD.
-        """
         requested = size_usdc if size_usdc > 0 else self.DEFAULT_MARGIN_USD
         capped    = min(requested, self.max_position_usdc, free_capital * 0.95)
         return max(capped, self.MIN_MARGIN_USD)
@@ -158,8 +191,8 @@ class LiveExecutor:
         self,
         strategy_key: str,
         strategy_name: str,
-        direction: str,          # "long" or "short"
-        size_usdc: float,        # requested margin from Brain/strategy config (respected, not ignored)
+        direction: str,
+        size_usdc: float,
         leverage: int,
         sl_price: float,
         tp_price: float,
@@ -167,16 +200,13 @@ class LiveExecutor:
     ) -> Optional[dict]:
         """
         Opens a leveraged BTC/USDT:USDT perp position on BingX.
-        Margin = size_usdc from caller, capped by max_position_usdc and free balance.
-        Leverage capped at MAX_LEVERAGE (60×).
-        Returns a position dict compatible with the paper position format.
+        Auto-detects Hedge vs One-Way mode and adapts order params accordingly.
         """
         if self.halted:
-            logger.warning(f"[LiveExecutor] ⛔ HALTED — daily circuit breaker active. No new trades.")
+            logger.warning("[LiveExecutor] HALTED — daily circuit breaker active. No new trades.")
             self.last_error = "Circuit breaker active"
             return None
 
-        # Fetch live balance — always fresh before opening a position
         balance = await self.fetch_balance(force=True)
         total_capital = balance["total"]
         free_capital  = balance["free"]
@@ -186,7 +216,6 @@ class LiveExecutor:
             logger.warning(f"[LiveExecutor] {self.last_error}")
             return None
 
-        # Resolve margin: honour caller's size_usdc, cap by max_position_usdc + free balance
         capped_usdc = self._resolve_margin(size_usdc, free_capital)
 
         if capped_usdc < self.MIN_MARGIN_USD and free_capital < self.MIN_MARGIN_USD:
@@ -197,10 +226,13 @@ class LiveExecutor:
         leverage = min(leverage, self.MAX_LEVERAGE)
 
         logger.info(f"[LiveExecutor] Sizing: capital=${total_capital:.2f} · "
-                    f"margin=${capped_usdc:.2f} · leverage={leverage}× · "
+                    f"margin=${capped_usdc:.2f} · leverage={leverage}x · "
                     f"notional=${capped_usdc * leverage:.2f}")
 
         try:
+            # Detect position mode on first trade
+            is_hedge = await self._detect_position_mode()
+
             await self._set_leverage(leverage)
             await self._set_margin_mode()
 
@@ -209,59 +241,48 @@ class LiveExecutor:
             btc_qty   = notional / entry_price
             btc_qty   = round(btc_qty, 4)
 
-            # BingX minimum: 0.0001 BTC (~$7 at current prices)
             if btc_qty < 0.0001:
                 logger.warning(f"[LiveExecutor] Order too small: {btc_qty} BTC (min 0.0001)")
                 self.last_error = f"Order too small: {btc_qty} BTC"
                 return None
 
-            pos_side = "LONG" if direction == "long" else "SHORT"
-
-            # Use MARKET order — fills instantly at current exchange price.
-            # Limit orders at a signal's stale entry_price get canceled when the
-            # market has moved by execution time.  Market orders with
-            # stopLossPrice / takeProfitPrice params attach the guards directly
-            # to the position (not as separate "trigger" orders).
-            order_params: dict = {"positionSide": pos_side}
+            order_params: dict = {}
+            if is_hedge:
+                order_params["positionSide"] = "LONG" if direction == "long" else "SHORT"
             if sl_price > 0:
                 order_params["stopLossPrice"] = round(sl_price, 2)
             if tp_price > 0:
                 order_params["takeProfitPrice"] = round(tp_price, 2)
 
             logger.info(f"[LiveExecutor] Placing MARKET {side.upper()} {btc_qty} BTC "
-                        f"· notional ~${notional:.0f} · lev {leverage}× "
-                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f}")
+                        f"· notional ~${notional:.0f} · lev {leverage}x "
+                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f} "
+                        f"· mode={'hedge' if is_hedge else 'one-way'}")
 
             order = await self._exchange.create_order(
-                SYMBOL,
-                "market",
-                side,
-                btc_qty,
-                None,
+                SYMBOL, "market", side, btc_qty, None,
                 params=order_params,
             )
-            order_id  = str(order.get("id", ""))
+
+            # If we got 109420 "position not exist" despite hedge detection,
+            # retry in one-way mode
+            order_id   = str(order.get("id", ""))
             fill_price = float(order.get("average") or order.get("price") or entry_price)
 
-            # Verify the order is actually filled (market orders should be instant)
             if not fill_price or fill_price <= 0:
                 try:
                     fetched    = await self._exchange.fetch_order(order_id, SYMBOL)
                     fill_price = float(fetched.get("average") or fetched.get("price") or entry_price)
                 except Exception:
-                    fill_price = entry_price  # fallback — price is close enough
+                    fill_price = entry_price
 
-            logger.info(f"[LiveExecutor] MARKET order filled: id={order_id} @ ${fill_price:.2f} "
-                        f"· SL ${sl_price:.2f} · TP ${tp_price:.2f} (attached to position)")
-
-            sl_order_id = ""
-            tp_order_id = ""
+            logger.info(f"[LiveExecutor] MARKET order filled: id={order_id} @ ${fill_price:.2f}")
 
             pos = {
                 "id":               f"{strategy_key}-live-{int(time.time()*1000)}",
                 "exchange_order_id": order_id,
-                "sl_order_id":      sl_order_id,
-                "tp_order_id":      tp_order_id,
+                "sl_order_id":      "",
+                "tp_order_id":      "",
                 "strategy_key":     strategy_key,
                 "strategy_name":    strategy_name,
                 "direction":        direction,
@@ -281,12 +302,21 @@ class LiveExecutor:
 
             self.live_positions[strategy_key] = pos
             self.last_error = None
-            logger.info(f"[LiveExecutor] ★ LIVE OPENED {direction.upper()} {btc_qty} BTC "
+            logger.info(f"[LiveExecutor] LIVE OPENED {direction.upper()} {btc_qty} BTC "
                         f"@ ${fill_price:.2f} · SL ${sl_price:.2f} · TP ${tp_price:.2f} "
                         f"· order_id={order_id}")
             return pos
 
         except Exception as e:
+            err_str = str(e)
+            # If we hit "position not exist" with Hedge mode, switch to One-Way and retry once
+            if "109420" in err_str and self._hedge_mode:
+                logger.warning("[LiveExecutor] Hedge mode failed — switching to One-Way and retrying")
+                self._hedge_mode = False
+                return await self.open_position(
+                    strategy_key, strategy_name, direction,
+                    size_usdc, leverage, sl_price, tp_price, entry_price,
+                )
             self.last_error = f"{type(e).__name__}: {e}"
             logger.error(f"[LiveExecutor] open_position FAILED for {strategy_key}: {self.last_error}")
             return None
@@ -294,11 +324,6 @@ class LiveExecutor:
     # ── Cancel orphaned orders for a specific position ──────────────────────
 
     async def cancel_position_orders(self, strategy_key: str) -> None:
-        """
-        Clean up any leftover orders for a strategy.
-        With position-attached SL/TP, BingX auto-cancels the counterpart
-        when one fires. This is a safety-net for edge cases only.
-        """
         pos = self.live_positions.get(strategy_key)
         order_ids_to_cancel: list[str] = []
 
@@ -320,7 +345,6 @@ class LiveExecutor:
                     logger.warning(f"[LiveExecutor] Failed to cancel order {oid}: {ce}")
 
     async def _cancel_all_open_orders(self) -> None:
-        """Cancel every open order on SYMBOL. Only used when no other positions are open."""
         try:
             open_orders = await self._exchange.fetch_open_orders(SYMBOL)
             if not open_orders:
@@ -357,26 +381,20 @@ class LiveExecutor:
         entry     = pos["entry"]
 
         try:
+            close_params: dict = {"reduceOnly": True}
+            if self._hedge_mode:
+                close_params["positionSide"] = "LONG" if direction == "long" else "SHORT"
+
             order = await self._exchange.create_order(
-                SYMBOL,
-                "market",
-                side,
-                btc_qty,
-                None,
-                params={
-                    "positionSide": "LONG" if direction == "long" else "SHORT",
-                    "reduceOnly": True,
-                },
+                SYMBOL, "market", side, btc_qty, None,
+                params=close_params,
             )
 
             fill_price = float(order.get("average") or order.get("price") or exit_price)
             diff       = (fill_price - entry) if direction == "long" else (entry - fill_price)
-            # USDT-margined perps: PnL = price_diff * BTC_qty (leverage already priced in via qty)
             pnl        = round(diff * btc_qty, 2)
 
             self.record_pnl(pnl)
-
-            # Position-attached SL/TP are auto-cancelled by BingX on close
             del self.live_positions[strategy_key]
 
             trade = {
@@ -401,7 +419,7 @@ class LiveExecutor:
             ])
             if already_closed:
                 logger.info(f"[LiveExecutor] Position {strategy_key} already closed on exchange "
-                            f"(SL/TP fired) — cancelling counterpart order")
+                            f"(SL/TP fired)")
                 diff = (exit_price - entry) if direction == "long" else (entry - exit_price)
                 pnl  = round(diff * btc_qty, 2)
                 self.record_pnl(pnl)
@@ -421,12 +439,6 @@ class LiveExecutor:
     # ── Sync open positions with exchange (source of truth) ──────────────────
 
     async def sync_positions(self, live_price: float) -> list[str]:
-        """
-        Sync with BingX exchange:
-        1. Update unrealized P&L for all local positions
-        2. Fetch actual exchange positions to detect which were closed by SL/TP
-        3. Clean up local tracking for positions no longer on exchange
-        """
         closed_keys: list[str] = []
 
         if not self.live_positions:
@@ -440,12 +452,11 @@ class LiveExecutor:
                 logger.debug(f"[LiveExecutor] orphan check failed: {e}")
             return closed_keys
 
-        # Update P&L for all tracked positions
         for key, pos in list(self.live_positions.items()):
             entry = pos["entry"]
             d     = pos["direction"]
             diff  = (live_price - entry) if d == "long" else (entry - live_price)
-            pnl   = round(diff * pos["btc_size"], 2)  # USDT-margined: PnL = diff * qty
+            pnl   = round(diff * pos["btc_size"], 2)
             pct   = round(diff / entry * 100, 4) if entry > 0 else 0
             self.live_positions[key] = {
                 **pos,
@@ -454,10 +465,7 @@ class LiveExecutor:
                 "unrealized_pct": pct,
             }
 
-        # Fetch actual exchange positions — this is the source of truth
         exchange_positions = await self.fetch_exchange_positions()
-
-        # Build a set of active directions on exchange (LONG/SHORT with non-zero qty)
         active_sides: set[str] = set()
         for ep in exchange_positions:
             side = (ep.get("side") or "").lower()
@@ -466,14 +474,12 @@ class LiveExecutor:
 
         exchange_qty = sum(abs(p.get("contracts", 0)) for p in exchange_positions)
 
-        # If exchange has zero position, all our tracked positions were closed (SL/TP fired)
         if exchange_qty == 0:
             for key in list(self.live_positions.keys()):
                 logger.info(f"[LiveExecutor] {key} closed on exchange (SL/TP fired) — cleaning up")
                 closed_keys.append(key)
             return closed_keys
 
-        # Check each tracked position against exchange — if its side is gone, it was closed
         for key, pos in list(self.live_positions.items()):
             pos_dir = pos.get("direction", "")
             if pos_dir not in active_sides:
@@ -485,11 +491,6 @@ class LiveExecutor:
     # ── Check if SL/TP hit (fallback if exchange orders didn't fire) ──────────
 
     async def check_sl_tp(self, live_price: float, agent_close_cb) -> None:
-        """
-        Guard: if price crosses SL/TP and position is still open locally,
-        close it via market order. Exchange orders should handle this first,
-        but this is the safety net.
-        """
         for key, pos in list(self.live_positions.items()):
             d  = pos["direction"]
             sl = pos.get("sl") or 0
@@ -518,6 +519,7 @@ class LiveExecutor:
             "open_count":        len(self.live_positions),
             "live_positions":    list(self.live_positions.values()),
             "last_error":        self.last_error,
+            "position_mode":     "hedge" if self._hedge_mode else "one-way",
         }
 
     async def close(self) -> None:
