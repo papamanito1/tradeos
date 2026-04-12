@@ -136,11 +136,14 @@ class LiveExecutor:
 
     async def _set_leverage(self, leverage: int) -> None:
         try:
-            await self._exchange.set_leverage(leverage, SYMBOL)
+            params = {}
+            if self._hedge_mode is False:
+                params["side"] = "BOTH"
+            await self._exchange.set_leverage(leverage, SYMBOL, params)
             logger.info(f"[LiveExecutor] Leverage set to {leverage}x on {SYMBOL}")
         except Exception as e:
             err = str(e).lower()
-            if "no need" in err or "already" in err or "same" in err:
+            if "no need" in err or "already" in err or "same" in err or "not modified" in err:
                 logger.debug(f"[LiveExecutor] Leverage already {leverage}x")
             else:
                 logger.warning(f"[LiveExecutor] set_leverage failed (non-fatal): {e}")
@@ -184,6 +187,28 @@ class LiveExecutor:
         except Exception as e:
             logger.error(f"[LiveExecutor] fetch_positions failed: {e}")
             return []
+
+    async def _place_sl_tp_orders(self, direction: str, btc_qty: float,
+                                   sl_price: float, tp_price: float,
+                                   pos_side: str) -> None:
+        """Place SL and TP as separate stop-market orders after position is opened."""
+        close_side = "sell" if direction == "long" else "buy"
+        for label, price, order_type in [("SL", sl_price, "stop"), ("TP", tp_price, "take_profit")]:
+            if price <= 0:
+                continue
+            try:
+                params: dict = {"positionSide": pos_side, "reduceOnly": True}
+                if order_type == "stop":
+                    params["stopPrice"] = round(price, 2)
+                    await self._exchange.create_order(
+                        SYMBOL, "stop_market", close_side, btc_qty, None, params=params)
+                else:
+                    params["stopPrice"] = round(price, 2)
+                    await self._exchange.create_order(
+                        SYMBOL, "take_profit_market", close_side, btc_qty, None, params=params)
+                logger.info(f"[LiveExecutor] {label} order placed at ${price:.2f}")
+            except Exception as e:
+                logger.warning(f"[LiveExecutor] {label} order failed (non-fatal): {e}")
 
     # ── Core: open a live position ───────────────────────────────────────────
 
@@ -246,9 +271,12 @@ class LiveExecutor:
                 self.last_error = f"Order too small: {btc_qty} BTC"
                 return None
 
-            order_params: dict = {}
             if is_hedge:
-                order_params["positionSide"] = "LONG" if direction == "long" else "SHORT"
+                pos_side = "LONG" if direction == "long" else "SHORT"
+            else:
+                pos_side = "BOTH"
+
+            order_params: dict = {"positionSide": pos_side}
             if sl_price > 0:
                 order_params["stopLossPrice"] = round(sl_price, 2)
             if tp_price > 0:
@@ -257,15 +285,29 @@ class LiveExecutor:
             logger.info(f"[LiveExecutor] Placing MARKET {side.upper()} {btc_qty} BTC "
                         f"· notional ~${notional:.0f} · lev {leverage}x "
                         f"· SL ${sl_price:.2f} · TP ${tp_price:.2f} "
-                        f"· mode={'hedge' if is_hedge else 'one-way'}")
+                        f"· positionSide={pos_side}")
 
-            order = await self._exchange.create_order(
-                SYMBOL, "market", side, btc_qty, None,
-                params=order_params,
-            )
+            # First attempt with SL/TP attached to the order
+            try:
+                order = await self._exchange.create_order(
+                    SYMBOL, "market", side, btc_qty, None,
+                    params=order_params,
+                )
+            except Exception as sl_tp_err:
+                err_code = str(sl_tp_err)
+                # If SL/TP attachment fails, retry without them — place SL/TP separately
+                if "109420" in err_code or "stopLoss" in err_code.lower() or "takeProfit" in err_code.lower():
+                    logger.warning(f"[LiveExecutor] Order with SL/TP failed ({err_code[:80]}), retrying without SL/TP")
+                    bare_params: dict = {"positionSide": pos_side}
+                    order = await self._exchange.create_order(
+                        SYMBOL, "market", side, btc_qty, None,
+                        params=bare_params,
+                    )
+                    # Place SL/TP as separate stop orders after fill
+                    await self._place_sl_tp_orders(direction, btc_qty, sl_price, tp_price, pos_side)
+                else:
+                    raise
 
-            # If we got 109420 "position not exist" despite hedge detection,
-            # retry in one-way mode
             order_id   = str(order.get("id", ""))
             fill_price = float(order.get("average") or order.get("price") or entry_price)
 
@@ -381,9 +423,11 @@ class LiveExecutor:
         entry     = pos["entry"]
 
         try:
-            close_params: dict = {"reduceOnly": True}
             if self._hedge_mode:
-                close_params["positionSide"] = "LONG" if direction == "long" else "SHORT"
+                pos_side = "LONG" if direction == "long" else "SHORT"
+            else:
+                pos_side = "BOTH"
+            close_params: dict = {"positionSide": pos_side, "reduceOnly": True}
 
             order = await self._exchange.create_order(
                 SYMBOL, "market", side, btc_qty, None,
