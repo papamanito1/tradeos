@@ -71,9 +71,11 @@ function AgentLog({ logs }: { logs: string[] }) {
 function ConfigPanel({
   serverConfig,
   onSave,
+  executor,
 }: {
   serverConfig: ServerAgentConfig | null;
   onSave: (patch: Partial<ServerAgentConfig>) => Promise<void>;
+  executor: LiveExecutorStatus | null;
 }) {
   const [draft, setDraft]   = useState<ServerAgentConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -188,14 +190,29 @@ function ConfigPanel({
                 🔴 Live (BingX)
               </button>
             </div>
-            <div className="text-[9px] mt-1.5" style={{ color: d.mode === "live" ? "#f87171" : "#4b5563" }}>
+            <div className="text-[9px] mt-1.5" style={{ color: d.mode === "live" ? (executor?.keys_set ? "#f87171" : "#f59e0b") : "#4b5563" }}>
               {d.mode === "paper"
                 ? "Simulated fills · live P&L tracking · no real money"
-                : "⚠ Real money · BingX perpetual futures · requires API keys in Railway"}
+                : executor?.keys_set
+                  ? "⚠ Real money · BingX perpetual futures · keys configured"
+                  : "⚠ Real money · add BINGX_API_KEY + BINGX_API_SECRET in Railway → Redeploy"}
             </div>
 
             {d.mode === "live" && (
               <div className="mt-3 space-y-3 p-3 rounded-xl border border-red-500/20 bg-red-500/5">
+                {!executor?.keys_set && (
+                  <div className="p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 space-y-1">
+                    <div className="text-[9px] font-bold text-amber-400 flex items-center gap-1.5">
+                      <AlertTriangle size={10} /> API Keys Missing
+                    </div>
+                    <p className="text-[8px] text-amber-300/80 leading-relaxed">
+                      Add <code className="font-mono bg-black/40 px-1 rounded">BINGX_API_KEY</code> and <code className="font-mono bg-black/40 px-1 rounded">BINGX_API_SECRET</code> to your Railway project environment variables, then redeploy.
+                    </p>
+                    <p className="text-[8px] text-amber-300/60">
+                      Railway → Project → Variables → + New Variable
+                    </p>
+                  </div>
+                )}
                 <div className="text-[9px] font-bold text-red-400 uppercase tracking-wide flex items-center gap-1.5">
                   <Shield size={10} /> Live Risk Controls
                 </div>
@@ -1184,7 +1201,7 @@ function AgentContent() {
 
       {/* ─── 4. Config + BingX 2-col ─────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ConfigPanel serverConfig={server.config} onSave={server.updateConfig} />
+        <ConfigPanel serverConfig={server.config} onSave={server.updateConfig} executor={exec} />
         <div className="space-y-4">
           <BingXPanel executor={exec} onResetCircuit={server.resetCircuitBreaker} />
           <PaperTraderPanel data={server.paperTrader} />
