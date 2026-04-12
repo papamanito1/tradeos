@@ -279,12 +279,34 @@ async def fire_all(_: dict = Depends(get_current_user)):
 # The local_poster.py script on the user's PC polls /next-post and posts via
 # Playwright with their real residential IP + Edge session.
 
+_DEFAULT_POSTER_SECRET = "tradeos-local-2024"   # matches local_poster.py default
+
 def _check_poster_secret(secret: str) -> None:
     import os
     from fastapi import HTTPException
-    expected = os.environ.get("POSTER_SECRET", "")
-    if not expected or secret != expected:
+    expected = os.environ.get("POSTER_SECRET", _DEFAULT_POSTER_SECRET)
+    if not secret or secret != expected:
         raise HTTPException(status_code=403, detail="Invalid poster secret")
+
+
+@router.get("/creds")
+async def get_creds(secret: str = ""):
+    """
+    Return X auth cookies so local_poster.py can post from a residential IP.
+    Reads X_AUTH_TOKEN and X_CT0 from Railway environment variables.
+    Requires POSTER_SECRET query param.
+    """
+    _check_poster_secret(secret)
+    import os
+    auth_token = os.environ.get("X_AUTH_TOKEN", "").strip()
+    ct0        = os.environ.get("X_CT0", "").strip()
+    if not auth_token or not ct0:
+        return {
+            "ok": False,
+            "error": "X_AUTH_TOKEN and/or X_CT0 not set in Railway environment variables. "
+                     "Run grab_cookies_and_tweet.py to get fresh cookies, then add them to Railway Variables.",
+        }
+    return {"ok": True, "a": auth_token, "c": ct0}
 
 
 @router.get("/next-post")
