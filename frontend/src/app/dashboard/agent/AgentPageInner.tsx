@@ -5,7 +5,7 @@ import {
   Bot, Power, RefreshCw, AlertTriangle, Activity, Brain,
   TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   ChevronRight, RotateCcw, Zap, Shield, X, CheckCircle2, XCircle,
-  DollarSign, FileText, Cpu, Wifi, WifiOff,
+  DollarSign, FileText, Cpu, Wifi, WifiOff, Loader2,
   LineChart,
 } from "lucide-react";
 import {
