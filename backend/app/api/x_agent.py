@@ -146,10 +146,12 @@ async def test_post(_: dict = Depends(get_current_user)):
         "posted": ok,
         "queued": False,
         "last_error": pub._last_error if not ok else None,
+        "note": "v1.1 statuses/update is dead (X killed it 2023). Only GraphQL works with cookies.",
         "curl_cffi_available": xp._CURL_AVAILABLE,
         "cookies_set": bool(pub._auth_token and pub._ct0),
         "auth_token_prefix": pub._auth_token[:8] + "..." if pub._auth_token else "MISSING",
         "ct0_prefix": pub._ct0[:8] + "..." if pub._ct0 else "MISSING",
+        "fix": "Run local_poster.py on your PC — Railway's datacenter IP is blocked by X, but your residential IP works.",
     }
 
 

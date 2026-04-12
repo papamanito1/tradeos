@@ -452,13 +452,17 @@ export default function XAgentPage() {
             <div className="flex-1 min-w-0">
               <div className="text-[12px] font-semibold text-red-300 mb-0.5">Last posting error</div>
               <code className="text-[11px] text-red-400/70 font-mono break-all">{status.last_error}</code>
-              {status.last_error.includes("IP") || status.last_error.includes("blocked") || status.last_error.includes("ghost") ? (
+              {(status.last_error.includes("ghost") || status.last_error.includes("Queued for local")) ? (
                 <div className="text-[11px] text-amber-400/70 mt-1.5">
-                  Railway datacenter IP is blocked by X — run <code className="bg-black/30 px-1 rounded">python local_poster.py</code> on your PC to post from a residential IP.
+                  Railway&apos;s datacenter IP is blocked by X. Run <code className="bg-black/30 px-1 rounded">python local_poster.py</code> on your PC — tweets are queued and will send the moment it starts.
                 </div>
               ) : status.last_error.includes("403") || status.last_error.includes("expired") ? (
                 <div className="text-[11px] text-amber-400/70 mt-1.5">
-                  Cookies expired — run <code className="bg-black/30 px-1 rounded">python grab_cookies_and_tweet.py</code>, then update <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> + <code className="bg-black/30 px-1 rounded">X_CT0</code> in Railway Variables.
+                  Cookies expired — run <code className="bg-black/30 px-1 rounded">python grab_cookies_and_tweet.py</code>, update <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> + <code className="bg-black/30 px-1 rounded">X_CT0</code> in Railway Variables, then redeploy.
+                </div>
+              ) : status.last_error.includes("not configured") ? (
+                <div className="text-[11px] text-amber-400/70 mt-1.5">
+                  X cookies missing in Railway. Go to Railway → Variables and add <code className="bg-black/30 px-1 rounded">X_AUTH_TOKEN</code> and <code className="bg-black/30 px-1 rounded">X_CT0</code>.
                 </div>
               ) : null}
             </div>

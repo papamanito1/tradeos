@@ -628,19 +628,16 @@ class XPublisher:
 
         text = text[:280]
 
-        # 1. Try GraphQL (best method -- returns full tweet_id)
+        # Try GraphQL (only viable cookie-auth method — v1.1 statuses/update is dead since 2023)
         ok = await self._post_graphql(text, post_type)
         if ok:
             return True
 
-        # 2. Try v1.1 fallback (datacenter IPs often blocked here too, but worth trying)
-        ok = await self._post_v1(text, post_type)
-        if ok:
-            return True
-
-        # 3. Queue for local_poster.py running on residential IP
+        # GraphQL failed (Railway datacenter IP blocked by X).
+        # Queue for local_poster.py running on a residential IP.
         if queue_on_fail:
             self._queue_for_local_poster(text, post_type)
+            self._last_error += " | Queued for local_poster.py — run it on your PC to send"
         return False
 
     def _queue_for_local_poster(self, text: str, post_type: str) -> None:
