@@ -23,7 +23,6 @@ import logging
 import os
 import sys
 import time
-import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -73,15 +72,17 @@ _incoming_queue: list[str] = []
 
 def _check_deps():
     try:
-        import curl_cffi  # noqa: F401
+        from playwright.async_api import async_playwright  # noqa: F401
+        log.info("Playwright available — using browser mode (bypasses bot detection)")
     except ImportError:
-        log.error("curl_cffi not installed. Run:  pip install curl_cffi")
-        sys.exit(1)
+        log.warning("playwright not installed — browser mode unavailable")
+        log.warning("Install with:  pip install playwright && playwright install chromium")
 
     try:
-        import requests as _req  # noqa: F401
+        import curl_cffi  # noqa: F401
     except ImportError:
-        pass   # optional
+        log.warning("curl_cffi not installed — GraphQL fallback unavailable")
+        log.warning("Install with:  pip install curl_cffi")
 
 
 # ── Cookie management ─────────────────────────────────────────────────────────
@@ -134,22 +135,111 @@ async def fetch_creds(force: bool = False) -> bool:
 # ── Tweet posting ─────────────────────────────────────────────────────────────
 
 async def post_tweet(text: str) -> str:
-    """Post a tweet using curl_cffi from local residential IP. Returns tweet_id or empty."""
+    """Post a tweet. Tries Playwright browser first (bypasses bot detection), then GraphQL."""
     global _post_count
     if not _auth_token or not _ct0:
         log.error("No X cookies — cannot post. Run fetch_creds() first.")
         return ""
 
     async with _post_lock:
-        # v1.1 statuses/update is dead since 2023 — go straight to GraphQL
+        # 1. Playwright browser (most reliable — real browser, real TLS, no bot-detection)
+        result = await _post_playwright(text)
+        if result:
+            _post_count += 1
+            return result
+
+        # 2. GraphQL fallback (faster but may get 226 anti-bot error)
         result = await _post_graphql(text)
         if result:
             _post_count += 1
             return result
 
-        log.warning("GraphQL failed — cookies may be expired.")
-        log.warning("Run 'python grab_cookies_and_tweet.py' to get fresh cookies,")
+        log.warning("All posting methods failed — cookies may be expired.")
+        log.warning("Run 'python grab_cookies_and_tweet.py' to refresh cookies,")
         log.warning("then update X_AUTH_TOKEN and X_CT0 in Railway Variables.")
+        return ""
+
+
+async def _post_playwright(text: str) -> str:
+    """Post via real Chromium browser — bypasses X anti-bot (error 226) completely.
+
+    Uses visible (headed) browser by default: more reliable on Windows and
+    harder for X to detect than headless.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.debug("playwright not installed — skipping browser post")
+        return ""
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=False,   # visible window — avoids headless detection + navigation hangs
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--start-maximized",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            )
+            ctx = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport=None,   # use full window
+                locale="en-US",
+            )
+            await ctx.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+            # Inject Railway cookies
+            await ctx.add_cookies([
+                {"name": "auth_token", "value": _auth_token, "domain": ".x.com", "path": "/"},
+                {"name": "ct0",        "value": _ct0,        "domain": ".x.com", "path": "/"},
+            ])
+
+            page = await ctx.new_page()
+            try:
+                await page.goto("https://x.com/compose/post", wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2500)
+
+                editor = await page.wait_for_selector(
+                    "[data-testid='tweetTextarea_0']", timeout=20000
+                )
+                await editor.click()
+                await page.wait_for_timeout(400)
+
+                lines = text.split("\n")
+                for i, line in enumerate(lines):
+                    if line:
+                        await editor.type(line, delay=8)
+                    if i < len(lines) - 1:
+                        await page.keyboard.press("Shift+Enter")
+
+                await page.wait_for_timeout(800)
+                post_btn = await page.wait_for_selector(
+                    "[data-testid='tweetButtonInline']", timeout=10000
+                )
+                await post_btn.click()
+                await page.wait_for_timeout(4000)
+
+                log.info(f"[OK] Playwright browser posted — {text[:60]}{'...' if len(text) > 60 else ''}")
+                return "playwright_ok"
+            except Exception as e:
+                try:
+                    await page.screenshot(path="poster_error.png")
+                    log.debug("Screenshot saved: poster_error.png")
+                except Exception:
+                    pass
+                log.warning(f"Playwright post failed: {e}")
+                return ""
+            finally:
+                await browser.close()
+    except Exception as e:
+        log.warning(f"Playwright launch error: {e}")
         return ""
 
 
@@ -170,28 +260,6 @@ def _x_headers(content_type: str = "application/x-www-form-urlencoded") -> dict:
             "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
         ),
     }
-
-
-async def _post_v1(text: str) -> str:
-    from curl_cffi.requests import AsyncSession
-    url  = "https://api.x.com/1.1/statuses/update.json"
-    body = urllib.parse.urlencode({"status": text[:280]})
-    try:
-        async with AsyncSession(impersonate="edge101") as s:
-            r = await s.post(url, data=body, headers=_x_headers(), timeout=20)
-        if r.status_code == 200:
-            data      = r.json()
-            tweet_id  = str(data.get("id_str", ""))
-            log.info(f"[OK] v1.1 posted -- {text[:60]}{'...' if len(text)>60 else ''}")
-            return tweet_id or "posted"
-        elif r.status_code == 403:
-            log.warning("v1.1 HTTP 403 — cookies expired or account suspended")
-        else:
-            log.warning(f"v1.1 HTTP {r.status_code}: {r.text[:120]}")
-        return ""
-    except Exception as e:
-        log.warning(f"v1.1 error: {e}")
-        return ""
 
 
 async def _post_graphql(text: str) -> str:
