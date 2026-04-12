@@ -61,8 +61,10 @@ SESSIONS = {
     "NY":      (13, 22),  # 13:00–21:59 UTC
     "OffHours":(22, 24),  # 22:00–23:59 UTC (low liquidity)
 }
-# Dead hours — low volume, high slippage
-DEAD_HOURS = {3, 4, 5, 6, 7}
+# Dead hours — truly minimal volume, hard-reject live trades
+DEAD_HOURS = {4, 5}
+# Low-volume hours — penalised but not blocked
+LOW_VOLUME_HOURS = {3, 6, 7, 22, 23}
 
 
 def _current_session() -> str:
@@ -176,11 +178,11 @@ class MasterBrain:
         }
 
         # ── Live readiness thresholds ─────────────────────────────────────
-        self.MIN_PAPER_TRADES_FOR_LIVE = 5
+        self.MIN_PAPER_TRADES_FOR_LIVE = 3
         self.MIN_WIN_RATE_FOR_LIVE = 0.40
         self.MIN_PROFIT_FACTOR_FOR_LIVE = 1.20  # NEW: gross_win / gross_loss
-        self.LIVE_CONVICTION_THRESHOLD = 0.55
-        self.PAPER_CONVICTION_THRESHOLD = 0.40
+        self.LIVE_CONVICTION_THRESHOLD = 0.45
+        self.PAPER_CONVICTION_THRESHOLD = 0.35
 
         # ── Limits ───────────────────────────────────────────────────────
         self.MAX_DAILY_TRADES = 50
@@ -970,13 +972,15 @@ class MasterBrain:
             reasons.append(f"against macro trend ({self.macro_trend})")
 
         # ── FEATURE 4: Time-of-day session penalty ───────────────────────
-        # Dead hours: low volume, high slippage — penalise all signals
         if now_hour in DEAD_HOURS:
-            score *= 0.55
-            reasons.append(f"dead hour {now_hour}:00 UTC (low volume)")
+            score *= 0.50
+            reasons.append(f"dead hour {now_hour}:00 UTC (minimal liquidity)")
             if is_live:
                 return self._reject(strategy_key, strategy_name, signal,
-                                    f"Dead hour {now_hour}:00 UTC — no live trades (low liquidity)")
+                                    f"Dead hour {now_hour}:00 UTC — no live trades (minimal liquidity)")
+        elif now_hour in LOW_VOLUME_HOURS:
+            score *= 0.80
+            reasons.append(f"low-volume hour {now_hour}:00 UTC")
 
         # Session affinity: learned win rate by UTC hour
         h_stats = self._hour_stats.get(now_hour, {"trades": 0, "win_rate": 0.5})

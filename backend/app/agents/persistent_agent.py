@@ -532,6 +532,7 @@ class PersistentAgent:
                 max_position_usdc=max_pos,
             )
             self._log(f"[LIVE] BingX executor initialised · daily_loss_limit=${ddl}")
+            asyncio.ensure_future(self._live.fetch_balance(force=True))
         return self._live
 
     def _is_live_mode(self) -> bool:
