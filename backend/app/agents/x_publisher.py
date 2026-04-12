@@ -343,6 +343,11 @@ class XPublisher:
                     rows = await cursor.fetchall()
             for (text,) in reversed(rows):
                 self._full_history.append(text)
+                self._posted_hashes.add(self._fingerprint(text))
+            logger.info(
+                f"[XPublisher] Loaded {len(rows)} historical tweets → "
+                f"{len(self._posted_hashes)} dedup fingerprints"
+            )
         except Exception as e:
             logger.debug(f"[XPublisher] DB load error: {e}")
 
@@ -641,6 +646,11 @@ class XPublisher:
         if not self._enabled:
             self._last_error = "No X credentials configured (set X_API_KEY etc. or X_AUTH_TOKEN+X_CT0 in Railway)"
             return False
+        # Global dedup — never post the same tweet twice, even across restarts
+        if post_type not in ("trade_signal", "trade_result", "daily", "weekly", "intro"):
+            if self._is_duplicate(text):
+                logger.info(f"[XPublisher] Duplicate tweet blocked [{post_type}]: {text[:60]}…")
+                return False
 
         text = text[:280]
 
@@ -773,11 +783,20 @@ class XPublisher:
             logger.warning(f"[XPublisher] {self._last_error}")
             return False
 
+    @staticmethod
+    def _fingerprint(text: str) -> str:
+        return hashlib.md5(text.strip().lower().encode()).hexdigest()
+
     def _is_duplicate(self, text: str) -> bool:
-        """True if this exact (normalised) text was already posted this session."""
-        fp = hashlib.md5(text.strip().lower().encode()).hexdigest()
+        """True if this exact (normalised) text was ever posted (session OR persisted history)."""
+        fp = self._fingerprint(text)
         if fp in self._posted_hashes:
             return True
+        # Secondary check against full history loaded from DB on startup
+        norm = text.strip().lower()
+        for past in self._full_history:
+            if past.strip().lower() == norm:
+                return True
         return False
 
     def _record_success(self, tweet_id: str, text: str, post_type: str) -> None:
@@ -1569,11 +1588,6 @@ class XPublisher:
 
                 tweet = suggestion["tweet"][:280]
                 post_type = suggestion.get("post_type", "grok_viral")
-
-                # Hard dedup: skip if identical to a recent post
-                if self._is_duplicate(tweet):
-                    logger.info(f"[XPublisher] Grok suggestion is a duplicate — skipping")
-                    return
 
                 ok = await self._send_tweet(tweet, post_type)
                 if ok:
