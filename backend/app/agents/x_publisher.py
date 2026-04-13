@@ -81,7 +81,7 @@ except ImportError:
 
 # -- Timing constants ---------------------------------------------------------
 SIGNAL_MIN_CONVICTION  = 0.70
-SIGNAL_COOLDOWN        = 300       # 5 min  -- trade signals are rare + high value
+SIGNAL_COOLDOWN        = 900       # 15 min -- one signal tweet per trade entry
 RESULT_COOLDOWN        = 60        # 1 min  -- always post immediately after close
 DAILY_RECAP_COOLDOWN   = 82800     # 23 h   -- once per day
 WEEKLY_RECAP_COOLDOWN  = 604800    # 7 days
@@ -249,6 +249,8 @@ class XPublisher:
         self._tweepy_client: Optional[object] = None
         self._posting_method: str = "none"
         self._posted_hashes: set[str] = set()   # exact dedup fingerprints
+        self._last_signal_price: float = 0.0    # price-based signal dedup
+        self._last_signal_dir: str = ""
         self._init_client()
 
     def _init_client(self) -> None:
@@ -1005,6 +1007,19 @@ class XPublisher:
             return
         if not self._cooldown_ok("signal", SIGNAL_COOLDOWN):
             return
+        # Price-based dedup: same direction + entry within 0.5% → skip (same trade, different strategy)
+        if (self._last_signal_dir == direction
+                and self._last_signal_price > 0
+                and abs(entry_price - self._last_signal_price) / self._last_signal_price < 0.005):
+            logger.info(
+                f"[XPublisher] Signal tweet skipped — same trade already announced "
+                f"({direction} @ {entry_price:.0f} vs last {self._last_signal_price:.0f})"
+            )
+            return
+        # Touch cooldown immediately (not after async tweet) to block concurrent scans
+        self._touch("signal")
+        self._last_signal_price = entry_price
+        self._last_signal_dir = direction
 
         rr = 0.0
         if sl_price and tp_price and entry_price:
