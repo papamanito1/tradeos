@@ -634,6 +634,7 @@ class XPublisher:
             "last_trending_hook": self._last.get("trending_hook", 0),
             "last_viral_commentary": self._last.get("viral_commentary", 0),
             "last_bold_prediction":  self._last.get("bold_prediction", 0),
+            "last_grok_viral":       self._last.get("grok_viral", 0),
             "recent_posts":       self.recent_posts,
             "posts_per_hour":     self.memory.posts_per_hour(),
             "total_posts":        self.memory.total_posts(),

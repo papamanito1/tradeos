@@ -86,6 +86,11 @@ const TYPE_META: Record<string, { label: string; icon: string; accent: string }>
   trending_hook:     { label: "Trending Hook",      icon: "📈", accent: "text-blue-400"    },
   viral_commentary:  { label: "Viral Commentary",   icon: "◉",  accent: "text-indigo-400"  },
   bold_prediction:   { label: "Bold Prediction",    icon: "◎",  accent: "text-pink-400"    },
+  grok_viral:        { label: "Grok Viral",         icon: "⚡", accent: "text-indigo-400"  },
+  contrarian_take:   { label: "Contrarian Take",    icon: "◆",  accent: "text-amber-400"   },
+  market_insight:    { label: "Market Insight",     icon: "◈",  accent: "text-cyan-400"    },
+  psychology:        { label: "Psychology",         icon: "◇",  accent: "text-purple-400"  },
+  viral_reaction:    { label: "Viral Reaction",     icon: "◉",  accent: "text-pink-400"    },
   daily:             { label: "Daily Summary",      icon: "◉",  accent: "text-indigo-400"  },
   weekly:            { label: "Weekly Recap",       icon: "◈",  accent: "text-pink-400"    },
   intro:             { label: "Intro",              icon: "◎",  accent: "text-emerald-400" },
@@ -116,9 +121,10 @@ interface TriggerCardProps {
   nextPost: string;
   endpoint: string;
   onTriggered: () => void;
+  highlight?: boolean;
 }
 
-function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered }: TriggerCardProps) {
+function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered, highlight }: TriggerCardProps) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState<{ ok: boolean; msg: string } | null>(null);
   const isReady = nextPost === "Ready";
@@ -132,6 +138,45 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
     setLoading(false);
     setTimeout(() => setResult(null), 8000);
   };
+
+  if (highlight) {
+    return (
+      <div className="group relative rounded-2xl border p-5 transition-all duration-300 overflow-hidden col-span-full"
+        style={{ background: "rgba(99,102,241,0.07)", borderColor: isReady ? "rgba(99,102,241,0.4)" : "rgba(99,102,241,0.15)" }}>
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none bg-gradient-to-br from-indigo-500/[0.06] via-transparent to-transparent rounded-2xl" />
+        <div className="relative flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 border"
+              style={{ background: "rgba(99,102,241,0.15)", borderColor: "rgba(99,102,241,0.3)" }}>
+              {icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[14px] font-semibold text-white tracking-tight flex items-center gap-2">
+                {label}
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: "rgba(99,102,241,0.2)", color: "rgba(165,180,252,0.9)" }}>LIVE SEARCH</span>
+              </div>
+              <div className="text-[12px] text-white/40 mt-0.5 truncate">{description}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-[11px]" style={{ color: isReady ? "rgba(167,243,208,0.8)" : "rgba(255,255,255,0.3)" }}>
+              {loading ? "Searching X…" : isReady ? "Ready" : `Next: ${nextPost}`}
+            </span>
+            <button onClick={trigger} disabled={loading}
+              className="px-4 py-2 rounded-xl text-[12px] font-semibold transition-all duration-200 disabled:opacity-50"
+              style={{ background: isReady ? "rgba(99,102,241,0.6)" : "rgba(99,102,241,0.2)", color: "white", border: "1px solid rgba(99,102,241,0.4)" }}>
+              {loading ? "…" : "Post Now"}
+            </button>
+          </div>
+        </div>
+        {result && (
+          <div className="mt-3 text-[11px] px-3 py-2 rounded-lg" style={{ background: result.ok ? "rgba(52,211,153,0.08)" : "rgba(239,68,68,0.08)", color: result.ok ? "rgba(52,211,153,0.9)" : "rgba(239,68,68,0.8)" }}>
+            {result.ok ? `✓ ${result.msg}` : `✗ ${result.msg}`}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="group relative rounded-2xl bg-white/[0.04] border border-white/[0.07] p-5 hover:bg-white/[0.07] hover:border-white/[0.12] transition-all duration-300 overflow-hidden">
@@ -326,8 +371,16 @@ export default function XAgentPage() {
   const PSYCHOLOGY_CD  = 43200;
   const POLL_CD        = 43200;
   const BREAKDOWN_CD   = 43200;
+  const GROK_VIRAL_CD  = 1500;
 
   const triggers = [
+    {
+      icon: "⚡", label: "Grok Viral Post",
+      description: "Grok searches X live right now → picks what's trending → writes and posts it",
+      nextPost: nextIn(status?.last_grok_viral || 0, GROK_VIRAL_CD),
+      endpoint: "/api/x-agent/trigger/grok-viral",
+      highlight: true,
+    },
     {
       icon: "◆", label: "Contrarian Take",
       description: "Cold data-backed opinion against the crowd narrative",

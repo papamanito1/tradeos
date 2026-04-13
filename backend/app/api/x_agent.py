@@ -132,6 +132,50 @@ async def trigger_breakdown(_: dict = Depends(get_current_user)):
     return await _send_now(pub, "trade_breakdown", text)
 
 
+# -- Grok viral trigger -------------------------------------------------------
+
+@router.post("/trigger/grok-viral")
+async def trigger_grok_viral(_: dict = Depends(get_current_user)):
+    """Force Grok to search X right now, decide what's viral, and post it."""
+    pub = _publisher()
+    if err := _check(pub): return err
+    if not pub.grok or not getattr(pub.grok, "enabled", False):
+        return {"ok": False, "error": "Grok is not enabled — set XAI_API_KEY in Railway"}
+
+    # Reset cooldown so it fires even if recent
+    pub._last["grok_viral"] = 0
+
+    ctx = pub._live_context
+    recent = pub._recent_texts_for_ai(15)
+
+    try:
+        # Refresh trends then ask Grok what to post
+        await pub.grok.fetch_btc_trends()
+        suggestion = await pub.grok.suggest_and_generate_post(
+            recent_posts=recent,
+            btc_price=ctx.get("price", 0),
+            regime=ctx.get("regime", ""),
+            mood_tone=pub.mood.tone,
+        )
+        if not suggestion or not suggestion.get("tweet"):
+            return {"ok": False, "error": "Grok returned no suggestion — try again in a moment"}
+
+        tweet = suggestion["tweet"][:280]
+        post_type = suggestion.get("post_type", "grok_viral")
+        angle = suggestion.get("angle", "")
+
+        ok = await pub._send_tweet(tweet, post_type)
+        return {
+            "ok": ok,
+            "post_type": post_type,
+            "angle": angle,
+            "tweet": tweet,
+            "queued_for_local_poster": not ok,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # -- Test post (debug) --------------------------------------------------------
 
 @router.post("/test-post")
