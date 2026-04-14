@@ -254,6 +254,33 @@ async def reject_tweet(pid: str, _: dict = Depends(get_current_user)):
     return {"ok": ok, "msg": "Discarded" if ok else "Not found"}
 
 
+# -- Grok intelligence refresh ------------------------------------------------
+
+@router.post("/refresh-grok")
+async def refresh_grok(_: dict = Depends(get_current_user)):
+    """
+    Force-fetch fresh Grok trends right now (live X search).
+    Returns the updated intelligence data so the dashboard can display it immediately.
+    Takes 15-40s — client should wait for the response.
+    """
+    pub = _publisher()
+    if not pub:
+        return {"ok": False, "error": "Agent not running"}
+    if not pub.grok or not getattr(pub.grok, "enabled", False):
+        return {"ok": False, "error": "Grok not enabled — set XAI_API_KEY in Railway"}
+
+    try:
+        await pub.grok.fetch_btc_trends(force=True)
+        await pub.grok.fetch_viral_formats(force=True)
+        pub._last_grok_refresh = time.time()
+        grok_status = pub.grok.status()
+        logger.info(f"[XAgent] refresh-grok: narrative='{grok_status.get('current_narrative','')[:60]}'")
+        return {"ok": True, "grok_intelligence": grok_status}
+    except Exception as e:
+        logger.error(f"[XAgent] refresh-grok error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 # -- Grok viral trigger -------------------------------------------------------
 
 @router.post("/trigger/grok-viral")

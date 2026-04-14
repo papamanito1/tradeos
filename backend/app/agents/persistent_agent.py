@@ -1086,16 +1086,26 @@ class PersistentAgent:
 
     async def _grok_warmup(self) -> None:
         """
-        Fetch initial Grok trend intelligence on startup so the first
-        trending_hook post is immediately data-rich.
+        Fetch initial Grok trend intelligence on startup so the dashboard
+        shows live data immediately. Retries up to 3 times with backoff.
         """
-        try:
-            if self.x_publisher.grok and getattr(self.x_publisher.grok, "enabled", False):
-                await self.x_publisher.grok.fetch_btc_trends()
-                await self.x_publisher.grok.fetch_viral_formats()
-                logger.info("[Agent] Grok intelligence warmed up on startup")
-        except Exception as e:
-            logger.debug(f"[Agent] Grok warmup failed: {e}")
+        if not (self.x_publisher.grok and getattr(self.x_publisher.grok, "enabled", False)):
+            return
+        await asyncio.sleep(5)  # let the agent settle before hitting the API
+        for attempt in range(1, 4):
+            try:
+                await self.x_publisher.grok.fetch_btc_trends(force=True)
+                await self.x_publisher.grok.fetch_viral_formats(force=True)
+                self.x_publisher._last_grok_refresh = __import__("time").time()
+                logger.info(
+                    f"[Agent] Grok intelligence warmed up (attempt {attempt}) — "
+                    f"narrative: {getattr(self.x_publisher.grok, 'current_narrative', '')[:60]}"
+                )
+                return  # success
+            except Exception as e:
+                logger.warning(f"[Agent] Grok warmup attempt {attempt} failed: {e}")
+                if attempt < 3:
+                    await asyncio.sleep(30 * attempt)  # 30s, 60s backoff
 
     async def _loop(self) -> None:
         while self._running:

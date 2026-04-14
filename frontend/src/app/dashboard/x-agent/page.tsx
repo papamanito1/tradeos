@@ -203,46 +203,112 @@ function PendingApprovals({ pending, onAction }: { pending: PendingTweet[]; onAc
 }
 
 // ── Grok Intelligence Card ─────────────────────────────────────────────────
-function GrokCard({ grok, lastFired }: { grok?: GrokStatus; lastFired: string }) {
+function GrokCard({ grok, lastFired, onRefresh }: { grok?: GrokStatus; lastFired: string; onRefresh: () => void }) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshErr, setRefreshErr] = useState("");
+
+  // Auto-trigger on mount if cache is empty (first startup or failed warmup)
+  useEffect(() => {
+    if (grok?.enabled && !grok.current_narrative && !refreshing) {
+      handleRefresh();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grok?.enabled]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    setRefreshErr("");
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("tradeos_token") : null;
+      const r = await fetch(`${API}/api/x-agent/refresh-grok`, {
+        method: "POST",
+        headers: token ? { "Authorization": `Bearer ${token}` } : {},
+      });
+      const d = await r.json();
+      if (!d.ok) setRefreshErr(d.error || "Failed");
+      else onRefresh();
+    } catch { setRefreshErr("Cannot reach backend"); }
+    setRefreshing(false);
+  };
+
   if (!grok?.enabled) return null;
+
+  const hasData = !!(grok.current_narrative || grok.btc_sentiment || grok.viral_hook_style);
+
   return (
     <div className="rounded-2xl border p-5 space-y-4"
       style={{ background: "rgba(99,102,241,0.05)", borderColor: "rgba(99,102,241,0.2)" }}>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm"
             style={{ background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.3)" }}>
             ◎
           </div>
           <span className="text-[13px] font-semibold text-white">Grok Intelligence</span>
           <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-            style={{ background: grok.cache_fresh ? "rgba(52,211,153,0.1)" : "rgba(255,255,255,0.05)", color: grok.cache_fresh ? "rgb(52,211,153)" : "rgba(255,255,255,0.3)", border: `1px solid ${grok.cache_fresh ? "rgba(52,211,153,0.2)" : "rgba(255,255,255,0.08)"}` }}>
-            {grok.cache_fresh ? `Fresh · ${grok.cache_age_min?.toFixed(0)}m ago` : "Fetching next cycle…"}
+            style={{
+              background: grok.cache_fresh ? "rgba(52,211,153,0.1)" : refreshing ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.05)",
+              color: grok.cache_fresh ? "rgb(52,211,153)" : refreshing ? "rgba(165,180,252,0.9)" : "rgba(255,255,255,0.3)",
+              border: `1px solid ${grok.cache_fresh ? "rgba(52,211,153,0.2)" : refreshing ? "rgba(99,102,241,0.3)" : "rgba(255,255,255,0.08)"}`,
+            }}>
+            {grok.cache_fresh
+              ? `Fresh · ${grok.cache_age_min?.toFixed(0)}m ago`
+              : refreshing ? "Fetching from X…" : hasData ? "Stale — refresh to update" : "No data yet"}
           </span>
         </div>
-        <span className="text-[11px] text-white/30">Next viral post: {lastFired}</span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] text-white/30 hidden sm:block">Next: {lastFired}</span>
+          <button onClick={handleRefresh} disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all disabled:opacity-40"
+            style={{ background: "rgba(99,102,241,0.15)", color: "rgba(165,180,252,0.9)", border: "1px solid rgba(99,102,241,0.25)" }}>
+            {refreshing
+              ? <><span className="w-2.5 h-2.5 rounded-full border border-indigo-300/30 border-t-indigo-300 animate-spin" />Fetching…</>
+              : <>↻ Refresh</>}
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="rounded-xl p-3.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">BTC Narrative</div>
-          <div className="text-[12px] text-white/70 leading-relaxed">
-            {grok.current_narrative || <span className="text-white/25 italic">Waiting for first fetch…</span>}
+      {refreshErr && (
+        <div className="text-[11px] text-red-400/80 px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)" }}>
+          ✗ {refreshErr}
+        </div>
+      )}
+
+      {refreshing && !hasData ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {["BTC Narrative", "Sentiment", "Viral Format"].map(label => (
+            <div key={label} className="rounded-xl p-3.5 animate-pulse" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">{label}</div>
+              <div className="h-3 rounded bg-white/[0.06] w-3/4" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="rounded-xl p-3.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">BTC Narrative</div>
+            <div className="text-[12px] text-white/70 leading-relaxed">
+              {grok.current_narrative || <span className="text-white/20 italic text-[11px]">Fetching…</span>}
+            </div>
+          </div>
+          <div className="rounded-xl p-3.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">Sentiment</div>
+            <div className={`text-[12px] leading-relaxed font-medium ${
+              grok.btc_sentiment === "bullish" ? "text-emerald-400" :
+              grok.btc_sentiment === "bearish" ? "text-red-400" :
+              grok.btc_sentiment === "mixed" ? "text-amber-400" : "text-white/70"
+            }`}>
+              {grok.btc_sentiment || <span className="text-white/20 italic text-[11px] font-normal">Fetching…</span>}
+            </div>
+          </div>
+          <div className="rounded-xl p-3.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">Viral Format</div>
+            <div className="text-[12px] text-white/70 leading-relaxed">
+              {grok.viral_hook_style || <span className="text-white/20 italic text-[11px]">Fetching…</span>}
+            </div>
           </div>
         </div>
-        <div className="rounded-xl p-3.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">Sentiment</div>
-          <div className="text-[12px] text-white/70 leading-relaxed">
-            {grok.btc_sentiment || <span className="text-white/25 italic">Waiting…</span>}
-          </div>
-        </div>
-        <div className="rounded-xl p-3.5" style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">Viral Format</div>
-          <div className="text-[12px] text-white/70 leading-relaxed">
-            {grok.viral_hook_style || <span className="text-white/25 italic">Waiting…</span>}
-          </div>
-        </div>
-      </div>
+      )}
 
       {grok.trending_topics?.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -665,7 +731,7 @@ export default function XAgentPage() {
         </div>
 
         {/* ── Grok Intelligence card ── */}
-        <GrokCard grok={status?.grok_intelligence} lastFired={grokNextIn} />
+        <GrokCard grok={status?.grok_intelligence} lastFired={grokNextIn} onRefresh={fetchStatus} />
 
         {/* ── Pending Approvals ── */}
         <PendingApprovals pending={status?.pending_approvals ?? []} onAction={fetchStatus} />
