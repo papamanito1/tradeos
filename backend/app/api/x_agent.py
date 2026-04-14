@@ -7,10 +7,13 @@ require a valid JWT.
 """
 from __future__ import annotations
 
+import logging
 import os
 import random
 import time
 from fastapi import APIRouter, Depends
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 from app.core.security import get_current_user
 
@@ -174,21 +177,45 @@ async def trigger_grok_viral(_: dict = Depends(get_current_user)):
     recent = pub._recent_texts_for_ai(15)
 
     try:
-        # Refresh trends then ask Grok what to post
-        await pub.grok.fetch_btc_trends()
+        price  = ctx.get("price", 0)
+        regime = ctx.get("regime", "")
+
+        # Try the full viral suggestion first
         suggestion = await pub.grok.suggest_and_generate_post(
             recent_posts=recent,
-            btc_price=ctx.get("price", 0),
-            regime=ctx.get("regime", ""),
+            btc_price=price,
+            regime=regime,
             mood_tone=pub.mood.tone,
         )
+
+        # Fallback: simpler direct viral post if suggestion parsing failed
         if not suggestion or not suggestion.get("tweet"):
-            return {"ok": False, "error": "Grok returned no suggestion — try again in a moment"}
+            tweet = await pub.grok.generate_viral_post(
+                btc_price=price,
+                regime=regime,
+                recent_posts=recent,
+                post_type="viral_reaction",
+            )
+            if tweet:
+                suggestion = {"tweet": tweet, "post_type": "grok_viral", "angle": ""}
+            else:
+                # Last fallback: generate_viral_commentary
+                tweet = await pub.grok.generate_viral_commentary(
+                    btc_price=price,
+                    mood_tone=pub.mood.tone,
+                    recent_posts=recent,
+                )
+                if tweet:
+                    suggestion = {"tweet": tweet, "post_type": "viral_commentary", "angle": ""}
 
-        tweet = suggestion["tweet"][:280]
+        if not suggestion or not suggestion.get("tweet"):
+            return {"ok": False, "error": "Grok is not returning content right now — API may be slow, try again in 30s"}
+
+        tweet     = suggestion["tweet"][:280]
         post_type = suggestion.get("post_type", "grok_viral")
-        angle = suggestion.get("angle", "")
+        angle     = suggestion.get("angle", "")
 
+        # For manual trigger, skip the approval queue and post directly
         ok = await pub._send_tweet(tweet, post_type)
         return {
             "ok": ok,
@@ -198,7 +225,9 @@ async def trigger_grok_viral(_: dict = Depends(get_current_user)):
             "queued_for_local_poster": not ok,
         }
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        import traceback
+        logger.error(f"[XAgent] trigger/grok-viral error: {traceback.format_exc()}")
+        return {"ok": False, "error": f"Error: {str(e)}"}
 
 
 # -- Test post (debug) --------------------------------------------------------

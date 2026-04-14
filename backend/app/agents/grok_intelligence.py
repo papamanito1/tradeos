@@ -175,8 +175,10 @@ class GrokIntelligence:
                 "return_citations": False,
             }
 
+        # Live search (grok-3) can take 35-50s — use a generous timeout
+        _timeout = 55.0 if live_search else 25.0
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=_timeout) as client:
                 r = await client.post(
                     f"{_GROK_BASE}/chat/completions",
                     json=payload,
@@ -192,9 +194,9 @@ class GrokIntelligence:
             elif r.status_code == 429:
                 logger.warning("[GrokIntel] Rate limited — will retry after cache TTL")
             else:
-                logger.warning(f"[GrokIntel] {r.status_code}: {r.text[:200]}")
+                logger.warning(f"[GrokIntel] {r.status_code}: {r.text[:300]}")
         except Exception as e:
-            logger.debug(f"[GrokIntel] API error: {e}")
+            logger.warning(f"[GrokIntel] API error ({model}): {e}")
 
         return None
 
@@ -610,75 +612,64 @@ class GrokIntelligence:
         mood_ctx = f"\n- Algo state: {mood_tone}" if mood_tone else ""
 
         user_prompt = (
-            f"You are the content brain for @Tradeous — a cold, robotic BTC algo account on X.\n\n"
-            f"STEP 1: Search X right now. What is going viral or getting high engagement "
-            f"in the BTC/crypto twitter space at this exact moment?\n\n"
-            f"STEP 2: Look at @Tradeous's recent tweets below and identify gaps — "
-            f"what topics/angles have NOT been covered recently?\n\n"
-            f"RECENT @TRADEOUS TWEETS (do NOT repeat any of these topics or phrasings):\n"
+            f"Search X right now for what's getting the most engagement in BTC/crypto twitter.\n\n"
+            f"BTC context: {price_ctx} | Regime: {regime_ctx}{mood_ctx}\n\n"
+            f"Recent @Tradeous tweets — do NOT repeat these topics or phrasings:\n"
             f"{recent_posts}\n\n"
-            f"CURRENT CONTEXT:\n"
-            f"- BTC: {price_ctx}\n"
-            f"- Market regime: {regime_ctx}{mood_ctx}\n\n"
-            f"STEP 3: Choose the single best content type that would:\n"
-            f"  a) Tap into what's actually viral on X right now\n"
-            f"  b) NOT repeat anything already in the recent tweets above\n"
-            f"  c) Perform well for a cold, data-driven algo trading account\n\n"
-            f"Content types to choose from:\n"
-            f"  contrarian_take — challenge a popular BTC narrative with hard data\n"
-            f"  market_insight  — cold read on current price action / regime\n"
-            f"  psychology      — expose a specific trader mistake happening right now\n"
-            f"  bold_prediction — specific, controversial BTC price call with reasoning\n"
-            f"  viral_reaction  — sharp take on something blowing up on X today\n\n"
-            f"STEP 4: Write the tweet.\n\n"
-            f"Return ONLY in this exact format (no extra text):\n"
-            f"TYPE: [content type]\n"
-            f"ANGLE: [the specific angle in 1 sentence]\n"
-            f"TWEET: [the actual tweet, max 240 chars, cold robotic @Tradeous voice, "
-            f"no hashtags unless trade post, no emoji spam]"
+            f"Write ONE sharp tweet for @Tradeous that:\n"
+            f"• Taps into something actually trending/viral on X right now (use live search)\n"
+            f"• Has NOT been covered in the recent tweets above\n"
+            f"• Is cold, data-driven, and makes people stop scrolling\n"
+            f"• Max 240 characters\n\n"
+            f"Then tag it with one of: contrarian_take | market_insight | psychology | bold_prediction | viral_reaction\n\n"
+            f"Format:\n"
+            f"TYPE: [tag]\n"
+            f"TWEET: [tweet text]"
         )
 
         raw = await self._call_grok(
             system=_GROK_WRITER_PROMPT,
             user=user_prompt,
             model=_MODEL_SMART,
-            temperature=0.82,
-            max_tokens=220,
+            temperature=0.85,
+            max_tokens=180,
             live_search=True,
         )
 
         if not raw:
+            logger.warning("[GrokIntel] suggest_and_generate_post: no response from Grok API")
             return None
 
         result: dict = {"post_type": "grok_viral", "angle": "", "tweet": ""}
-        remaining = ""
         for line in raw.splitlines():
-            stripped = line.strip()
-            if stripped.upper().startswith("TYPE:"):
-                result["post_type"] = stripped.split(":", 1)[1].strip().replace(" ", "_")
-            elif stripped.upper().startswith("ANGLE:"):
-                result["angle"] = stripped.split(":", 1)[1].strip()
-            elif stripped.upper().startswith("TWEET:"):
-                result["tweet"] = stripped.split(":", 1)[1].strip()
-            elif result["tweet"]:
-                result["tweet"] += " " + stripped   # multi-line tweet
+            s = line.strip()
+            if s.upper().startswith("TYPE:"):
+                result["post_type"] = s.split(":", 1)[1].strip().replace(" ", "_")
+            elif s.upper().startswith("TWEET:"):
+                result["tweet"] = s.split(":", 1)[1].strip()
+            elif result["tweet"] and s and not s.upper().startswith("TYPE:"):
+                result["tweet"] += " " + s  # continuation line
 
-        # Fallback: if parsing fails but raw looks like a tweet, use it directly
+        # Robust fallback: if structured parsing missed, treat whole response as tweet
         if not result["tweet"]:
-            lines = [l.strip() for l in raw.splitlines() if l.strip()
-                     and not l.strip().upper().startswith(("TYPE:", "ANGLE:"))]
+            # Strip any TYPE:/ANGLE: lines and use the rest
+            lines = [l.strip() for l in raw.splitlines()
+                     if l.strip() and not l.strip().upper().startswith(("TYPE:", "ANGLE:", "TWEET:"))]
             if lines:
                 result["tweet"] = " ".join(lines)[:240]
-                result["post_type"] = "grok_viral"
+            else:
+                # Last resort: use the whole raw response
+                result["tweet"] = raw.strip()[:240]
+
+        result["tweet"] = result["tweet"].strip().strip('"').strip("'")[:240]
 
         if result["tweet"]:
-            result["tweet"] = result["tweet"].strip().strip('"').strip("'")[:240]
             logger.info(
-                f"[GrokIntel] Viral suggestion → [{result['post_type']}] "
-                f"{result.get('angle', '')[:50]} | {result['tweet'][:60]}…"
+                f"[GrokIntel] Viral suggestion → [{result['post_type']}] {result['tweet'][:70]}…"
             )
             return result
 
+        logger.warning(f"[GrokIntel] suggest_and_generate_post: parsed empty tweet from raw: {raw[:100]}")
         return None
 
     # ══════════════════════════════════════════════════════════════════════════════
