@@ -254,6 +254,41 @@ async def reject_tweet(pid: str, _: dict = Depends(get_current_user)):
     return {"ok": ok, "msg": "Discarded" if ok else "Not found"}
 
 
+# -- Grok API raw test (no auth — for debugging) ------------------------------
+
+@router.get("/test-grok")
+async def test_grok():
+    """Test Grok API directly — shows exact error. No auth required."""
+    import httpx, os as _os
+    api_key = _os.environ.get("XAI_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "XAI_API_KEY not set in Railway environment"}
+
+    payload = {
+        "model": "grok-3-mini",
+        "temperature": 0.5,
+        "max_tokens": 50,
+        "messages": [
+            {"role": "user", "content": "Reply with: GROK_OK"}
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                "https://api.x.ai/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+        return {
+            "ok": r.status_code == 200,
+            "status_code": r.status_code,
+            "api_key_prefix": api_key[:12] + "...",
+            "response": r.json() if r.status_code == 200 else r.text[:500],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "type": type(e).__name__}
+
+
 # -- Grok intelligence refresh ------------------------------------------------
 
 @router.post("/refresh-grok")
