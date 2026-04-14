@@ -69,19 +69,43 @@ def _check(pub) -> dict | None:
 
 @router.post("/trigger/contrarian")
 async def trigger_contrarian(_: dict = Depends(get_current_user)):
+    """Generate a sharp AI contrarian take and queue for local poster."""
+    import asyncio
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["contrarian"] = 0
-    ctx = pub._live_context
-    price = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
-    regime = ctx.get("regime", "unknown").replace("_", " ")
-    text = (
-        f"BTC at {price}. Regime: {regime}.\n\n"
-        f"Humans are euphoric. Algo remains disciplined.\n\n"
-        f"Volume declining. Funding elevated. No structure break.\n"
-        f"Staying flat until the edge appears."
-    )
-    return await _send_now(pub, "contrarian", text)
+
+    async def _gen():
+        try:
+            ctx = pub._live_context
+            fg_data = await pub._fetch_fear_greed()
+            fg_ctx = ""
+            if fg_data:
+                fg_ctx = f"Fear & Greed index: {fg_data.get('value','?')}/100 ({fg_data.get('value_classification','Unknown')}). "
+            extra = (
+                f"Write a sharp contrarian take on BTC right now.\n"
+                f"{fg_ctx}"
+                f"Challenge what the majority believe with a specific data point or pattern.\n"
+                f"What is the crowd getting wrong? What does the algo see that retail misses?\n"
+                f"Cold, slightly savage. Start with the uncomfortable truth, not with the price.\n"
+                f"Examples of the RIGHT tone:\n"
+                f"  'The funding rate has been elevated for 72h. Longs are crowded. This is where the algo steps back.'\n"
+                f"  'Everyone sees a double bottom. The volume behind both legs is different. That matters.'\n"
+                f"Max 240 chars. No hashtags. Do NOT start with 'BTC at $'."
+            )
+            text = await pub._ai_generate(pub._build_ai_prompt("contrarian take", extra))
+            if text:
+                ok = await pub._send_tweet(text, "contrarian", queue_on_fail=True)
+                if ok:
+                    pub._touch("contrarian")
+                logger.info(f"[XAgent] trigger/contrarian: {'posted' if ok else 'queued'}")
+            else:
+                logger.warning("[XAgent] trigger/contrarian: AI returned nothing, skipping")
+        except Exception as e:
+            logger.error(f"[XAgent] trigger/contrarian error: {e}")
+
+    asyncio.create_task(_gen())
+    return {"ok": True, "msg": "Generating contrarian take via Grok — will post/queue shortly"}
 
 
 @router.post("/trigger/psychology")
@@ -347,33 +371,41 @@ async def fire_all(_: dict = Depends(get_current_user)):
     for k in list(pub._last.keys()):
         pub._last[k] = 0
 
+    import asyncio
     ctx = pub._live_context
     price = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
-    regime = ctx.get("regime", "unknown").replace("_", " ")
 
-    # Contrarian take
-    text = (
-        f"BTC at {price}. Regime: {regime}.\n\n"
-        f"Humans are euphoric. Algo remains disciplined.\n\n"
-        f"Volume declining. No structure break. Staying flat."
+    # Contrarian take — AI generated, no templates
+    extra = (
+        "Write a sharp contrarian take on BTC right now.\n"
+        "Challenge what the majority believe with a specific data point or pattern.\n"
+        "Cold, slightly savage. Start with the uncomfortable truth, not with the price.\n"
+        "Max 240 chars. No hashtags. Do NOT start with 'BTC at $'."
     )
-    ok = await pub._send_tweet(text, "contrarian")
-    results["contrarian"] = "posted" if ok else "failed"
-    if ok:
-        pub._touch("contrarian")
-    await __import__("asyncio").sleep(3)
+    ai_text = await pub._ai_generate(pub._build_ai_prompt("contrarian take", extra))
+    if ai_text:
+        ok = await pub._send_tweet(ai_text, "contrarian")
+        results["contrarian"] = "posted" if ok else "queued"
+        if ok:
+            pub._touch("contrarian")
+    else:
+        results["contrarian"] = "skipped (AI unavailable)"
+    await asyncio.sleep(3)
 
-    # Poll
-    text = (
-        f"BTC at {price}. Regime: {regime}.\n\n"
-        f"What would you do here?\n\n"
-        f"A) Long\nB) Short\nC) Flat\nD) Already positioned\n\n"
-        f"Reply below."
+    # Poll — AI generated, no templates
+    poll_prompt = (
+        "Write a single engaging poll-style tweet about BTC right now.\n"
+        "Ask a sharp question that makes traders think. Give 4 short options (A/B/C/D).\n"
+        "End with 'Reply below.' Max 240 chars. No hashtags."
     )
-    ok = await pub._send_tweet(text, "poll")
-    results["poll"] = "posted" if ok else "failed"
-    if ok:
-        pub._touch("poll")
+    poll_text = await pub._ai_generate(pub._build_ai_prompt("poll tweet", poll_prompt))
+    if poll_text:
+        ok = await pub._send_tweet(poll_text, "poll")
+        results["poll"] = "posted" if ok else "queued"
+        if ok:
+            pub._touch("poll")
+    else:
+        results["poll"] = "skipped (AI unavailable)"
 
     n_ok = sum(1 for v in results.values() if v == "posted")
     return {"ok": True, "results": results, "posted": n_ok}
@@ -472,39 +504,22 @@ async def next_post(secret: str = ""):
         item = _tweet_queue.pop(0)
         return {"has_post": True, **item}
 
-    # 2. Auto-schedule based on cooldowns (only high-value content)
-    def _ok(key, cooldown):
-        return pub._cooldown_ok(key, cooldown) if pub else True
+    # 2. Pull from Grok pending-approval queue (auto-approved after delay)
+    if pub and hasattr(pub, "_pending_approval") and pub._pending_approval:
+        item = pub._pending_approval[0]
+        # Only serve if it's past the auto-post time (i.e. user didn't act on it)
+        if now >= item.get("auto_post_at", now):
+            pub._pending_approval.pop(0)
+            qid = item.get("id", f"pending_{int(now)}")
+            return {
+                "has_post": True,
+                "id": qid,
+                "type": item.get("post_type", "grok_viral"),
+                "text": item.get("tweet", "")[:280],
+            }
 
-    post_type = None
-    text = ""
-
-    ctx = pub._live_context if pub else {}
-    price = f"${ctx.get('price', 0):,.0f}" if ctx.get("price") else "unknown"
-    regime = ctx.get("regime", "unknown").replace("_", " ")
-
-    if _ok("contrarian", xp.CONTRARIAN_COOLDOWN):
-        text = (
-            f"BTC at {price}. Regime: {regime}.\n\n"
-            f"Humans are euphoric. Algo remains disciplined.\n\n"
-            f"No edge. Staying flat."
-        )
-        post_type = "contrarian"
-
-    elif _ok("poll", xp.POLL_COOLDOWN):
-        text = (
-            f"BTC at {price}. Regime: {regime}.\n\n"
-            f"What would you do here?\n\n"
-            f"A) Long\nB) Short\nC) Flat\nD) Already positioned\n\n"
-            f"Reply below."
-        )
-        post_type = "poll"
-
-    if not post_type or not text:
-        return {"has_post": False}
-
-    qid = f"{post_type}_{int(now)}"
-    return {"has_post": True, "id": qid, "type": post_type, "text": text[:280]}
+    # No hardcoded templates — local poster only posts AI/Grok content
+    return {"has_post": False}
 
 
 class ConfirmRequest(BaseModel):
