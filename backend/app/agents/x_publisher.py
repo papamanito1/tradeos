@@ -30,9 +30,7 @@ Posting methods (tried in order):
      Requires: X_AUTH_TOKEN, X_CT0
 
 AI env vars:
-  XAI_API_KEY   -- xAI / Grok API key
-  GROQ_API_KEY  -- Groq fallback (free)
-  GEMINI_API_KEY -- Gemini fallback (free)
+  XAI_API_KEY   -- xAI / Grok API key (required for all AI content)
 """
 
 from __future__ import annotations
@@ -264,13 +262,28 @@ class XPublisher:
         access_token = os.environ.get("X_ACCESS_TOKEN", "").strip()
         access_secret = (os.environ.get("X_ACCESS_SECRET", "") or os.environ.get("X_ACCESS_TOKEN_SECRET", "")).strip()
 
-        if self._auth_token and self._ct0:
+        if api_key and api_secret and access_token and access_secret and _TWEEPY_AVAILABLE:
+            try:
+                import tweepy as _tw
+                self._tweepy_client = _tw.Client(
+                    consumer_key=api_key,    consumer_secret=api_secret,
+                    access_token=access_token, access_token_secret=access_secret,
+                    wait_on_rate_limit=False,
+                )
+                self._enabled = True
+                self._posting_method = "tweepy_api_v2"
+                logger.info("[XPublisher] Official X API v2 (tweepy) ready — posting directly from Railway, no local_poster needed")
+            except Exception as e:
+                logger.warning(f"[XPublisher] Tweepy init failed: {e}")
+
+        if not self._enabled and self._auth_token and self._ct0:
             self._enabled = True
             self._posting_method = "cookie_graphql"
-            logger.info("[XPublisher] Cookie auth ready -- posts queue for local_poster.py if Railway IP is blocked")
-        else:
+            logger.info("[XPublisher] Cookie auth ready — posts queue for local_poster.py if Railway IP is blocked")
+
+        if not self._enabled:
             self._posting_method = "none"
-            logger.info("[XPublisher] No X credentials -- posting disabled")
+            logger.info("[XPublisher] No X credentials — posting disabled")
 
     # -- Daily post budget -----------------------------------------------------
 
@@ -528,28 +541,6 @@ class XPublisher:
 
         return text  # original if refinement returns nothing
 
-    async def _call_gemini(self, api_key: str, user_prompt: str, max_chars: int) -> Optional[str]:
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-        full_prompt = f"{self._SYSTEM_PROMPT}\n\n{user_prompt}"
-        payload = {"contents": [{"parts": [{"text": full_prompt}]}],
-                   "generationConfig": {"maxOutputTokens": 120, "temperature": 0.92}}
-        try:
-            r = await self._http.post(
-                url, json=payload,
-                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            )
-            if r.status_code == 200:
-                text = (r.json().get("candidates", [{}])[0]
-                        .get("content", {}).get("parts", [{}])[0]
-                        .get("text", "")).strip()
-                if text:
-                    logger.info(f"[XPublisher] Gemini generated: {text[:60]}...")
-                    return text
-            logger.warning(f"[XPublisher] Gemini {r.status_code}: {r.text[:120]}")
-        except Exception as e:
-            logger.debug(f"[XPublisher] Gemini error: {e}")
-        return None
-
     def _build_ai_prompt(self, post_type: str, extra: str = "", trending: str = "") -> str:
         ctx = self._live_context
         price     = f"${ctx.get('price', 0):,.0f}" if ctx.get('price') else "unknown"
@@ -679,10 +670,12 @@ class XPublisher:
         # Skip for: manual (user wrote it), and posts already written by grok-3
         # (grok_viral, bold_prediction, trending_hook, viral_commentary, reply_hook)
         # — refining grok-3 output with grok-mini adds latency with no quality gain.
+        # Types already written by grok-3 (full model) need no grok-mini refinement pass
         _already_grok3 = post_type in (
             "grok_viral", "bold_prediction", "trending_hook",
             "viral_commentary", "viral_reaction", "contrarian_take",
-            "market_insight", "psychology", "reply_hook",
+            "market_insight", "psychology", "psychology_thread",
+            "contrarian", "reply_hook", "manual",
         )
         if post_type != "manual" and not _already_grok3:
             text = await self._refine_for_virality(text, post_type)
@@ -696,13 +689,19 @@ class XPublisher:
                 logger.info(f"[XPublisher] Duplicate tweet blocked [{post_type}]: {text[:60]}…")
                 return False
 
-        # 1. Cookie GraphQL (from Railway, may get 226 but worth trying)
+        # 1. Official X API v2 (tweepy) — works from any IP including Railway
+        if self._tweepy_client and _TWEEPY_AVAILABLE:
+            ok = await self._post_twitter_api(text, post_type)
+            if ok:
+                return True
+
+        # 2. Cookie GraphQL — may get 226 blocked on Railway datacenter IP
         if self._auth_token and self._ct0:
             ok = await self._post_graphql(text, post_type)
             if ok:
                 return True
 
-        # 2. GraphQL failed or no cookies -- queue for local_poster.py on residential IP
+        # 3. All methods failed — queue for local_poster.py on residential IP
         if queue_on_fail:
             self._queue_for_local_poster(text, post_type)
             self._last_error += " | Queued for local_poster.py"
@@ -1618,7 +1617,6 @@ class XPublisher:
             return
         if not self.grok or not getattr(self.grok, "enabled", False):
             return   # bold predictions require live Grok data — skip if unavailable
-            return
 
         ctx = self._live_context
 

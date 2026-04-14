@@ -26,6 +26,8 @@ async function triggerPost(endpoint: string): Promise<{ ok: boolean; msg: string
     const d = await r.json();
     if (!d.ok) return { ok: false, msg: d.error || "Failed" };
     if (d.posted) return { ok: true, msg: "Posted on X ✓" };
+    // Fire-and-forget endpoints return {ok, msg} — show their message directly
+    if (d.msg && !d.text) return { ok: true, msg: d.msg };
     if (d.text) {
       try {
         const lr = await fetch(`${LOCAL}/post`, {
@@ -36,7 +38,7 @@ async function triggerPost(endpoint: string): Promise<{ ok: boolean; msg: string
         if (lr.ok) return { ok: true, msg: "Sending via local poster…" };
       } catch {}
     }
-    return { ok: true, msg: "Queued — local_poster.py will send it" };
+    return { ok: true, msg: d.msg || "Queued — local_poster.py will send it" };
   } catch {
     return { ok: false, msg: "Cannot reach backend" };
   }
@@ -275,11 +277,9 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
     setResult(res);
     if (res.ok) {
       onTriggered();
-      // For fire-and-forget endpoints, keep polling status so pending queue updates
-      if (highlight) {
-        const poll = setInterval(() => { onTriggered(); }, 5000);
-        setTimeout(() => clearInterval(poll), 60000);
-      }
+      // All triggers are fire-and-forget — poll for 30s so status updates quickly
+      const poll = setInterval(() => { onTriggered(); }, 4000);
+      setTimeout(() => clearInterval(poll), 30000);
     }
     setLoading(false);
     setTimeout(() => setResult(null), 12000);
@@ -555,13 +555,17 @@ export default function XAgentPage() {
                   {status?.mood && (
                     <span className="text-[10px] text-white/25 font-mono px-2 py-0.5 rounded-full border border-white/[0.08]">{status.mood}</span>
                   )}
-                  {status?.posting_method && (
+                  {status?.posting_method && status.posting_method !== "none" && (
                     <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
-                      status.posting_method === "cookie_graphql"
-                        ? "text-yellow-400/70 border-yellow-500/20 bg-yellow-500/[0.07]"
-                        : "text-emerald-400/70 border-emerald-500/20 bg-emerald-500/[0.07]"
+                      status.posting_method === "tweepy_api_v2"
+                        ? "text-emerald-400/70 border-emerald-500/20 bg-emerald-500/[0.07]"
+                        : status.posting_method === "cookie_graphql"
+                          ? "text-yellow-400/70 border-yellow-500/20 bg-yellow-500/[0.07]"
+                          : "text-white/30 border-white/[0.08] bg-white/[0.04]"
                     }`}>
-                      {status.posting_method === "cookie_graphql" ? "via local poster" : "API v2"}
+                      {status.posting_method === "tweepy_api_v2" ? "✓ Official API v2"
+                        : status.posting_method === "cookie_graphql" ? "via local poster"
+                        : status.posting_method}
                     </span>
                   )}
                 </div>

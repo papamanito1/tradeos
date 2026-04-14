@@ -110,53 +110,117 @@ async def trigger_contrarian(_: dict = Depends(get_current_user)):
 
 @router.post("/trigger/psychology")
 async def trigger_psychology(_: dict = Depends(get_current_user)):
+    """Generate a sharp trading psychology insight via Grok."""
+    import asyncio
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["psychology_thread"] = 0
-    text = (
-        "The algo ignores news. Here's the pattern that repeated 7/8 times this cycle.\n\n"
-        "Humans react to headlines. The model reacts to price structure.\n\n"
-        "Thread below."
-    )
-    return await _send_now(pub, "psychology_thread", text)
+
+    async def _gen():
+        try:
+            extra = (
+                "Write a sharp 1-tweet insight about trading psychology.\n"
+                "Pick a specific behavioral pattern that causes retail traders to lose: "
+                "FOMO, revenge trading, moving stops, overconfidence after a win, etc.\n"
+                "Be specific — name the pattern, name the cost, tell the truth.\n"
+                "Cold, clinical, slightly devastating. No empathy. Just data and pattern.\n"
+                "Example format:\n"
+                "  '83% of traders who move their stop loss lose more than they would have. "
+                "The market doesn't care about your thesis.'\n"
+                "Max 240 chars. No hashtags. No emoji."
+            )
+            text = await pub._ai_generate(pub._build_ai_prompt("psychology insight", extra))
+            if text:
+                ok = await pub._send_tweet(text, "psychology_thread", queue_on_fail=True)
+                if ok:
+                    pub._touch("psychology_thread")
+                logger.info(f"[XAgent] trigger/psychology: {'posted' if ok else 'queued'}")
+            else:
+                logger.warning("[XAgent] trigger/psychology: AI returned nothing, skipping")
+        except Exception as e:
+            logger.error(f"[XAgent] trigger/psychology error: {e}")
+
+    asyncio.create_task(_gen())
+    return {"ok": True, "msg": "Generating psychology insight via Grok — will post/queue shortly"}
 
 
 @router.post("/trigger/poll")
 async def trigger_poll(_: dict = Depends(get_current_user)):
+    """Generate an engaging poll-style tweet via Grok."""
+    import asyncio
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["poll"] = 0
-    ctx = pub._live_context
-    price = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
-    regime = ctx.get("regime", "unknown").replace("_", " ")
-    text = (
-        f"BTC at {price}. Regime: {regime}.\n\n"
-        f"What would you do here?\n\n"
-        f"A) Long -- breakout setup\n"
-        f"B) Short -- distribution pattern\n"
-        f"C) Flat -- no edge\n"
-        f"D) Already positioned\n\n"
-        f"Reply below. Algo's decision in 1 hour."
-    )
-    return await _send_now(pub, "poll", text)
+
+    async def _gen():
+        try:
+            ctx = pub._live_context
+            price_str = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
+            extra = (
+                f"Write an engaging poll tweet for crypto traders. Current BTC: {price_str}.\n"
+                "Ask a sharp, specific question that forces traders to take a position.\n"
+                "Give 4 short options (A/B/C/D). Make the options real and distinct — not generic.\n"
+                "End with 'Reply below.' Do NOT include 'BTC at $X. Regime:' as opener.\n"
+                "Example of the RIGHT format:\n"
+                "  'The algo exited its BTC long at break-even. Correct call?\n\n"
+                "  A) Yes — volume wasn't there\n  B) No — should have held\n"
+                "  C) Should have added\n  D) Should have shorted\n\n  Reply below.'\n"
+                "Max 240 chars. No hashtags."
+            )
+            text = await pub._ai_generate(pub._build_ai_prompt("poll tweet", extra))
+            if text:
+                ok = await pub._send_tweet(text, "poll", queue_on_fail=True)
+                if ok:
+                    pub._touch("poll")
+                logger.info(f"[XAgent] trigger/poll: {'posted' if ok else 'queued'}")
+            else:
+                logger.warning("[XAgent] trigger/poll: AI returned nothing, skipping")
+        except Exception as e:
+            logger.error(f"[XAgent] trigger/poll error: {e}")
+
+    asyncio.create_task(_gen())
+    return {"ok": True, "msg": "Generating poll tweet via Grok — will post/queue shortly"}
 
 
 @router.post("/trigger/breakdown")
 async def trigger_breakdown(_: dict = Depends(get_current_user)):
+    """Generate a sharp trade breakdown insight via Grok."""
+    import asyncio
     pub = _publisher()
     if err := _check(pub): return err
     pub._last["trade_breakdown"] = 0
-    ctx = pub._live_context
-    regime = ctx.get("regime", "unknown").replace("_", " ")
-    text = (
-        f"How the algo evaluates BTC setups right now:\n\n"
-        f"Regime: {regime}\n"
-        f"Checks: EMA confluence, VWAP distance, volume profile, OBI\n"
-        f"Conviction threshold: 70%+\n"
-        f"Risk/reward minimum: 1:2\n\n"
-        f"No entry unless all conditions align."
-    )
-    return await _send_now(pub, "trade_breakdown", text)
+
+    async def _gen():
+        try:
+            ctx = pub._live_context
+            price_str = pub._fmt_price(ctx.get("price", 0)) if ctx.get("price") else "unknown"
+            wins = ctx.get("win_rate", 0)
+            pnl  = ctx.get("daily_pnl", 0)
+            extra = (
+                f"Write a sharp tweet breaking down how the @Tradeous algo makes decisions.\n"
+                f"Current BTC: {price_str}. Win rate: {wins:.0%}. Daily P&L: ${pnl:+.2f}.\n"
+                "Be specific about ONE aspect of the system's logic — an entry filter, "
+                "a specific signal, why it sometimes stays flat, or what kills edge.\n"
+                "Cold, technical. Reads like a quant explaining the model to a non-quant.\n"
+                "Examples of the RIGHT tone:\n"
+                "  'The system rejects 80% of setups. The one it takes needs 5 conditions. "
+                "Conviction below 70% and the algo doesn't move.'\n"
+                "  'OBV divergence is the first filter. Volume doesn't support the move → no entry.'\n"
+                "Max 240 chars. No hashtags. Do NOT list generic checks."
+            )
+            text = await pub._ai_generate(pub._build_ai_prompt("trade breakdown", extra))
+            if text:
+                ok = await pub._send_tweet(text, "trade_breakdown", queue_on_fail=True)
+                if ok:
+                    pub._touch("trade_breakdown")
+                logger.info(f"[XAgent] trigger/breakdown: {'posted' if ok else 'queued'}")
+            else:
+                logger.warning("[XAgent] trigger/breakdown: AI returned nothing, skipping")
+        except Exception as e:
+            logger.error(f"[XAgent] trigger/breakdown error: {e}")
+
+    asyncio.create_task(_gen())
+    return {"ok": True, "msg": "Generating trade breakdown via Grok — will post/queue shortly"}
 
 
 # -- Approval queue -----------------------------------------------------------
@@ -165,6 +229,8 @@ async def trigger_breakdown(_: dict = Depends(get_current_user)):
 async def get_pending(_: dict = Depends(get_current_user)):
     """Return all tweets pending approval."""
     pub = _publisher()
+    if not pub:
+        return {"ok": False, "pending": [], "error": "Agent not running"}
     return {"ok": True, "pending": pub.get_pending_approvals()}
 
 
@@ -172,6 +238,8 @@ async def get_pending(_: dict = Depends(get_current_user)):
 async def approve_tweet(pid: str, _: dict = Depends(get_current_user)):
     """Immediately post a pending tweet."""
     pub = _publisher()
+    if not pub:
+        return {"ok": False, "msg": "Agent not running"}
     ok = await pub.approve_pending(pid)
     return {"ok": ok, "msg": "Posted ✓" if ok else "Not found or already posted"}
 
@@ -180,6 +248,8 @@ async def approve_tweet(pid: str, _: dict = Depends(get_current_user)):
 async def reject_tweet(pid: str, _: dict = Depends(get_current_user)):
     """Discard a pending tweet."""
     pub = _publisher()
+    if not pub:
+        return {"ok": False, "msg": "Agent not running"}
     ok = pub.reject_pending(pid)
     return {"ok": ok, "msg": "Discarded" if ok else "Not found"}
 
