@@ -442,15 +442,22 @@ class XPublisher:
         "VOICE RULES:\n"
         "- Cold, confident, robotic. Slightly savage when warranted.\n"
         "- Speak in short, scannable sentences. Line breaks between thoughts.\n"
-        "- Data first. Every claim backed by a number.\n"
+        "- Data first. Every claim backed by a specific number or observable fact.\n"
         "- Own wins AND losses equally -- transparency builds trust.\n"
         "- Contrarian: call out retail mistakes or market psychology without being toxic.\n"
         "- Never hype. Never beg for follows. Never use exclamation marks.\n"
         "- No 'let's gooo', no 'moon', no emoji spam. Max 1 emoji per post, usually zero.\n"
         "- No hashtags except #Bitcoin or #BTC at end of trade posts only.\n"
-        "- Never start with 'I just', 'Just', 'As an AI'.\n"
+        "- Never start with 'I just', 'Just', 'As an AI', 'BTC at $'.\n"
         "- Short sentences. Break thoughts with line breaks. No walls of text.\n"
         "- Sound like an advanced algorithm, not a human pretending to be one.\n"
+        "- Make people stop scrolling — open with a hook that creates tension or curiosity.\n\n"
+        "BANNED PHRASES (never write these, ever):\n"
+        "- 'Humans are euphoric' / 'Algo remains disciplined'\n"
+        "- 'No edge. Staying flat.' / 'Staying flat.' / 'No edge.'\n"
+        "- 'Regime: ranging' / 'Regime: unknown' / 'Regime: bullish' (never state regime as a label)\n"
+        "- 'BTC at $X. Regime: Y.' as an opener\n"
+        "- '3 reasons the algo is flat' / any fill-in-the-blank template phrasing\n\n"
         "Output ONLY the tweet text. Nothing else. No quotes around it."
     )
 
@@ -545,10 +552,15 @@ class XPublisher:
         if self.grok and hasattr(self.grok, "get_trend_context_string"):
             grok_trend_ctx = self.grok.get_trend_context_string()
 
+        # Only include regime if it's meaningful — "unknown" leaks into tweets as lazy filler
+        regime_line = ""
+        if regime and regime not in ("unknown", "none", ""):
+            regime_line = f"- Market structure: {regime} ({conf} confidence)\n"
+
         context_block = (
             f"RIGHT NOW:\n"
             f"- BTC price: {price}\n"
-            f"- Market regime: {regime} ({conf} confidence)\n"
+            f"{regime_line}"
             f"- Today's P&L: {pnl_str} | Win rate: {wr}\n"
             f"- Consecutive losses: {cl} | Open positions: {positions}\n"
             f"- Algo state: {self.mood.tone}\n"
