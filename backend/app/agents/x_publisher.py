@@ -95,7 +95,7 @@ BOLD_PREDICTION_COOLDOWN  = 10800  # 3 h    -- Grok bold prediction
 REPLY_HOOK_COOLDOWN    = 3600      # 1 h    -- reply to viral BTC tweet
 GROK_TREND_REFRESH     = 1500      # 25 min -- background Grok trend refresh
 GROK_VIRAL_COOLDOWN    = 1500      # 25 min -- proactive Grok viral post
-MAX_DAILY_POSTS        = 5
+MAX_DAILY_POSTS        = 50
 
 # -- X internal API ------------------------------------------------------------
 _X_QUERY_ID = "S1qcGUn68_U0lDKdMlYSGg"
