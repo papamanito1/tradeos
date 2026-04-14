@@ -273,9 +273,16 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
     setResult(null);
     const res = await triggerPost(endpoint);
     setResult(res);
-    if (res.ok) onTriggered();
+    if (res.ok) {
+      onTriggered();
+      // For fire-and-forget endpoints, keep polling status so pending queue updates
+      if (highlight) {
+        const poll = setInterval(() => { onTriggered(); }, 5000);
+        setTimeout(() => clearInterval(poll), 60000);
+      }
+    }
     setLoading(false);
-    setTimeout(() => setResult(null), 8000);
+    setTimeout(() => setResult(null), 12000);
   };
 
   if (highlight) {
@@ -302,7 +309,7 @@ function TriggerCard({ icon, label, description, nextPost, endpoint, onTriggered
           <div className="flex items-center gap-3 shrink-0">
             <span className="text-[11px] font-medium hidden sm:block"
               style={{ color: isReady ? "rgba(167,243,208,0.9)" : "rgba(255,255,255,0.25)" }}>
-              {loading ? "Searching X…" : isReady ? "Ready" : nextPost}
+              {loading ? "Queued — tweet arriving in ~30s…" : isReady ? "Ready" : nextPost}
             </span>
             <button onClick={trigger} disabled={loading}
               className="px-5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-200 active:scale-[0.97] disabled:opacity-50"

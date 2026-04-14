@@ -164,70 +164,74 @@ async def reject_tweet(pid: str, _: dict = Depends(get_current_user)):
 
 @router.post("/trigger/grok-viral")
 async def trigger_grok_viral(_: dict = Depends(get_current_user)):
-    """Force Grok to search X right now, decide what's viral, and post it."""
+    """
+    Fire-and-forget: Grok searches X live, generates a viral tweet, puts it in
+    the pending-approval queue. Returns immediately — tweet appears on dashboard
+    in ~30-50s when Grok finishes. Use GET /pending to check.
+    """
+    import asyncio
     pub = _publisher()
     if err := _check(pub): return err
     if not pub.grok or not getattr(pub.grok, "enabled", False):
         return {"ok": False, "error": "Grok is not enabled — set XAI_API_KEY in Railway"}
 
-    # Reset cooldown so it fires even if recent
+    # Reset cooldown so it fires even if triggered recently
     pub._last["grok_viral"] = 0
 
-    ctx = pub._live_context
-    recent = pub._recent_texts_for_ai(15)
-
-    try:
+    async def _generate_in_background():
+        ctx    = pub._live_context
+        recent = pub._recent_texts_for_ai(15)
         price  = ctx.get("price", 0)
         regime = ctx.get("regime", "")
 
-        # Try the full viral suggestion first
-        suggestion = await pub.grok.suggest_and_generate_post(
-            recent_posts=recent,
-            btc_price=price,
-            regime=regime,
-            mood_tone=pub.mood.tone,
-        )
-
-        # Fallback: simpler direct viral post if suggestion parsing failed
-        if not suggestion or not suggestion.get("tweet"):
-            tweet = await pub.grok.generate_viral_post(
+        try:
+            # Primary: full viral suggestion with live X search
+            suggestion = await pub.grok.suggest_and_generate_post(
+                recent_posts=recent,
                 btc_price=price,
                 regime=regime,
-                recent_posts=recent,
-                post_type="viral_reaction",
+                mood_tone=pub.mood.tone,
             )
-            if tweet:
-                suggestion = {"tweet": tweet, "post_type": "grok_viral", "angle": ""}
-            else:
-                # Last fallback: generate_viral_commentary
+
+            # Fallback 1: simpler viral post
+            if not suggestion or not suggestion.get("tweet"):
+                tweet = await pub.grok.generate_viral_post(
+                    btc_price=price, regime=regime,
+                    recent_posts=recent, post_type="viral_reaction",
+                )
+                if tweet:
+                    suggestion = {"tweet": tweet, "post_type": "grok_viral", "angle": ""}
+
+            # Fallback 2: viral commentary
+            if not suggestion or not suggestion.get("tweet"):
                 tweet = await pub.grok.generate_viral_commentary(
-                    btc_price=price,
-                    mood_tone=pub.mood.tone,
-                    recent_posts=recent,
+                    btc_price=price, mood_tone=pub.mood.tone, recent_posts=recent,
                 )
                 if tweet:
                     suggestion = {"tweet": tweet, "post_type": "viral_commentary", "angle": ""}
 
-        if not suggestion or not suggestion.get("tweet"):
-            return {"ok": False, "error": "Grok is not returning content right now — API may be slow, try again in 30s"}
+            if not suggestion or not suggestion.get("tweet"):
+                logger.warning("[XAgent] trigger/grok-viral: all Grok calls returned empty")
+                return
 
-        tweet     = suggestion["tweet"][:280]
-        post_type = suggestion.get("post_type", "grok_viral")
-        angle     = suggestion.get("angle", "")
+            tweet     = suggestion["tweet"][:280]
+            post_type = suggestion.get("post_type", "grok_viral")
 
-        # For manual trigger, skip the approval queue and post directly
-        ok = await pub._send_tweet(tweet, post_type)
-        return {
-            "ok": ok,
-            "post_type": post_type,
-            "angle": angle,
-            "tweet": tweet,
-            "queued_for_local_poster": not ok,
-        }
-    except Exception as e:
-        import traceback
-        logger.error(f"[XAgent] trigger/grok-viral error: {traceback.format_exc()}")
-        return {"ok": False, "error": f"Error: {str(e)}"}
+            # Put in approval queue (auto-posts in 3 min if not acted on)
+            pub._queue_for_approval(tweet, post_type, auto_post_delay=180)
+            logger.info(f"[XAgent] Grok viral queued for approval: {tweet[:70]}…")
+
+        except Exception as e:
+            logger.error(f"[XAgent] trigger/grok-viral background error: {e}")
+
+    # Fire and forget — don't await, respond to client immediately
+    asyncio.create_task(_generate_in_background())
+
+    return {
+        "ok": True,
+        "msg": "Grok is searching X live now — tweet will appear in Pending Approvals in ~30s",
+        "check": "Watch the dashboard or GET /api/x-agent/pending",
+    }
 
 
 # -- Test post (debug) --------------------------------------------------------

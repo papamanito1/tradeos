@@ -675,9 +675,16 @@ class XPublisher:
             self._last_error = "No X credentials configured (set X_API_KEY etc. or X_AUTH_TOKEN+X_CT0 in Railway)"
             return False
 
-        # ── Grok viral refinement (runs on every tweet) ───────────────────────
-        # Skip for manual posts (user wrote it themselves)
-        if post_type != "manual":
+        # ── Grok viral refinement ─────────────────────────────────────────────
+        # Skip for: manual (user wrote it), and posts already written by grok-3
+        # (grok_viral, bold_prediction, trending_hook, viral_commentary, reply_hook)
+        # — refining grok-3 output with grok-mini adds latency with no quality gain.
+        _already_grok3 = post_type in (
+            "grok_viral", "bold_prediction", "trending_hook",
+            "viral_commentary", "viral_reaction", "contrarian_take",
+            "market_insight", "psychology", "reply_hook",
+        )
+        if post_type != "manual" and not _already_grok3:
             text = await self._refine_for_virality(text, post_type)
 
         text = text[:280]
