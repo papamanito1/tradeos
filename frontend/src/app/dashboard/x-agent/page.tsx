@@ -50,6 +50,14 @@ interface Post {
   url: string;
 }
 
+interface PendingTweet {
+  id: string;
+  text: string;
+  post_type: string;
+  created_at: number;
+  expires_in: number;   // seconds until auto-post
+}
+
 interface GrokStatus {
   enabled: boolean;
   cache_fresh: boolean;
@@ -80,6 +88,7 @@ interface Status {
   last_viral_commentary?: number;
   last_bold_prediction?: number;
   last_grok_viral?: number;
+  pending_approvals?: PendingTweet[];
   grok_intelligence?: GrokStatus;
   recent_posts: Post[];
   posts_per_hour?: number;
@@ -124,6 +133,71 @@ function nextIn(last: number, cooldown: number): string {
   const h = Math.floor(remaining / 3600);
   const m = Math.floor((remaining % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+// ── Pending Approval Panel ─────────────────────────────────────────────────
+function PendingApprovals({ pending, onAction }: { pending: PendingTweet[]; onAction: () => void }) {
+  const [acting, setActing] = useState<Record<string, string>>({});
+
+  const act = async (pid: string, action: "approve" | "reject") => {
+    setActing(a => ({ ...a, [pid]: action }));
+    const token = typeof window !== "undefined" ? localStorage.getItem("tradeos_token") : null;
+    await fetch(`${API}/api/x-agent/${action}/${pid}`, {
+      method: "POST",
+      headers: token ? { "Authorization": `Bearer ${token}` } : {},
+    });
+    setTimeout(onAction, 600);
+  };
+
+  if (!pending.length) return null;
+
+  return (
+    <div className="rounded-2xl border overflow-hidden"
+      style={{ borderColor: "rgba(251,191,36,0.25)", background: "rgba(251,191,36,0.04)" }}>
+      <div className="px-5 py-3.5 flex items-center gap-2.5 border-b" style={{ borderColor: "rgba(251,191,36,0.12)" }}>
+        <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse shrink-0" />
+        <span className="text-[12px] font-semibold text-yellow-300">
+          {pending.length} tweet{pending.length > 1 ? "s" : ""} pending approval
+        </span>
+        <span className="text-[11px] text-yellow-400/40 ml-auto">auto-posts when timer expires</span>
+      </div>
+      <div className="divide-y" style={{ borderColor: "rgba(251,191,36,0.08)" }}>
+        {pending.map(p => {
+          const done = acting[p.id];
+          const mins = Math.floor(p.expires_in / 60);
+          const secs = p.expires_in % 60;
+          const typeLabel = p.post_type.replace(/_/g, " ");
+          return (
+            <div key={p.id} className={`px-5 py-4 transition-all duration-300 ${done ? "opacity-40" : ""}`}>
+              <div className="flex items-center justify-between gap-2 mb-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-yellow-400/60">{typeLabel}</span>
+                  <span className="text-[10px] text-yellow-400/30">
+                    {done ? (done === "approve" ? "✓ Posting…" : "✗ Cancelled") : `Auto-posts in ${mins}:${String(secs).padStart(2, "0")}`}
+                  </span>
+                </div>
+                {!done && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button onClick={() => act(p.id, "approve")}
+                      className="px-3.5 py-1.5 rounded-lg text-[12px] font-semibold transition-all active:scale-95"
+                      style={{ background: "rgba(52,211,153,0.15)", color: "rgb(52,211,153)", border: "1px solid rgba(52,211,153,0.3)" }}>
+                      Post Now
+                    </button>
+                    <button onClick={() => act(p.id, "reject")}
+                      className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all active:scale-95"
+                      style={{ background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+              <p className="text-[13px] text-white/70 leading-relaxed whitespace-pre-wrap">{p.text}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ── Grok Intelligence Card ─────────────────────────────────────────────────
@@ -581,6 +655,9 @@ export default function XAgentPage() {
 
         {/* ── Grok Intelligence card ── */}
         <GrokCard grok={status?.grok_intelligence} lastFired={grokNextIn} />
+
+        {/* ── Pending Approvals ── */}
+        <PendingApprovals pending={status?.pending_approvals ?? []} onAction={fetchStatus} />
 
         {/* ── Content Triggers ── */}
         <div>

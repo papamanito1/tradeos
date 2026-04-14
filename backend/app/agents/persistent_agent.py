@@ -1002,9 +1002,13 @@ class PersistentAgent:
                         await result
                     logger.debug(f"[XScheduler] Posted: {chosen_key}")
 
-                # Check every 20-30 min — Grok fetches every 25 min,
-                # daily budget of 5 posts enforced by XPublisher
-                sleep_sec = random.uniform(1200, 1800)
+                # Peak-hour aware sleep:
+                # BTC twitter peaks 12-14 UTC (8-10am EST) and 23-01 UTC (7-9pm EST)
+                # → check every 5-8 min during peak, 25-35 min off-peak
+                _hour = datetime.now(timezone.utc).hour
+                _in_peak = (12 <= _hour < 14) or (_hour >= 23) or (_hour < 1)
+                sleep_sec = random.uniform(300, 480) if _in_peak else random.uniform(1500, 2100)
+                logger.debug(f"[XScheduler] Sleep {sleep_sec/60:.1f}m ({'peak' if _in_peak else 'off-peak'})")
                 await asyncio.sleep(sleep_sec)
 
             except asyncio.CancelledError:

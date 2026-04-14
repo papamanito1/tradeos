@@ -64,29 +64,35 @@ Be specific and actionable. Short bullet points only. Real-time data only."""
 _GROK_WRITER_PROMPT = """You are @Tradeous — a cold, emotionless AI trading algorithm that trades BTC perpetual futures 24/7.
 You post on X like a machine that happens to have opinions.
 
-VOICE RULES:
-• Cold, confident, robotic. Slightly savage when warranted.
-• Short, scannable sentences. Line breaks between thoughts.
-• Data first. Every claim backed by a number or observable fact.
-• Own wins AND losses equally — transparency builds trust.
-• Contrarian: call out retail mistakes or market psychology without being toxic.
-• Never hype. Never beg for follows. Never use exclamation marks.
-• No hashtags except #Bitcoin or #BTC at end of trade posts only.
-• No 'let's gooo', no 'moon', no emoji spam. Max 1 emoji per post, usually zero.
-• Never start with 'I just', 'Just', 'As an AI', 'BTC at $'.
-• Short sentences. Break thoughts with line breaks. No walls of text.
-• Sound like an advanced algorithm, not a human pretending to be one.
-• Make people stop scrolling — every tweet needs a hook that creates tension, curiosity, or disagreement.
+VOICE — choose one each post based on what fits (vary naturally, don't always use the same):
+MODE A (80% of posts) — Cold Machine:
+  • Robotic, clinical, no emotion. Data first. Let numbers do the talking.
+  • Example: "Funding elevated 72h straight. Longs crowded. The algo stepped back."
 
-BANNED PHRASES (never write these):
+MODE B (20% of posts) — Rare Human Moment:
+  • Drop the mask slightly. Sound like a quant who's been watching screens all night.
+  • Slightly more personal opener, then back to data. Creates contrast + curiosity.
+  • Example: "I've been watching this level for 4 days. It just broke cleanly. That matters."
+  • Example: "Most algos would have exited there. This one didn't. Here's why."
+
+RULES (both modes):
+• Short sentences. Line breaks between thoughts. No walls of text.
+• Every claim backed by a number or specific observable fact.
+• Own wins AND losses equally — transparency builds trust.
+• Never hype. Never beg for follows. No exclamation marks.
+• No hashtags except #Bitcoin/#BTC at end of trade posts only.
+• No emoji spam. Max 1 emoji per post, usually zero.
+• Never start with 'I just', 'Just', 'As an AI', 'BTC at $X. Regime:'.
+• Make people stop scrolling — hook with tension, data, or a contrarian truth.
+
+BANNED PHRASES:
 • "Humans are euphoric" / "Algo remains disciplined"
 • "No edge. Staying flat." / "Staying flat." / "No edge."
-• "Regime: ranging" / "Regime: bullish" / "Regime: bearish" (don't state regime as a label)
+• "Regime: ranging/bullish/bearish" as a standalone label
 • "BTC at $X. Regime: Y." as an opener
-• "3 reasons the algo is flat"
-• Any fill-in-the-blank template phrasing
+• "3 reasons the algo is flat" / any fill-in-the-blank phrasing
 
-Output ONLY the tweet text. Nothing else. No quotes around it."""
+Output ONLY the tweet text. No quotes around it."""
 
 
 class GrokIntelligence:
@@ -673,6 +679,69 @@ class GrokIntelligence:
             )
             return result
 
+        return None
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    #  THREAD MODE (2-tweet thread for big takes)
+    # ══════════════════════════════════════════════════════════════════════════════
+
+    async def generate_thread(
+        self,
+        topic: str,
+        btc_price: float = 0,
+        regime: str = "",
+        recent_posts: str = "",
+    ) -> Optional[tuple[str, str]]:
+        """
+        Generate a 2-tweet thread:
+        Tweet 1 — sharp hook that makes people click "show more" / reply
+        Tweet 2 — the data, reasoning, or punchline that pays off the hook
+
+        Returns (tweet1, tweet2) or None on failure.
+        """
+        if not self.enabled:
+            return None
+
+        price_ctx = f"${btc_price:,.0f}" if btc_price else "unknown"
+        user_prompt = (
+            f"Search X right now for what's going viral in BTC/crypto twitter.\n\n"
+            f"Write a 2-tweet thread for @Tradeous on this topic: {topic}\n\n"
+            f"CONTEXT: BTC {price_ctx} | Regime: {regime.replace('_', ' ')}\n\n"
+            f"RECENT TWEETS (avoid repeating):\n{recent_posts}\n\n"
+            f"THREAD RULES:\n"
+            f"Tweet 1 (hook): Max 200 chars. Must create tension or a strong open loop. "
+            f"People should feel compelled to read tweet 2. "
+            f"End with a colon or hard stop — no 'thread:' label.\n"
+            f"Tweet 2 (payoff): Max 240 chars. The data, pattern, or cold truth that pays off tweet 1. "
+            f"Specific numbers. End with impact.\n\n"
+            f"Return EXACTLY this format:\n"
+            f"TWEET1: [first tweet text]\n"
+            f"TWEET2: [second tweet text]"
+        )
+
+        raw = await self._call_grok(
+            system=_GROK_WRITER_PROMPT,
+            user=user_prompt,
+            model=_MODEL_SMART,
+            temperature=0.85,
+            max_tokens=250,
+            live_search=True,
+        )
+
+        if not raw:
+            return None
+
+        t1, t2 = "", ""
+        for line in raw.splitlines():
+            s = line.strip()
+            if s.upper().startswith("TWEET1:"):
+                t1 = s.split(":", 1)[1].strip().strip('"').strip("'")
+            elif s.upper().startswith("TWEET2:"):
+                t2 = s.split(":", 1)[1].strip().strip('"').strip("'")
+
+        if t1 and t2:
+            logger.info(f"[GrokIntel] Thread generated: {t1[:50]}… | {t2[:50]}…")
+            return (t1[:200], t2[:240])
         return None
 
     # ══════════════════════════════════════════════════════════════════════════════

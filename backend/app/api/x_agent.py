@@ -132,6 +132,31 @@ async def trigger_breakdown(_: dict = Depends(get_current_user)):
     return await _send_now(pub, "trade_breakdown", text)
 
 
+# -- Approval queue -----------------------------------------------------------
+
+@router.get("/pending")
+async def get_pending(_: dict = Depends(get_current_user)):
+    """Return all tweets pending approval."""
+    pub = _publisher()
+    return {"ok": True, "pending": pub.get_pending_approvals()}
+
+
+@router.post("/approve/{pid}")
+async def approve_tweet(pid: str, _: dict = Depends(get_current_user)):
+    """Immediately post a pending tweet."""
+    pub = _publisher()
+    ok = await pub.approve_pending(pid)
+    return {"ok": ok, "msg": "Posted ✓" if ok else "Not found or already posted"}
+
+
+@router.post("/reject/{pid}")
+async def reject_tweet(pid: str, _: dict = Depends(get_current_user)):
+    """Discard a pending tweet."""
+    pub = _publisher()
+    ok = pub.reject_pending(pid)
+    return {"ok": ok, "msg": "Discarded" if ok else "Not found"}
+
+
 # -- Grok viral trigger -------------------------------------------------------
 
 @router.post("/trigger/grok-viral")

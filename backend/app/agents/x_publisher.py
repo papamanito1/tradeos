@@ -251,6 +251,7 @@ class XPublisher:
         self._posted_hashes: set[str] = set()   # exact dedup fingerprints
         self._last_signal_price: float = 0.0    # price-based signal dedup
         self._last_signal_dir: str = ""
+        self._pending_approval: list[dict] = [] # approval queue for Grok tweets
         self._init_client()
 
     def _init_client(self) -> None:
@@ -635,6 +636,7 @@ class XPublisher:
             "last_viral_commentary": self._last.get("viral_commentary", 0),
             "last_bold_prediction":  self._last.get("bold_prediction", 0),
             "last_grok_viral":       self._last.get("grok_viral", 0),
+            "pending_approvals":     self.get_pending_approvals(),
             "recent_posts":       self.recent_posts,
             "posts_per_hour":     self.memory.posts_per_hour(),
             "total_posts":        self.memory.total_posts(),
@@ -801,6 +803,51 @@ class XPublisher:
             if past.strip().lower() == norm:
                 return True
         return False
+
+    # ── Approval queue (Grok tweets preview before posting) ───────────────
+    def _queue_for_approval(self, text: str, post_type: str, auto_post_delay: int = 180) -> str:
+        """Add a tweet to pending approval. Auto-posts after `auto_post_delay` seconds."""
+        import uuid
+        pid = str(uuid.uuid4())[:8]
+        entry = {
+            "id":         pid,
+            "text":       text,
+            "post_type":  post_type,
+            "created_at": time.time(),
+            "auto_post_at": time.time() + auto_post_delay,
+        }
+        self._pending_approval.append(entry)
+        logger.info(f"[XPublisher] Queued for approval [{pid}]: {text[:60]}…")
+        # Schedule auto-post
+        async def _auto_post():
+            await asyncio.sleep(auto_post_delay)
+            self._pending_approval[:] = [p for p in self._pending_approval if p["id"] != pid]
+            if not self._is_duplicate(text):
+                await self._send_tweet(text, post_type)
+                logger.info(f"[XPublisher] Auto-posted approval [{pid}]: {text[:60]}…")
+        self._fire_async(_auto_post())
+        return pid
+
+    def get_pending_approvals(self) -> list[dict]:
+        now = time.time()
+        return [
+            {**p, "expires_in": max(0, int(p["auto_post_at"] - now))}
+            for p in self._pending_approval
+        ]
+
+    async def approve_pending(self, pid: str) -> bool:
+        """Immediately post a pending tweet."""
+        for i, p in enumerate(self._pending_approval):
+            if p["id"] == pid:
+                self._pending_approval.pop(i)
+                return await self._send_tweet(p["text"], p["post_type"])
+        return False
+
+    def reject_pending(self, pid: str) -> bool:
+        """Discard a pending tweet."""
+        before = len(self._pending_approval)
+        self._pending_approval[:] = [p for p in self._pending_approval if p["id"] != pid]
+        return len(self._pending_approval) < before
 
     def _record_success(self, tweet_id: str, text: str, post_type: str) -> None:
         fp = hashlib.md5(text.strip().lower().encode()).hexdigest()
@@ -1591,25 +1638,50 @@ class XPublisher:
                 # Always refresh trends first so context is fresh
                 await self.grok.fetch_btc_trends()
 
-                recent = self._recent_texts_for_ai(15)  # Last 15 tweets for dedup
+                recent = self._recent_texts_for_ai(15)
+                price  = ctx.get("price", 0)
+                regime = ctx.get("regime", "")
+
+                # 30% chance: post a 2-tweet thread for bigger impact
+                if random.random() < 0.30:
+                    suggestion = await self.grok.suggest_and_generate_post(
+                        recent_posts=recent, btc_price=price,
+                        regime=regime, mood_tone=self.mood.tone,
+                    )
+                    if suggestion and suggestion.get("tweet"):
+                        topic = suggestion.get("angle") or suggestion.get("tweet", "")[:60]
+                        thread = await self.grok.generate_thread(
+                            topic=topic, btc_price=price,
+                            regime=regime, recent_posts=recent,
+                        )
+                        if thread:
+                            t1, t2 = thread
+                            ok = await self._send_tweet(t1, "grok_viral")
+                            if ok and self._recent_posts:
+                                thread_id = self._recent_posts[-1].get("id", "")
+                                await asyncio.sleep(random.uniform(25, 45))
+                                if thread_id:
+                                    await self._send_tweet_reply(t2, thread_id, "grok_viral")
+                                else:
+                                    await self._send_tweet(t2, "grok_viral")
+                            logger.info(f"[XPublisher] Grok thread posted: {t1[:50]}…")
+                            return
+
+                # Single tweet path (70% of posts)
                 suggestion = await self.grok.suggest_and_generate_post(
-                    recent_posts=recent,
-                    btc_price=ctx.get("price", 0),
-                    regime=ctx.get("regime", ""),
-                    mood_tone=self.mood.tone,
+                    recent_posts=recent, btc_price=price,
+                    regime=regime, mood_tone=self.mood.tone,
                 )
 
                 if not suggestion or not suggestion.get("tweet"):
                     return
 
-                tweet = suggestion["tweet"][:280]
+                tweet     = suggestion["tweet"][:280]
                 post_type = suggestion.get("post_type", "grok_viral")
 
-                ok = await self._send_tweet(tweet, post_type)
-                if ok:
-                    logger.info(
-                        f"[XPublisher] Grok viral posted [{post_type}]: {tweet[:70]}…"
-                    )
+                # Put in approval queue — auto-posts in 3 min if not cancelled
+                self._queue_for_approval(tweet, post_type, auto_post_delay=180)
+                logger.info(f"[XPublisher] Grok tweet queued for approval [{post_type}]: {tweet[:70]}…")
             except Exception as e:
                 logger.error(f"[XPublisher] post_grok_viral error: {e}")
 
@@ -1644,13 +1716,23 @@ class XPublisher:
                 if not reply_text:
                     return
 
+                # Extract tweet ID from URL so we can reply in-thread
+                reply_to_id = ""
                 if tweet_url:
-                    full_text = f"{reply_text}\n\n{tweet_url}"[:280]
-                else:
-                    full_text = reply_text[:280]
+                    import re as _re
+                    m = _re.search(r"/status/(\d+)", tweet_url)
+                    if m:
+                        reply_to_id = m.group(1)
 
-                await self._send_tweet(full_text, "reply_hook")
-                logger.info(f"[XPublisher] Reply hook posted: {reply_text[:60]}...")
+                if reply_to_id:
+                    # Post as an actual reply (appears under the original tweet)
+                    ok = await self._send_tweet_reply(reply_text[:280], reply_to_id, "reply_hook")
+                    logger.info(f"[XPublisher] Reply hook posted in-thread on {tweet_url[:50]}: {reply_text[:60]}…")
+                else:
+                    # No tweet ID — post as standalone with URL appended
+                    full_text = f"{reply_text}\n\n{tweet_url}"[:280] if tweet_url else reply_text[:280]
+                    await self._send_tweet(full_text, "reply_hook")
+                    logger.info(f"[XPublisher] Reply hook posted standalone: {reply_text[:60]}…")
             except Exception as e:
                 logger.error(f"[XPublisher] post_reply_hook error: {e}")
 
