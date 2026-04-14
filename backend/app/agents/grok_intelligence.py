@@ -175,8 +175,8 @@ class GrokIntelligence:
                 "return_citations": False,
             }
 
-        # Live search (grok-3) can take 35-50s — use a generous timeout
-        _timeout = 55.0 if live_search else 25.0
+        # Live search can take 35-60s on Railway — use a generous timeout
+        _timeout = 70.0 if live_search else 30.0
         try:
             async with httpx.AsyncClient(timeout=_timeout) as client:
                 r = await client.post(
@@ -237,7 +237,30 @@ class GrokIntelligence:
             live_search=True,
         )
 
+        # Fallback: if live search failed/timed out, try without live search
         if not raw:
+            logger.warning("[GrokIntel] Live search failed — retrying without live search")
+            fallback_prompt = (
+                "Based on your knowledge of BTC/crypto twitter and market dynamics, "
+                "give a general analysis right now:\n\n"
+                "NARRATIVE: [current main BTC narrative — 1 sentence]\n"
+                "TOPICS: [3-5 hot topics as comma-separated phrases]\n"
+                "SENTIMENT: [bullish | bearish | mixed | uncertain]\n"
+                "VIRAL FORMAT: [tweet format getting most engagement — 1 sentence]\n"
+                "HOT ANGLES: [2-3 angles getting traction — one per line]\n"
+                "FOMO LEVEL: [low | medium | high | extreme]"
+            )
+            raw = await self._call_grok(
+                system=_GROK_ANALYST_PROMPT,
+                user=fallback_prompt,
+                model=_MODEL_FAST,
+                temperature=0.5,
+                max_tokens=300,
+                live_search=False,
+            )
+
+        if not raw:
+            logger.warning("[GrokIntel] Both live and fallback Grok calls failed")
             return self._trend_cache or {}
 
         # Parse the structured response
