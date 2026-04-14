@@ -462,58 +462,71 @@ class XPublisher:
     )
 
     async def _ai_generate(self, user_prompt: str, max_chars: int = 260) -> Optional[str]:
-        xai_key = os.environ.get("XAI_API_KEY", "").strip()
-        if xai_key and self.grok:
-            from app.agents.grok_intelligence import _GROK_WRITER_PROMPT, _MODEL_FAST
-            result = await self.grok._call_grok(
-                system=_GROK_WRITER_PROMPT,
-                user=user_prompt,
-                model=_MODEL_FAST,
-                temperature=0.88,
-                max_tokens=120,
-                live_search=False,
+        """Generate tweet content using Grok only."""
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            return None
+        from app.agents.grok_intelligence import _GROK_WRITER_PROMPT, _MODEL_FAST
+        result = await self.grok._call_grok(
+            system=_GROK_WRITER_PROMPT,
+            user=user_prompt,
+            model=_MODEL_FAST,
+            temperature=0.88,
+            max_tokens=130,
+            live_search=False,
+        )
+        if result:
+            return result.strip().strip('"').strip("'")[:max_chars]
+        return None
+
+    async def _refine_for_virality(self, text: str, post_type: str) -> str:
+        """
+        Pass any draft tweet through Grok (grok-3-mini, fast) to maximise viral potential.
+        Trade signal/result posts preserve all exact numbers — only framing is improved.
+        All other posts get a sharper hook and punchier delivery.
+        """
+        if not self.grok or not getattr(self.grok, "enabled", False):
+            return text
+        if not text or len(text.strip()) < 10:
+            return text
+
+        from app.agents.grok_intelligence import _GROK_WRITER_PROMPT, _MODEL_FAST
+
+        is_data_post = post_type in ("signal", "signal_explainer", "result",
+                                     "daily", "weekly", "intro")
+
+        if is_data_post:
+            prompt = (
+                f"Rewrite this trade tweet to be more impactful. "
+                f"Keep ALL numbers, prices and percentages EXACTLY as-is — do not change a single figure:\n\n"
+                f"{text}\n\n"
+                f"Make the framing colder, more confident, more compelling. "
+                f"Same data, sharper delivery. Max 260 chars. @Tradeous voice."
             )
-            if result:
-                result = result.strip().strip('"').strip("'")
-                return result[:max_chars]
+        else:
+            prompt = (
+                f"Make this @Tradeous tweet more viral — sharper opening hook, more tension, "
+                f"makes people want to reply or share:\n\n"
+                f"{text}\n\n"
+                f"Keep the same core insight and any data. Tighten it. Raise the stakes. "
+                f"Max 240 chars. Cold, robotic @Tradeous voice. No hashtags."
+            )
 
-        groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if groq_key:
-            result = await self._call_groq(groq_key, user_prompt, max_chars)
-            if result:
-                return result[:max_chars]
+        refined = await self.grok._call_grok(
+            system=_GROK_WRITER_PROMPT,
+            user=prompt,
+            model=_MODEL_FAST,
+            temperature=0.78,
+            max_tokens=130,
+            live_search=False,
+        )
 
-        gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        if gemini_key:
-            result = await self._call_gemini(gemini_key, user_prompt, max_chars)
-            if result:
-                return result[:max_chars]
+        if refined:
+            refined = refined.strip().strip('"').strip("'")
+            if len(refined) > 10:
+                logger.info(f"[XPublisher] Grok refined [{post_type}]: {refined[:70]}…")
+                return refined[:280]
 
-        return None
-
-    async def _call_groq(self, api_key: str, user_prompt: str, max_chars: int) -> Optional[str]:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": self._SYSTEM_PROMPT},
-                {"role": "user",   "content": user_prompt},
-            ],
-            "max_tokens": 120,
-            "temperature": 0.92,
-        }
-        try:
-            r = await self._http.post(url, json=payload,
-                                      headers={"Authorization": f"Bearer {api_key}",
-                                               "Content-Type": "application/json"})
-            if r.status_code == 200:
-                text = r.json()["choices"][0]["message"]["content"].strip()
-                logger.info(f"[XPublisher] Groq generated: {text[:60]}...")
-                return text
-            logger.warning(f"[XPublisher] Groq {r.status_code}: {r.text[:120]}")
-        except Exception as e:
-            logger.debug(f"[XPublisher] Groq error: {e}")
-        return None
+        return text  # original if refinement returns nothing
 
     async def _call_gemini(self, api_key: str, user_prompt: str, max_chars: int) -> Optional[str]:
         url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
@@ -623,10 +636,8 @@ class XPublisher:
         return self._recent_posts[-30:]
 
     def status(self) -> dict:
-        xai_key    = bool(os.environ.get("XAI_API_KEY",   "").strip())
-        groq_key   = bool(os.environ.get("GROQ_API_KEY",  "").strip())
-        gemini_key = bool(os.environ.get("GEMINI_API_KEY","").strip())
-        ai_brain   = "grok" if xai_key else ("groq" if groq_key else ("gemini" if gemini_key else "none"))
+        xai_key    = bool(os.environ.get("XAI_API_KEY", "").strip())
+        ai_brain   = "grok" if xai_key else "none"
         grok_status = self.grok.status() if self.grok and hasattr(self.grok, "status") else {}
         return {
             "enabled":            self._enabled,
@@ -663,13 +674,20 @@ class XPublisher:
         if not self._enabled:
             self._last_error = "No X credentials configured (set X_API_KEY etc. or X_AUTH_TOKEN+X_CT0 in Railway)"
             return False
+
+        # ── Grok viral refinement (runs on every tweet) ───────────────────────
+        # Skip for manual posts (user wrote it themselves)
+        if post_type != "manual":
+            text = await self._refine_for_virality(text, post_type)
+
+        text = text[:280]
+
         # Global dedup — never post the same tweet twice, even across restarts
+        # Check AFTER refinement so refined duplicates are also caught
         if post_type not in ("trade_signal", "trade_result", "daily", "weekly", "intro"):
             if self._is_duplicate(text):
                 logger.info(f"[XPublisher] Duplicate tweet blocked [{post_type}]: {text[:60]}…")
                 return False
-
-        text = text[:280]
 
         # 1. Cookie GraphQL (from Railway, may get 226 but worth trying)
         if self._auth_token and self._ct0:
