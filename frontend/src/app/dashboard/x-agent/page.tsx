@@ -62,6 +62,7 @@ interface PendingTweet {
 
 interface GrokStatus {
   enabled: boolean;
+  no_credits?: boolean;
   cache_fresh: boolean;
   cache_age_min: number | null;
   current_narrative: string;
@@ -207,13 +208,13 @@ function GrokCard({ grok, lastFired, onRefresh }: { grok?: GrokStatus; lastFired
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState("");
 
-  // Auto-trigger on mount if cache is empty (first startup or failed warmup)
+  // Auto-trigger on mount if cache is empty and credits are available
   useEffect(() => {
-    if (grok?.enabled && !grok.current_narrative && !refreshing) {
+    if (grok?.enabled && !grok.no_credits && !grok.current_narrative && !refreshing) {
       handleRefresh();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grok?.enabled]);
+  }, [grok?.enabled, grok?.no_credits]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -231,9 +232,36 @@ function GrokCard({ grok, lastFired, onRefresh }: { grok?: GrokStatus; lastFired
     setRefreshing(false);
   };
 
-  if (!grok?.enabled) return null;
+  if (!grok?.enabled && !grok?.no_credits) return null;
 
   const hasData = !!(grok.current_narrative || grok.btc_sentiment || grok.viral_hook_style);
+
+  // No credits — show a clear actionable error instead of spinner
+  if (grok.no_credits) {
+    return (
+      <div className="rounded-2xl border p-5"
+        style={{ background: "rgba(239,68,68,0.04)", borderColor: "rgba(239,68,68,0.2)" }}>
+        <div className="flex items-center gap-3">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm shrink-0"
+            style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)" }}>◎</div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-semibold text-white">Grok Intelligence</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                style={{ background: "rgba(239,68,68,0.1)", color: "rgb(239,68,68)", border: "1px solid rgba(239,68,68,0.25)" }}>
+                NO CREDITS
+              </span>
+            </div>
+            <p className="text-[12px] text-red-400/70 mt-1">
+              xAI account has no credits — Grok is disabled until topped up.{" "}
+              <a href="https://console.x.ai" target="_blank" rel="noreferrer"
+                className="text-red-300 underline underline-offset-2">console.x.ai →</a>
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-2xl border p-5 space-y-4"

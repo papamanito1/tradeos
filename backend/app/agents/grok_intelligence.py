@@ -104,6 +104,7 @@ class GrokIntelligence:
     def __init__(self) -> None:
         self._api_key: str = os.environ.get("XAI_API_KEY", "").strip()
         self.enabled: bool = bool(self._api_key)
+        self._no_credits: bool = False
 
         # Cached results
         self._trend_cache: dict         = {}     # {topic: str, angles: list, ...}
@@ -193,6 +194,15 @@ class GrokIntelligence:
                 return text
             elif r.status_code == 429:
                 logger.warning("[GrokIntel] Rate limited — will retry after cache TTL")
+            elif r.status_code == 403:
+                # No credits — disable Grok to stop hammering the API
+                try:
+                    msg = r.json().get("error", r.text[:200])
+                except Exception:
+                    msg = r.text[:200]
+                logger.error(f"[GrokIntel] 403 Forbidden — no credits: {msg}")
+                self.enabled = False
+                self._no_credits = True
             else:
                 logger.warning(f"[GrokIntel] {r.status_code}: {r.text[:300]}")
         except Exception as e:
@@ -789,6 +799,7 @@ class GrokIntelligence:
         age_min = round((time.time() - self._last_trend_fetch) / 60, 1) if self._last_trend_fetch else None
         return {
             "enabled":           self.enabled,
+            "no_credits":        getattr(self, "_no_credits", False),
             "cache_age_min":     age_min,
             "cache_fresh":       self.is_cache_fresh(),
             "current_narrative": self.current_narrative,
