@@ -178,9 +178,9 @@ class MasterBrain:
         }
 
         # ── Live readiness thresholds ─────────────────────────────────────
-        self.MIN_PAPER_TRADES_FOR_LIVE = 3
-        self.MIN_WIN_RATE_FOR_LIVE = 0.40
-        self.MIN_PROFIT_FACTOR_FOR_LIVE = 1.20  # NEW: gross_win / gross_loss
+        self.MIN_PAPER_TRADES_FOR_LIVE = 50      # was 3 — need real sample before going live
+        self.MIN_WIN_RATE_FOR_LIVE = 0.45        # was 0.40
+        self.MIN_PROFIT_FACTOR_FOR_LIVE = 1.30   # was 1.20 — gross_win / gross_loss
         self.LIVE_CONVICTION_THRESHOLD = 0.45
         self.PAPER_CONVICTION_THRESHOLD = 0.35
 
@@ -984,14 +984,24 @@ class MasterBrain:
 
         # Session affinity: learned win rate by UTC hour
         h_stats = self._hour_stats.get(now_hour, {"trades": 0, "win_rate": 0.5})
-        if h_stats["trades"] >= 8:
+        if h_stats["trades"] >= 30:  # require 30 trades for reliable signal (was 8)
             session_wr = h_stats["win_rate"]
             if session_wr < 0.35:
-                score *= 0.65
+                # Hard block for live after 30+ trades with poor edge
+                if is_live:
+                    return self._reject(strategy_key, strategy_name, signal,
+                                        f"Hour {now_hour}:00 UTC blocked — {session_wr:.0%} win rate "
+                                        f"over {h_stats['trades']} trades (need ≥35%)")
+                score *= 0.60
                 reasons.append(f"poor hourly win rate ({session_wr:.0%} at {now_hour}:00 UTC)")
             elif session_wr > 0.60:
                 score *= 1.15
                 reasons.append(f"strong hourly win rate ({session_wr:.0%} at {now_hour}:00 UTC)")
+        elif h_stats["trades"] >= 8:
+            session_wr = h_stats["win_rate"]
+            if session_wr < 0.35:
+                score *= 0.65
+                reasons.append(f"poor hourly win rate ({session_wr:.0%} at {now_hour}:00 UTC — {h_stats['trades']} trades)")
 
         # ── Factor 1: Strategy trust (exponential EMA) ───────────────────
         trust = self.strategy_trust.get(strategy_key, 1.0)
@@ -1112,20 +1122,27 @@ class MasterBrain:
 
         # ── FEATURE 7: Funding rate bias ──────────────────────────────────
         # Extreme funding = crowded positioning, near reversal territory
-        if abs(self.funding_rate) >= 0.0008:  # ≥ 0.08% per 8h (very crowded)
+        # Hard reject for live when funding is extreme and trade goes with crowd
+        if is_live and self.funding_rate > 0.0015 and direction == "long":
+            return self._reject(strategy_key, strategy_name, signal,
+                                f"Funding rate extreme LONG ({self.funding_rate:.4%}) — longs dangerously crowded")
+        if is_live and self.funding_rate < -0.0015 and direction == "short":
+            return self._reject(strategy_key, strategy_name, signal,
+                                f"Funding rate extreme SHORT ({self.funding_rate:.4%}) — shorts dangerously crowded")
+        if abs(self.funding_rate) >= 0.0008:  # ≥ 0.08% per 8h (crowded)
             if self.funding_rate > 0 and direction == "long":
-                score *= 0.80
+                score *= 0.78
                 reasons.append(f"high positive funding ({self.funding_rate:.4%}) — longs crowded")
             elif self.funding_rate < 0 and direction == "short":
-                score *= 0.80
+                score *= 0.78
                 reasons.append(f"high negative funding ({self.funding_rate:.4%}) — shorts crowded")
             # Contrarian bonus: trading against the crowd
             if self.funding_rate > 0.001 and direction == "short":
-                score *= 1.10
-                reasons.append("contrarian short vs extreme long funding")
+                score *= 1.12
+                reasons.append("contrarian short vs extreme long funding ✅")
             elif self.funding_rate < -0.001 and direction == "long":
-                score *= 1.10
-                reasons.append("contrarian long vs extreme short funding")
+                score *= 1.12
+                reasons.append("contrarian long vs extreme short funding ✅")
 
         # ── FEATURE 9: Fear & Greed bias ─────────────────────────────────
         fg = self.fear_greed_score
@@ -1325,9 +1342,30 @@ class MasterBrain:
             score *= ofi_mult
             reasons.append(ofi_reason)
 
-        # ── Final decision ────────────────────────────────────────────────
+        # ── FEATURE: Backtest gate — statistical quality check ────────────
+        # Before allowing live promotion, require Sharpe-like quality
+        if is_live and total_trades >= self.MIN_PAPER_TRADES_FOR_LIVE:
+            avg_pnl     = stats.get("avg_pnl", 0.0)
+            pnl_std     = stats.get("pnl_std", 1.0) or 1.0
+            sharpe_est  = avg_pnl / pnl_std  # simplified Sharpe per trade
+            max_dd_pct  = stats.get("max_drawdown_pct", 0.0)
+            if sharpe_est < 0.05:  # negative or flat expectancy
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Backtest gate: negative Sharpe ({sharpe_est:.3f}) — no edge")
+            if max_dd_pct > 25.0:  # drawdown exceeded 25% of peak balance
+                return self._reject(strategy_key, strategy_name, signal,
+                                    f"Backtest gate: max drawdown {max_dd_pct:.1f}% exceeds 25% limit")
+
+        # ── FEATURE: Adaptive conviction threshold ────────────────────────
+        # After consecutive losses, raise the bar — system must be more certain
         conviction = min(1.0, max(0.0, score))
         threshold  = self.LIVE_CONVICTION_THRESHOLD if is_live else self.PAPER_CONVICTION_THRESHOLD
+        if is_live and self.consecutive_losses >= 2:
+            # Raise threshold 5% per additional consecutive loss (max +20%)
+            extra = min(0.20, 0.05 * (self.consecutive_losses - 1))
+            threshold = min(0.80, threshold + extra)
+            if extra > 0.02:
+                reasons.append(f"⚠ raised threshold +{extra:.0%} — {self.consecutive_losses} consec losses")
         approved   = conviction >= threshold
 
         action = "APPROVE" if approved else "REJECT"
@@ -1460,7 +1498,8 @@ class MasterBrain:
             direction, signals, win_w = "short", short_signals, short_w
 
         consensus = win_w / total_w
-        if consensus < 0.50 or len(signals) < 2:
+        # Require at least 2 agreeing strategies AND 60% consensus (was 50%)
+        if consensus < 0.60 or len(signals) < 2:
             return None
 
         sl_sum = tp_sum = w_sum = 0.0
@@ -1517,6 +1556,53 @@ class MasterBrain:
         self._learned_affinity[regime][strategy_key] = round(
             max(0.20, min(2.50, current + delta)), 3
         )
+
+    def analyze_journal_patterns(self) -> dict[str, str]:
+        """
+        Mine strategy_stats for patterns and aggressively auto-adjust
+        REGIME_AFFINITY based on observed win rates per strategy.
+
+        Called periodically from the scan loop (every ~50 scans ≈ ~8 min).
+        Returns a summary of adjustments made.
+        """
+        adjustments: dict[str, str] = {}
+        min_trades_for_pattern = 15  # need at least 15 trades to draw conclusions
+
+        for strat_key, s in self.strategy_stats.items():
+            n = s.get("trades", 0)
+            if n < min_trades_for_pattern:
+                continue
+
+            wr     = s.get("win_rate", 0.5)
+            pf     = s.get("profit_factor", 1.0)
+            avg_p  = s.get("avg_pnl", 0.0)
+            pnl_std = s.get("pnl_std", 1.0) or 1.0
+            sharpe = avg_p / pnl_std
+
+            for regime in list(self._learned_affinity.keys()):
+                current_aff = self._learned_affinity[regime].get(strat_key, 1.0)
+                # Determine target affinity from journal data
+                # Win rate + profit factor both strong → high affinity
+                if wr >= 0.55 and pf >= 1.40 and sharpe > 0.10:
+                    target_aff = min(2.0, current_aff + 0.08)
+                    tag = f"↑ {strat_key}@{regime} WR={wr:.0%} PF={pf:.2f}"
+                elif wr <= 0.35 or pf <= 0.80 or sharpe < -0.05:
+                    # Poor edge — penalise this strategy in this regime
+                    target_aff = max(0.25, current_aff - 0.10)
+                    tag = f"↓ {strat_key}@{regime} WR={wr:.0%} PF={pf:.2f}"
+                else:
+                    continue  # neutral — leave affinity alone
+
+                if abs(target_aff - current_aff) > 0.02:
+                    self._learned_affinity[regime][strat_key] = round(target_aff, 3)
+                    adjustments[f"{strat_key}/{regime}"] = tag
+
+        if adjustments:
+            logger.info(
+                f"[MasterBrain] Journal mining — {len(adjustments)} affinity adjustments: "
+                + " | ".join(list(adjustments.values())[:5])
+            )
+        return adjustments
 
     def _adapt_session(self, hour: int, session: str, won: bool) -> None:
         """Update per-hour and per-session win rate stats."""
@@ -1587,14 +1673,17 @@ class MasterBrain:
         s = self.strategy_stats.setdefault(strategy_key, {
             "trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0,
             "win_rate": 0.5, "avg_win": 0.0, "avg_loss": 0.0,
-            "win_pnls": [], "loss_pnls": [],
+            "win_pnls": [], "loss_pnls": [], "all_pnls": [],
             "gross_wins": 0.0, "gross_losses": 0.0, "profit_factor": 1.0,
             "live_trades": 0, "live_wins": 0, "live_pnl": 0.0,
             # FEATURE 8: drawdown tracking
             "peak_pnl": 0.0, "current_drawdown": 0.0, "max_drawdown": 0.0,
+            "max_drawdown_pct": 0.0,
             # FEATURE 10: duration tracking
             "win_durations": [], "loss_durations": [],
             "avg_win_duration_min": 0.0, "avg_loss_duration_min": 0.0,
+            # Sharpe estimate
+            "avg_pnl": 0.0, "pnl_std": 1.0,
         })
 
         s["trades"]    += 1
@@ -1604,6 +1693,19 @@ class MasterBrain:
             s["live_pnl"]    = s.get("live_pnl", 0.0) + pnl
             if won:
                 s["live_wins"] = s.get("live_wins", 0) + 1
+
+        # Track rolling PnL for Sharpe estimate (last 50 trades)
+        all_pnls = s.get("all_pnls", [])
+        all_pnls = (all_pnls + [pnl])[-50:]
+        s["all_pnls"] = all_pnls
+        if len(all_pnls) >= 5:
+            avg_p = sum(all_pnls) / len(all_pnls)
+            variance = sum((x - avg_p) ** 2 for x in all_pnls) / len(all_pnls)
+            s["avg_pnl"]  = round(avg_p, 4)
+            s["pnl_std"]  = round(math.sqrt(variance), 4) if variance > 0 else 0.01
+        else:
+            s["avg_pnl"]  = round(pnl, 4)
+            s["pnl_std"]  = 1.0
 
         if won:
             s["wins"] += 1
@@ -1630,6 +1732,15 @@ class MasterBrain:
         else:
             s["current_drawdown"] = round(s.get("peak_pnl", 0.0) - total_pnl, 2)
         s["max_drawdown"] = max(s.get("max_drawdown", 0.0), s["current_drawdown"])
+        # Percentage drawdown relative to peak
+        peak = s.get("peak_pnl", 0.0)
+        if peak > 0:
+            s["max_drawdown_pct"] = max(
+                s.get("max_drawdown_pct", 0.0),
+                round(s["current_drawdown"] / peak * 100, 2),
+            )
+        else:
+            s["max_drawdown_pct"] = s.get("max_drawdown_pct", 0.0)
 
         # ── FEATURE 10: Trade duration tracking ──────────────────────────
         if duration_min > 0:

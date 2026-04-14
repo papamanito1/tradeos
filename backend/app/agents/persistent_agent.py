@@ -1299,6 +1299,10 @@ class PersistentAgent:
         if self.scan_count % 10 == 0:
             self._rebuild_training_index()
 
+        # ── Journal pattern mining — auto-adjust REGIME_AFFINITY (every 50 scans ≈ 8 min)
+        if self.scan_count % 50 == 0 and self.scan_count > 0:
+            self.brain.analyze_journal_patterns()
+
         # ── MasterBrain: detect regimes + macro trend ────────────────────
         self.brain.detect_regime(candles15m, candles1m)
         if candles1h or candles4h:
